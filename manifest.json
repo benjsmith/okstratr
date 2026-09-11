@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "id": "benjsmith.okstratr",
+  "name": "Okstratr",
+  "version": "0.1.0",
+  "author": "benjsmith",
+  "license": "MIT",
+  "description": "Desk-brain orchestrator for Omarchy: DAG, chief-of-staff, scheduling, blackboard — pairs with native Herdr as the agent session UI.",
+  "tags": ["orchestrator", "dag", "scheduling", "blackboard", "herdr", "chief-of-staff"],
+  "kinds": ["service", "bar-widget", "panel"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml",
+    "panel": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Okstratr",
+    "description": "Seated objective + Herdr link — orchestrator pulse.",
+    "category": "Agents",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "staleAfterSec": 240
+    },
+    "schema": [
+      {
+        "key": "staleAfterSec",
+        "type": "integer",
+        "label": "Stale after (seconds)",
+        "min": 60,
+        "max": 900,
+        "step": 30,
+        "defaultValue": 240
+      }
+    ]
+  }
+}

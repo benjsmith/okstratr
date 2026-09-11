@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+.state/
+*.egg-info/
+dist/
+.okstratr-user/
+.okstratr-tmp/

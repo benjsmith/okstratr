@@ -1,0 +1,23 @@
+[project]
+name = "okstratr"
+version = "0.1.0"
+description = "Desk-brain orchestrator for Omarchy — DAG, CoS, schedule, blackboard; pairs with Herdr"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Ben Smith" }]
+dependencies = []
+
+[project.scripts]
+okstratr = "okstratr.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
