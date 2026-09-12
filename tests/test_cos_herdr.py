@@ -217,28 +217,84 @@ def test_http_cos_and_herdr_run_ready(state_dir: Path) -> None:
         httpd.shutdown()
 
 
-def test_herdr_launch_candidates_prefer_bins(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_herdr_launch_candidates_prefer_uwsm_terminal(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """uwsm-app + xdg-terminal-exec/--dir $HOME beats omarchy wrappers and direct herdr."""
+    from okstratr import herdr
+
+    for name in ("uwsm-app", "xdg-terminal-exec", "foot", "herdr", "omarchy-launch-terminal-herdr"):
+        p = tmp_path / name
+        p.write_text("#!/bin/sh\nexit 0\n")
+        p.chmod(0o755)
+
+    monkeypatch.setenv("PATH", str(tmp_path))
+    home = str(tmp_path / "home")
+    Path(home).mkdir()
+    cands = herdr._launch_candidates("ship it", path=str(tmp_path), home=home)
+    assert cands[0] == [str(tmp_path / "uwsm-app"), "--", str(tmp_path / "xdg-terminal-exec"), "--dir", home, "herdr"]
+    assert cands[1] == [str(tmp_path / "uwsm-app"), "--", str(tmp_path / "foot"), "herdr"]
+    # Direct herdr later; may take objective argv
+    assert [str(tmp_path / "herdr"), "ship it"] in cands
+    # Omarchy wrapper is fallback only
+    assert [str(tmp_path / "omarchy-launch-terminal-herdr")] in cands
+    assert cands.index([str(tmp_path / "omarchy-launch-terminal-herdr")]) > cands.index(
+        [str(tmp_path / "herdr"), "ship it"]
+    )
+    # No free-text objective on terminal wrappers
+    def _is_term_wrapper(c: list[str]) -> bool:
+        if herdr._is_omarchy_terminal_launcher(c):
+            return True
+        if len(c) >= 3 and "xdg-terminal-exec" in str(c[2]):
+            return True
+        if len(c) >= 3 and (str(c[2]).endswith("/foot") or c[2] == str(tmp_path / "foot")):
+            return True
+        return False
+
+    assert all("ship it" not in c for c in cands if _is_term_wrapper(c))
+
+
+def test_herdr_launch_merges_systemd_env_and_devnull(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     from okstratr import herdr
 
     fake_herdr = tmp_path / "herdr"
-    fake_herdr.write_text("#!/bin/sh\nexit 0\n")
-    fake_herdr.chmod(0o755)
     fake_uwsm = tmp_path / "uwsm-app"
-    fake_uwsm.write_text("#!/bin/sh\nexit 0\n")
-    fake_uwsm.chmod(0o755)
+    fake_xdg = tmp_path / "xdg-terminal-exec"
+    for p in (fake_herdr, fake_uwsm, fake_xdg):
+        p.write_text("#!/bin/sh\nexit 0\n")
+        p.chmod(0o755)
 
     monkeypatch.setenv("PATH", str(tmp_path))
-    # Clear any cached which — shutil.which reads PATH live
-    cands = herdr._launch_candidates("ship it")
-    assert cands[0] == [str(fake_herdr), "ship it"]
-    assert any(c[:2] == [str(fake_uwsm), "--"] for c in cands)
-    # No xdg-open when a direct bin exists
-    assert not any(c and "xdg-open" in c[0] for c in cands)
+    # Serve-like: no Wayland in process env
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.delenv("HYPRLAND_INSTANCE_SIGNATURE", raising=False)
 
-    popped: list[list[str]] = []
+    def fake_systemd() -> dict[str, str]:
+        return {
+            "WAYLAND_DISPLAY": "wayland-1",
+            "HYPRLAND_INSTANCE_SIGNATURE": "sig123",
+            "XDG_RUNTIME_DIR": "/run/user/1000",
+            "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus",
+            "EMPTY_SKIP": "",
+            "QT_QPA_PLATFORM": "-",  # broken placeholder → skip
+        }
 
-    def fake_popen(cmd, env=None, start_new_session=False):  # noqa: ANN001
-        popped.append(list(cmd))
+    monkeypatch.setattr(herdr, "systemd_user_environment", fake_systemd)
+
+    popped: list[dict] = []
+
+    def fake_popen(cmd, env=None, stdout=None, stderr=None, start_new_session=False):  # noqa: ANN001
+        popped.append(
+            {
+                "cmd": list(cmd),
+                "env": dict(env or {}),
+                "stdout": stdout,
+                "stderr": stderr,
+                "start_new_session": start_new_session,
+            }
+        )
 
         class _P:
             pid = 1
@@ -248,35 +304,36 @@ def test_herdr_launch_candidates_prefer_bins(monkeypatch: pytest.MonkeyPatch, tm
     monkeypatch.setattr(herdr.subprocess, "Popen", fake_popen)
     out = herdr.launch("ship it")
     assert out["ok"] is True
-    assert out["exec"] == [str(fake_herdr), "ship it"]
-    assert out["attempts"][0]["ok"] is True
-    assert popped == [[str(fake_herdr), "ship it"]]
-    assert out["objective"] == "ship it"
+    assert popped, "expected Popen"
+    call = popped[0]
+    assert call["stdout"] is herdr.subprocess.DEVNULL
+    assert call["stderr"] is herdr.subprocess.DEVNULL
+    assert call["start_new_session"] is True
+    assert call["env"].get("WAYLAND_DISPLAY") == "wayland-1"
+    assert call["env"].get("HYPRLAND_INSTANCE_SIGNATURE") == "sig123"
+    assert call["env"].get("OKSTRATR_OBJECTIVE") == "ship it"
+    assert "QT_QPA_PLATFORM" not in call["env"] or call["env"].get("QT_QPA_PLATFORM") != "-"
+    # Prefer uwsm + xdg-terminal-exec
+    assert call["cmd"][0] == str(fake_uwsm)
+    assert "xdg-terminal-exec" in call["cmd"][2]
+    assert "--dir" in call["cmd"]
 
 
-def test_herdr_launch_candidates_omarchy_terminal_first(
+def test_herdr_launch_omarchy_fallback_no_objective_argv(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """omarchy-launch-terminal-herdr wins and never gets objective argv."""
+    """omarchy wrappers are fallback only and never get objective argv."""
     from okstratr import herdr
 
     term_herdr = tmp_path / "omarchy-launch-terminal-herdr"
     term_herdr.write_text("#!/bin/sh\nexit 0\n")
     term_herdr.chmod(0o755)
-    term = tmp_path / "omarchy-launch-terminal"
-    term.write_text("#!/bin/sh\nexit 0\n")
-    term.chmod(0o755)
-    fake_herdr = tmp_path / "herdr"
-    fake_herdr.write_text("#!/bin/sh\nexit 0\n")
-    fake_herdr.chmod(0o755)
-
+    # No uwsm/foot/xdg-terminal-exec/herdr — only omarchy wrapper
     monkeypatch.setenv("PATH", str(tmp_path))
-    cands = herdr._launch_candidates("do not put this on argv")
+    monkeypatch.setattr(herdr, "systemd_user_environment", lambda: {})
+
+    cands = herdr._launch_candidates("do not put this on argv", path=str(tmp_path))
     assert cands[0] == [str(term_herdr)]
-    assert cands[1] == [str(term), "herdr"]
-    # Direct herdr still listed later, and may take objective argv
-    assert [str(fake_herdr), "do not put this on argv"] in cands
-    # Omarchy wrappers must not receive free-text objective
     assert all(
         "do not put this on argv" not in c
         for c in cands
@@ -286,7 +343,7 @@ def test_herdr_launch_candidates_omarchy_terminal_first(
     popped: list[list[str]] = []
     envs: list[dict] = []
 
-    def fake_popen(cmd, env=None, start_new_session=False):  # noqa: ANN001
+    def fake_popen(cmd, env=None, stdout=None, stderr=None, start_new_session=False):  # noqa: ANN001
         popped.append(list(cmd))
         envs.append(dict(env or {}))
 
@@ -296,9 +353,11 @@ def test_herdr_launch_candidates_omarchy_terminal_first(
         return _P()
 
     monkeypatch.setattr(herdr.subprocess, "Popen", fake_popen)
+    # herdr binary missing → ok False even if wrapper started
     out = herdr.launch("do not put this on argv")
-    assert out["ok"] is True
+    assert out["ok"] is False
     assert out["exec"] == [str(term_herdr)]
+    assert "install" in (out.get("message") or "").lower() or "Herdr not installed" in (out.get("message") or "")
     assert popped == [[str(term_herdr)]]
     assert envs[0].get("OKSTRATR_OBJECTIVE") == "do not put this on argv"
     assert envs[0].get("HERDR_OBJECTIVE") == "do not put this on argv"
@@ -308,12 +367,39 @@ def test_herdr_launch_dry_when_missing(monkeypatch: pytest.MonkeyPatch, tmp_path
     from okstratr import herdr
 
     monkeypatch.setenv("PATH", str(tmp_path))  # empty dir — no herdr/uwsm/xdg
+    monkeypatch.setattr(herdr, "systemd_user_environment", lambda: {})
     out = herdr.launch("x")
     assert out["ok"] is False
     assert out.get("dry_run") is True
-    assert out["would_exec"] == ["omarchy-launch-terminal-herdr"]
     assert "Herdr not installed" in out["message"]
-    assert "omarchy-launch-terminal-herdr" in out["message"]
+    assert "herdr.dev/install.sh" in out["message"] or "omarchy pkg add herdr" in out["message"]
+
+
+def test_herdr_launch_ok_when_herdr_present(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from okstratr import herdr
+
+    fake_herdr = tmp_path / "herdr"
+    fake_uwsm = tmp_path / "uwsm-app"
+    fake_foot = tmp_path / "foot"
+    for p in (fake_herdr, fake_uwsm, fake_foot):
+        p.write_text("#!/bin/sh\nexit 0\n")
+        p.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setattr(herdr, "systemd_user_environment", lambda: {"WAYLAND_DISPLAY": "wayland-1"})
+
+    def fake_popen(cmd, env=None, stdout=None, stderr=None, start_new_session=False):  # noqa: ANN001
+        class _P:
+            pid = 1
+
+        return _P()
+
+    monkeypatch.setattr(herdr.subprocess, "Popen", fake_popen)
+    out = herdr.launch("go")
+    assert out["ok"] is True
+    assert out["herdr_bin"] == str(fake_herdr)
+    assert out["exec"][0] == str(fake_uwsm)
 
 
 def test_http_herdr_launch(state_dir: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -327,10 +413,11 @@ def test_http_herdr_launch(state_dir: Path, monkeypatch: pytest.MonkeyPatch, tmp
     fake.write_text("#!/bin/sh\nexit 0\n")
     fake.chmod(0o755)
     monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setattr(herdr, "systemd_user_environment", lambda: {})
 
     popped: list[list[str]] = []
 
-    def fake_popen(cmd, env=None, start_new_session=False):  # noqa: ANN001
+    def fake_popen(cmd, env=None, stdout=None, stderr=None, start_new_session=False):  # noqa: ANN001
         popped.append(list(cmd))
 
         class _P:
@@ -355,10 +442,33 @@ def test_http_herdr_launch(state_dir: Path, monkeypatch: pytest.MonkeyPatch, tmp
             body = json.loads(r.read().decode())
         assert body["ok"] is True
         assert body["objective"] == "focus me"
-        assert body["exec"][0] == str(fake)
+        assert body["herdr_bin"] == str(fake)
         assert popped
     finally:
         httpd.shutdown()
+
+
+def test_merge_user_session_env_skips_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    from okstratr import herdr
+
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setattr(
+        herdr,
+        "systemd_user_environment",
+        lambda: {
+            "WAYLAND_DISPLAY": "wayland-1",
+            "DISPLAY": "",
+            "HYPRLAND_INSTANCE_SIGNATURE": "none",
+            "XDG_RUNTIME_DIR": "/run/user/1000",
+        },
+    )
+    env = herdr.merge_user_session_env({"PATH": "/usr/bin"})
+    assert env["WAYLAND_DISPLAY"] == "wayland-1"
+    assert env["XDG_RUNTIME_DIR"] == "/run/user/1000"
+    assert "DISPLAY" not in env or env.get("DISPLAY") == ""
+    assert env.get("HYPRLAND_INSTANCE_SIGNATURE") != "none"
+    assert "/.local/bin" in env["PATH"]
+
 
 def test_dag_graph_view_idle_and_switchbay(state_dir: Path) -> None:
     from okstratr import cos, dag

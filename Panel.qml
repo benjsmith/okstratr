@@ -51,7 +51,7 @@ Item {
   function openHerdr() {
     var obj = (root.status && root.status.objective) ? String(root.status.objective) : ""
     root.herdrLaunchMsg = "Launching Herdr…"
-    // Prefer HTTP so PATH matches the serve daemon (~/.local/bin), not Quickshell's sparse env.
+    // Prefer HTTP so PATH + systemd user env match herdr.launch.
     Model.postJson(root.apiUrl + "/api/herdr/launch", {objective: obj}, function (parsed) {
       if (!parsed) {
         root.herdrLaunchMsg = "Launch request failed (is okstratr serve running?)"
@@ -64,18 +64,23 @@ Item {
       var via = parsed.launcher || (parsed.exec && parsed.exec[0]) || "herdr"
       root.herdrLaunchMsg = "Opened via " + via
     })
-    // Belt-and-suspenders: Omarchy terminal launcher + login PATH; objective via env only
+    // Same robust path: import user env + uwsm-app + terminal + herdr
+    // (explicit --dir $HOME — never omarchy-cmd-terminal-cwd / pgrep).
     var esc = String(obj).replace(/'/g, "'\\''")
     Quickshell.execDetached([
       "sh", "-lc",
       "export PATH=\"$HOME/.local/bin:/usr/local/bin:$PATH\"; "
+      + "eval \"$(systemctl --user show-environment 2>/dev/null | "
+      + "awk -F= '/^(WAYLAND_DISPLAY|DISPLAY|XDG_RUNTIME_DIR|HYPRLAND_INSTANCE_SIGNATURE|"
+      + "HYPRLAND_CMD|DBUS_SESSION_BUS_ADDRESS|QT_QPA_PLATFORM)=/ {print \"export \" $0}')\"; "
       + (obj ? ("export OKSTRATR_OBJECTIVE='" + esc + "'; export HERDR_OBJECTIVE='" + esc + "'; ") : "")
-      + "(command -v omarchy-launch-terminal-herdr >/dev/null && exec omarchy-launch-terminal-herdr) || "
-      + "(command -v omarchy-launch-terminal >/dev/null && exec omarchy-launch-terminal herdr) || "
-      + "(command -v herdr >/dev/null && exec herdr) || "
-      + "(command -v omarchy-herdr >/dev/null && exec omarchy-herdr) || "
-      + "(command -v uwsm-app >/dev/null && exec uwsm-app -- herdr) || "
-      + "(command -v okstratr >/dev/null && exec okstratr herdr) || true"
+      + "if command -v uwsm-app >/dev/null && command -v xdg-terminal-exec >/dev/null; then "
+      + "exec uwsm-app -- xdg-terminal-exec --dir \"$HOME\" herdr; "
+      + "elif command -v uwsm-app >/dev/null && command -v foot >/dev/null; then "
+      + "exec uwsm-app -- foot herdr; "
+      + "elif command -v herdr >/dev/null; then exec herdr; "
+      + "elif command -v omarchy-launch-terminal-herdr >/dev/null; then exec omarchy-launch-terminal-herdr; "
+      + "else exit 1; fi"
     ])
   }
 

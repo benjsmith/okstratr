@@ -28,13 +28,27 @@ CLOSE_WARNING = (
 )
 
 
-def herdr_bin() -> str | None:
-    return shutil.which("herdr") or shutil.which("omarchy-herdr")
+def herdr_bin(path: str | None = None) -> str | None:
+    """Resolve herdr / omarchy-herdr on PATH (optional PATH override)."""
+    return shutil.which("herdr", path=path) or shutil.which("omarchy-herdr", path=path)
 
 
 NOT_INSTALLED_MSG = (
-    "Herdr not installed — install the herdr package / "
-    "run omarchy-launch-terminal-herdr once herdr is on PATH"
+    "Herdr not installed — install with: omarchy pkg add herdr "
+    "or curl -fsSL https://herdr.dev/install.sh | sh"
+)
+
+# Session/display keys to import from systemd --user (serve often lacks these).
+_SYSTEMD_ENV_KEYS = (
+    "WAYLAND_DISPLAY",
+    "DISPLAY",
+    "XDG_RUNTIME_DIR",
+    "HYPRLAND_INSTANCE_SIGNATURE",
+    "HYPRLAND_CMD",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "QT_QPA_PLATFORM",
+    "XDG_SESSION_TYPE",
+    "XDG_CURRENT_DESKTOP",
 )
 
 
@@ -50,15 +64,83 @@ def _is_omarchy_terminal_launcher(cmd: list[str]) -> bool:
     return name in ("omarchy-launch-terminal-herdr", "omarchy-launch-terminal")
 
 
-def _launch_candidates(objective: str = "") -> list[list[str]]:
-    """Ordered Omarchy-friendly Herdr launch commands (only bins that exist).
+def _parse_systemd_env_line(line: str) -> tuple[str, str] | None:
+    if "=" not in line:
+        return None
+    key, _, val = line.partition("=")
+    key = key.strip()
+    val = val.strip()
+    if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+        val = val[1:-1]
+    if not key or not val:
+        return None
+    return key, val
 
-    Prefer omarchy-launch-terminal-herdr / omarchy-launch-terminal herdr when
-    present — those wrappers take no objective argv (it would become a wrong
-    terminal command). Direct herdr / omarchy-herdr / uwsm-app may take argv.
-    Objective is always also passed via OKSTRATR_OBJECTIVE / HERDR_OBJECTIVE env.
+
+def systemd_user_environment() -> dict[str, str]:
+    """Parse `systemctl --user show-environment` (best-effort)."""
+    try:
+        proc = subprocess.run(
+            ["systemctl", "--user", "show-environment"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    if proc.returncode != 0:
+        return {}
+    out: dict[str, str] = {}
+    for line in (proc.stdout or "").splitlines():
+        parsed = _parse_systemd_env_line(line)
+        if parsed:
+            out[parsed[0]] = parsed[1]
+    return out
+
+
+def merge_user_session_env(base: dict[str, str] | None = None) -> dict[str, str]:
+    """Copy process env and overlay Wayland/Hyprland/DBus keys from systemd --user."""
+    env = dict(base if base is not None else os.environ)
+    sysd = systemd_user_environment()
+    for key in _SYSTEMD_ENV_KEYS:
+        val = (sysd.get(key) or "").strip()
+        if not val:
+            continue
+        # Skip obviously broken placeholders
+        if val in ("-", "none", "null"):
+            continue
+        env[key] = val
+    # Ensure ~/.local/bin (herdr install.sh default) is on PATH for which + child
+    home = os.path.expanduser("~")
+    local_bin = os.path.join(home, ".local", "bin")
+    path_val = env.get("PATH") or ""
+    parts = [p for p in path_val.split(":") if p]
+    if local_bin not in parts:
+        env["PATH"] = f"{local_bin}:{path_val}" if path_val else local_bin
+    return env
+
+
+def _which(cmd: str, path: str | None = None) -> str | None:
+    return shutil.which(cmd, path=path)
+
+
+def _launch_candidates(
+    objective: str = "",
+    *,
+    path: str | None = None,
+    home: str | None = None,
+) -> list[list[str]]:
+    """Ordered Herdr launch commands that avoid omarchy-cmd-terminal-cwd.
+
+    Prefer uwsm-app + xdg-terminal-exec/foot with an explicit --dir $HOME so
+    the daemon never hits `pgrep -P \"\"` from hyprctl activewindow.
+    Omarchy terminal wrappers are last-resort fallbacks only.
+    Objective is passed via OKSTRATR_OBJECTIVE / HERDR_OBJECTIVE env; never as
+    argv to terminal wrappers.
     """
     obj = (objective or "").strip()
+    home_dir = home or os.path.expanduser("~")
     out: list[list[str]] = []
     seen: set[tuple[str, ...]] = set()
 
@@ -68,30 +150,38 @@ def _launch_candidates(objective: str = "") -> list[list[str]]:
             seen.add(key)
             out.append(cmd)
 
-    # 1) Omarchy terminal wrappers first — never append free-text objective
-    term_herdr = shutil.which("omarchy-launch-terminal-herdr")
+    uwsm = _which("uwsm-app", path=path)
+    xdg_term = _which("xdg-terminal-exec", path=path)
+    foot = _which("foot", path=path)
+
+    # 1) uwsm-app + terminal + herdr (no cwd probe / pgrep)
+    if uwsm and xdg_term:
+        add([uwsm, "--", xdg_term, "--dir", home_dir, "herdr"])
+    if uwsm and foot:
+        add([uwsm, "--", foot, "herdr"])
+
+    # 2) Direct herdr binaries (objective argv OK; needs display env)
+    for name in ("herdr", "omarchy-herdr"):
+        bin_path = _which(name, path=path)
+        if bin_path:
+            add([bin_path] + ([obj] if obj else []))
+
+    # 3) uwsm-app -- herdr (no terminal wrapper)
+    if uwsm:
+        add([uwsm, "--", "herdr"] + ([obj] if obj else []))
+        if _which("omarchy-herdr", path=path):
+            add([uwsm, "--", "omarchy-herdr"] + ([obj] if obj else []))
+
+    # 4) Omarchy wrappers last — they call omarchy-cmd-terminal-cwd (fragile from serve)
+    term_herdr = _which("omarchy-launch-terminal-herdr", path=path)
     if term_herdr:
         add([term_herdr])
-
-    term = shutil.which("omarchy-launch-terminal")
+    term = _which("omarchy-launch-terminal", path=path)
     if term:
         add([term, "herdr"])
 
-    # 2) Direct herdr binaries (objective argv OK)
-    for name in ("herdr", "omarchy-herdr"):
-        path = shutil.which(name)
-        if path:
-            add([path] + ([obj] if obj else []))
-
-    # 3) uwsm-app — may resolve herdr even when which missed a wrapper
-    uwsm = shutil.which("uwsm-app")
-    if uwsm:
-        add([uwsm, "--", "herdr"] + ([obj] if obj else []))
-        if shutil.which("omarchy-herdr"):
-            add([uwsm, "--", "omarchy-herdr"] + ([obj] if obj else []))
-
-    # 4) Last-resort raise only when no herdr/uwsm/omarchy candidate — no objective argv
-    xdg = shutil.which("xdg-open")
+    # 5) Last-resort desktop file only when nothing else
+    xdg = _which("xdg-open", path=path)
     if xdg and not out:
         for desktop in (
             "herdr.desktop",
@@ -129,60 +219,95 @@ def dry_run_enabled(explicit: bool | None = None) -> bool:
 
 def launch(objective: str = "", *, focus: bool = True) -> dict[str, Any]:
     """
-    Best-effort: run Herdr with objective as env (and argv only for real herdr bins).
+    Best-effort: open Herdr in a terminal with session display env.
 
-    Tries Omarchy launchers in order:
-      omarchy-launch-terminal-herdr,
-      omarchy-launch-terminal herdr,
-      herdr / omarchy-herdr,
-      uwsm-app -- herdr,
-      then xdg-open *.desktop when nothing else is present.
-    Omarchy terminal wrappers never get free-text objective as argv.
-    Logs each attempt in the return dict.
+    Merges systemd --user environment (WAYLAND_DISPLAY, HIS, …) before spawn so
+    foot/uwsm work when serve was started without a compositor env.
+
+    Prefer:
+      uwsm-app -- xdg-terminal-exec --dir $HOME herdr
+      uwsm-app -- foot herdr
+    then direct herdr / uwsm-app -- herdr; omarchy-launch-terminal* only as
+    fallback (those hit omarchy-cmd-terminal-cwd / pgrep from daemon context).
+
+    Child stdout/stderr discarded so pgrep Usage / wayland noise never hits the
+    serve TTY. Missing herdr binary → ok:false with install hint (even if a
+    terminal wrapper was spawned).
     """
     obj = (objective or "").strip()
-    env = os.environ.copy()
+    env = merge_user_session_env()
     if obj:
         env["OKSTRATR_OBJECTIVE"] = obj
         env["HERDR_OBJECTIVE"] = obj
     if focus:
         env["HERDR_FOCUS"] = "1"
 
-    candidates = _launch_candidates(obj)
+    path = env.get("PATH")
+    home = os.path.expanduser("~")
+    bin_path = herdr_bin(path=path)
+    candidates = _launch_candidates(obj, path=path, home=home)
+
     if not candidates:
-        would = ["omarchy-launch-terminal-herdr"]
         return {
             "ok": False,
             "dry_run": True,
             "message": NOT_INSTALLED_MSG,
             "objective": obj,
-            "would_exec": would,
+            "would_exec": ["uwsm-app", "--", "xdg-terminal-exec", "--dir", home, "herdr"],
             "attempts": [],
             "candidates": [],
+            "herdr_bin": None,
         }
 
     attempts: list[dict[str, Any]] = []
+    launched: list[str] | None = None
     for cmd in candidates:
         try:
-            subprocess.Popen(cmd, env=env, start_new_session=True)
+            subprocess.Popen(
+                cmd,
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
             attempts.append({"ok": True, "exec": cmd})
-            return {
-                "ok": True,
-                "exec": cmd,
-                "objective": obj,
-                "attempts": attempts,
-                "candidates": candidates,
-                "launcher": cmd[0],
-            }
+            launched = cmd
+            break
         except OSError as e:
             attempts.append({"ok": False, "exec": cmd, "error": str(e)})
 
+    if launched is None:
+        return {
+            "ok": False,
+            "error": attempts[-1].get("error") if attempts else "no launcher",
+            "message": NOT_INSTALLED_MSG if not bin_path else None,
+            "objective": obj,
+            "attempts": attempts,
+            "candidates": candidates,
+            "herdr_bin": bin_path,
+        }
+
+    if not bin_path:
+        return {
+            "ok": False,
+            "exec": launched,
+            "objective": obj,
+            "attempts": attempts,
+            "candidates": candidates,
+            "launcher": launched[0],
+            "herdr_bin": None,
+            "message": NOT_INSTALLED_MSG,
+            "error": "herdr binary not on PATH",
+        }
+
     return {
-        "ok": False,
-        "error": attempts[-1].get("error") if attempts else "no launcher",
+        "ok": True,
+        "exec": launched,
         "objective": obj,
         "attempts": attempts,
         "candidates": candidates,
+        "launcher": launched[0],
+        "herdr_bin": bin_path,
     }
 
 
