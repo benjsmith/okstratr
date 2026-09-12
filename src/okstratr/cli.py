@@ -80,6 +80,9 @@ def _cmd_desk(args) -> int:
     if cmd == "hire":
         return _print(desks.hire(args.role, desk_id=args.desk_id))
 
+    if cmd == "effort":
+        return _print(desks.set_effort(args.value, desk_id=getattr(args, "desk_id", None)))
+
     if cmd == "retire":
         return _print(desks.retire_worker(args.node_id, desk_id=args.desk_id))
 
@@ -96,7 +99,7 @@ def main(argv=None) -> int:
     sub.add_parser("status", help="Print and publish status.json")
 
     # --- desk (primary) ---
-    desk_p = sub.add_parser("desk", help="Desk lifecycle: start|stop|dismiss|status|schedule|hire|retire|focus")
+    desk_p = sub.add_parser("desk", help="Desk lifecycle: start|stop|dismiss|status|schedule|hire|effort|retire|focus")
     desk_sub = desk_p.add_subparsers(dest="desk_cmd", required=True)
 
     desk_start = desk_sub.add_parser("start", help="Start a desk (hire CoS + roles)")
@@ -127,7 +130,7 @@ def main(argv=None) -> int:
         "--effort",
         type=float,
         default=None,
-        help="Optional effort slider 0..1 (stub hire trim)",
+        help="Optional effort slider 0..1 (bandit utility weights / hire cap)",
     )
     desk_start.add_argument(
         "--herdr",
@@ -152,6 +155,10 @@ def main(argv=None) -> int:
     desk_hire = desk_sub.add_parser("hire", help="Grant a role (kernel hire; cap + curate guards)")
     desk_hire.add_argument("role", help="Role id to grant (investigator, verifier, …)")
     desk_hire.add_argument("--desk-id", dest="desk_id", default=None)
+
+    desk_effort = desk_sub.add_parser("effort", help="Set effort slider 0..1 (bandit weights)")
+    desk_effort.add_argument("value", type=float, help="Effort in [0, 1]")
+    desk_effort.add_argument("--desk-id", dest="desk_id", default=None)
 
     desk_retire = desk_sub.add_parser("retire", help="Retire a short-lived DAG worker node")
     desk_retire.add_argument("node_id", help="DAG node id to remove (summary → blackboard)")
@@ -273,12 +280,82 @@ def main(argv=None) -> int:
 
     bb_sub.add_parser("clear", help="Archive and clear blackboard")
 
+    web_p = sub.add_parser("web", help="Web egress gate: status|on|off")
+    web_sub = web_p.add_subparsers(dest="web_cmd", required=True)
+    web_sub.add_parser("status", help="Show web egress mode (Off|Once|Session)")
+    web_on = web_sub.add_parser("on", help="Enable web egress (choose once|session)")
+    web_on.add_argument("--once", action="store_true", help="Allow a single search then auto-off")
+    web_on.add_argument("--session", action="store_true", help="Allow until revoke/desk stop/dismiss")
+    web_on.add_argument(
+        "mode",
+        nargs="?",
+        default=None,
+        help="Optional once|session (interactive default: prompt)",
+    )
+    web_off = web_sub.add_parser("off", help="Revoke web egress")
+    web_off.add_argument(
+        "what",
+        nargs="?",
+        default=None,
+        help="Optional 'search' alias (web search off)",
+    )
+    # Alias: `okstratr web search off`
+    web_search = web_sub.add_parser("search", help="Alias: web search off")
+    web_search.add_argument("action", nargs="?", default="off", help="off")
+
     args = p.parse_args(argv)
 
     if args.cmd == "status":
         from . import status
 
         return _print(status.write_status())
+
+    if args.cmd == "web":
+        from . import status, web_egress
+
+        cmd = args.web_cmd
+        if cmd == "status":
+            snap = web_egress.status()
+            status.write_status()
+            return _print(snap)
+        if cmd == "on":
+            mode = None
+            if getattr(args, "once", False):
+                mode = "once"
+            elif getattr(args, "session", False):
+                mode = "session"
+            elif getattr(args, "mode", None):
+                mode = str(args.mode).strip().lower()
+            if mode is None:
+                # Interactive choice when a TTY is available; else session
+                if sys.stdin.isatty():
+                    print("Web egress: [1] once  [2] session  [0] cancel", file=sys.stderr)
+                    choice = (input("Choice: ").strip() or "").lower()
+                    if choice in ("1", "once", "o"):
+                        mode = "once"
+                    elif choice in ("2", "session", "s"):
+                        mode = "session"
+                    else:
+                        print("cancelled", file=sys.stderr)
+                        return 1
+                else:
+                    mode = "session"
+            out = web_egress.set_mode(mode)
+            status.write_status()
+            return _print(out)
+        if cmd == "off":
+            out = web_egress.revoke()
+            status.write_status()
+            return _print(out)
+        if cmd == "search":
+            action = (getattr(args, "action", None) or "off").strip().lower()
+            if action != "off":
+                print("usage: okstratr web search off", file=sys.stderr)
+                return 2
+            out = web_egress.revoke()
+            status.write_status()
+            return _print(out)
+        return 1
 
     if args.cmd == "desk":
         return _cmd_desk(args)

@@ -15,6 +15,7 @@ function defaultStatus() {
         herdr_labels: {},
         focus_desk_id: null,
         effort: null,
+        web_egress: { mode: "off", label: "Off", chip: "Web: Off" },
         api_url: "http://127.0.0.1:8767",
         herdr: "herdr",
         message: "Run okstratr setup / start a desk"
@@ -127,3 +128,22 @@ function postJson(url, body, callback) {
     xhr.setRequestHeader("Content-Type", "application/json")
     xhr.send(JSON.stringify(body || {}))
 }
+
+function webEgress(status) {
+    if (status && status.web_egress && status.web_egress.label)
+        return String(status.web_egress.label)
+    if (status && status.web_egress && status.web_egress.mode) {
+        var m = String(status.web_egress.mode)
+        if (m === "once") return "Once"
+        if (m === "session") return "Session"
+        return "Off"
+    }
+    return "Off"
+}
+
+function webEgressChip(status) {
+    if (status && status.web_egress && status.web_egress.chip)
+        return String(status.web_egress.chip)
+    return "Web: " + webEgress(status)
+}
+

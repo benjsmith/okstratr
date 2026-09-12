@@ -170,6 +170,7 @@ class Dag:
         self.refresh_ready(save=False)
         if save:
             self.save()
+        self._bandit_outcome("done", node_id)
         return n
 
     def mark_failed(self, node_id: str, *, notes: str | None = None, save: bool = True) -> Node:
@@ -179,7 +180,20 @@ class Dag:
             n.updated_at = time()
         if save:
             self.save()
+        reason = "timeout" if notes and "timeout" in str(notes).lower() else "failed"
+        self._bandit_outcome(reason, node_id)
         return n
+
+    def _bandit_outcome(self, outcome: str, node_id: str) -> None:
+        """Best-effort bandit reward on node done/fail (no raise)."""
+        if node_id in ("root",):
+            return
+        try:
+            from . import kernel
+
+            kernel.notify_outcome(outcome, node_id=node_id)
+        except Exception:  # noqa: BLE001
+            pass
 
     def reset(self, *, save: bool = True) -> None:
         """Clear all nodes."""

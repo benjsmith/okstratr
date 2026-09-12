@@ -1,9 +1,9 @@
 """Kernel: hiring manager (no real LLM calls).
 
 Chooses a default desk kind from a light objective heuristic, always ensures
-a CoS, grants roles under an effort-based cap, and retires short-lived DAG
-workers. Full Auto bandit / effort-slider utility is documented in
-docs/DESK-KERNEL.md and not implemented here.
+a CoS, grants roles under an effort-bandit utility + hard cap, and retires
+short-lived DAG workers. Live Auto bandit / effort-slider utility is in
+okstratr.bandit and documented in docs/DESK-KERNEL.md.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import re
 from time import time
 from typing import Any
 
-from . import blackboard, dag, okbay, roles
+from . import bandit, blackboard, dag, okbay, roles
 
 # Default kind set — not a closed enum forever; kernel may invent later.
 KNOWN_KINDS = roles.DEFAULT_DESK_KINDS
@@ -33,7 +33,7 @@ _WORK_RE = re.compile(
 # Standing DAG nodes that must not be retired (desk spine).
 STANDING_NODE_IDS = frozenset({"root"})
 
-# Effort slider stub: how many granted roles the desk may hold.
+# Effort thresholds / caps (hard ceiling; bandit selects within).
 HIRE_CAP_LOW = 2  # CoS + planner (minimal)
 HIRE_CAP_MID = 6
 HIRE_CAP_HIGH = 10
@@ -75,34 +75,22 @@ def ensure_cos(role_ids: list[str] | None) -> list[str]:
 
 
 def hire_cap(effort: float | None) -> int:
-    """Max granted roles for this effort. Slider stub — not a live bandit."""
-    if effort is None:
-        e = 0.5
-    else:
-        try:
-            e = max(0.0, min(1.0, float(effort)))
-        except (TypeError, ValueError):
-            e = 0.5
-    if e < EFFORT_LOW:
-        return HIRE_CAP_LOW
-    if e < EFFORT_HIGH:
-        return HIRE_CAP_MID
-    return HIRE_CAP_HIGH
+    """Max granted roles for this effort (hard ceiling; bandit selects within)."""
+    return bandit.hire_cap(effort)
 
 
-def effort_slider(effort: float | None) -> dict[str, Any]:
-    """Status payload for the effort slider (stub)."""
-    cap = hire_cap(effort)
-    return {
-        "value": effort,
-        "cap": cap,
-        "stub": True,
-        "bandit": False,
-        "note": (
-            "Effort trims hire cap and optional roles only. "
-            "Live utility / Auto bandit is future work."
-        ),
-    }
+def effort_slider(effort: float | None, *, desk_id: str | None = None) -> dict[str, Any]:
+    """Status payload for the effort slider (live bandit)."""
+    snap = bandit.snapshot(effort, desk_id=desk_id)
+    snap["value"] = None if effort is None else bandit.clamp_effort(effort)
+    snap["cap"] = hire_cap(effort)
+    snap["stub"] = False
+    snap["bandit"] = True
+    snap["note"] = (
+        "Effort maps to utility weights (quality vs cost/latency). "
+        "Bandit selects hire policy arms; marginal utility must beat effort-scaled cost."
+    )
+    return snap
 
 
 def curate_commit_path_ok(desk: Any | None = None) -> bool:
@@ -136,13 +124,32 @@ def org_from_plan(plan: dict[str, Any]) -> dict[str, Any]:
     """Persistable desk org: CoS + granted roles with model hints and effort."""
     effort = plan.get("effort")
     hired = ensure_cos(list(plan.get("roles") or []))
+    diversity = bool((plan.get("bandit_decision") or {}).get("diversity"))
+    granted = []
+    seen_hints: dict[str, set[str]] = {}
+    diversify = ["diverse", "strongest_available", "alt_diverse", "alt_strong"]
+    for r in hired:
+        hint = roles.model_hint_for(r)
+        if diversity and r in seen_hints:
+            used = seen_hints[r]
+            hint = next((m for m in diversify if m not in used), "diverse")
+        elif diversity and hint == "strongest_available" and r not in (
+            roles.ROLE_COS,
+            roles.ROLE_PLANNER,
+            roles.ROLE_CURATOR_JUDGE,
+        ):
+            hint = "diverse"
+        granted.append(_granted_entry(r, model_hint=hint, effort=effort))
+        seen_hints.setdefault(r, set()).add(hint)
     return {
         "cos": roles.ROLE_COS,
         "effort": effort,
         "cap": hire_cap(effort),
-        "granted": [_granted_entry(r, effort=effort) for r in hired],
+        "granted": granted,
         "model_policy": plan.get("model_policy") or "strongest_available_or_user_choice",
-        "stub": True,
+        "stub": False,
+        "bandit": True,
+        "bandit_arm": (plan.get("bandit_decision") or {}).get("arm_id"),
     }
 
 
@@ -159,6 +166,18 @@ def _apply_curate_guard(hired: list[str], *, desk: Any | None = None) -> tuple[l
     return filtered, True
 
 
+def _desk_id_of(desk: Any | None) -> str | None:
+    if desk is None:
+        return None
+    if isinstance(desk, str):
+        return desk
+    if isinstance(desk, dict):
+        did = desk.get("id")
+        return str(did) if did else None
+    did = getattr(desk, "id", None)
+    return str(did) if did else None
+
+
 def hire_plan(
     objective: str,
     *,
@@ -167,19 +186,26 @@ def hire_plan(
     desk: Any | None = None,
 ) -> dict[str, Any]:
     """
-    Stub hiring plan: kind + roles. No LLM.
+    Bandit hiring plan: kind + roles. No LLM.
 
-    effort ∈ [0, 1] (optional) trims to the hire cap and, when low, CoS+planner
-    only. Curator workers are refused without an okbay reviews commit path.
+    effort ∈ [0, 1] maps to utility weights; bandit selects a hire-policy arm
+    under hire_cap; marginal utility filters roles. Always CoS first.
+    Curator workers are refused without an okbay reviews commit path.
     """
     chosen = choose_kind(objective, kind)
-    hired = roles.roles_for_kind(chosen)
+    desk_id = _desk_id_of(desk)
+    decision = bandit.select_arm(effort, desk_id=desk_id)
+    base = roles.roles_for_kind(chosen)
+    hired = bandit.roles_for_arm(chosen, decision, base_roles=base)
+    hired, audits = bandit.filter_by_marginal_utility(
+        hired, effort, diversity=bool(decision.get("diversity"))
+    )
     hired, worker_refused = _apply_curate_guard(hired, desk=desk)
+    hired = ensure_cos(hired)
 
+    # Low effort: force minimal when bandit/cap already tight
     if effort is not None and effort < EFFORT_LOW:
         hired = ensure_cos([roles.ROLE_COS, roles.ROLE_PLANNER])
-    else:
-        hired = ensure_cos(hired)
 
     cap = hire_cap(effort)
     if len(hired) > cap:
@@ -198,11 +224,15 @@ def hire_plan(
         "curate_worker_refused": worker_refused,
         "commit_path": okbay.reviews_commit_path(),
         "okbay_workspace": okbay.active_workspace(),
-        "stub": True,
+        "stub": False,
+        "bandit": True,
+        "bandit_decision": decision,
+        "marginal_audits": audits,
         "notes": [
             "Workers send succinct summaries only (no full reasoning traces).",
             "Short-lived workers must retire from the DAG.",
             "Curate path requires propose→review→commit land capability.",
+            "Hire gated by effort-bandit marginal utility + hard cap.",
         ],
     }
     plan["org"] = org_from_plan(plan)
@@ -261,7 +291,7 @@ def route_herdr_input(
             "thread_id": target.thread_id,
             "kind": target.kind,
             "text": blob,
-            "stub": True,
+            "stub": False,
             "message": "Route to standing desk CoS (no new hire)",
         }
 
@@ -274,7 +304,7 @@ def route_herdr_input(
         "route": "new_minimal" if plan.get("minimal") or (effort is not None) else "new_desk",
         "hire": plan,
         "text": blob,
-        "stub": True,
+        "stub": False,
         "message": "No standing desk matched; kernel would spin up a desk",
     }
 
@@ -311,9 +341,51 @@ def _parse_hire_request(request: Any) -> dict[str, Any]:
     return {"role": role, "model_hint": str(hint).strip() if hint else None, "copies": copies}
 
 
+def set_effort(desk: Any, value: float) -> dict[str, Any]:
+    """Set desk effort slider ∈ [0,1]; refresh org cap / bandit snapshot."""
+    d, reg = _resolve_desk(desk)
+    if d is None:
+        return {"ok": False, "error": "no desk for effort"}
+    try:
+        e = max(0.0, min(1.0, float(value)))
+    except (TypeError, ValueError):
+        return {"ok": False, "error": f"effort must be float in [0,1], got {value!r}"}
+    d.effort = e
+    org = dict(getattr(d, "org", None) or {})
+    org["effort"] = e
+    org["cap"] = hire_cap(e)
+    org["stub"] = False
+    org["bandit"] = True
+    d.org = org
+    if isinstance(getattr(d, "hire", None), dict):
+        d.hire = dict(d.hire)
+        d.hire["effort"] = e
+        d.hire["hire_cap"] = hire_cap(e)
+    d.updated_at = time()
+    if hasattr(reg, "save"):
+        reg.save()
+    try:
+        from . import status as status_mod
+
+        status_mod.write_status()
+    except Exception:  # noqa: BLE001
+        pass
+    slider = effort_slider(e, desk_id=getattr(d, "id", None))
+    return {
+        "ok": True,
+        "action": "effort",
+        "desk_id": getattr(d, "id", None),
+        "effort": e,
+        "cap": hire_cap(e),
+        "effort_slider": slider,
+        "org": d.org,
+    }
+
+
 def hire(desk: Any, request: Any) -> dict[str, Any]:
     """
-    Grant a role on the desk org if under the effort cap and curate guards pass.
+    Grant a role on the desk org if under the effort cap, marginal utility,
+    and curate guards pass.
 
     request: role id str, or {role|id, model_hint?, copies?}
     desk: Desk, desk_id, or None (active).
@@ -333,6 +405,7 @@ def hire(desk: Any, request: Any) -> dict[str, Any]:
         granted_ids = list(getattr(d, "roles", None) or [])
         granted = [_granted_entry(r, effort=getattr(d, "effort", None)) for r in granted_ids]
     granted_ids = ensure_cos(granted_ids)
+    granted_hints = [str(x.get("model_hint") or "") for x in granted]
 
     if role == roles.ROLE_CURATOR_WORKER and not curate_commit_path_ok(d):
         return {
@@ -368,18 +441,46 @@ def hire(desk: Any, request: Any) -> dict[str, Any]:
             "guard": "hire_cap",
         }
 
+    hint = req["model_hint"]
+    if hint is None and already >= 1:
+        # Prefer different model when multiples
+        used = {h for g, h in zip(granted_ids, granted_hints) if g == role}
+        for cand in ("diverse", "alt_diverse", "strongest_available", "alt_strong"):
+            if cand not in used:
+                hint = cand
+                break
+        hint = hint or "diverse"
+    hint = hint or roles.model_hint_for(role)
+
+    mu = bandit.marginal_utility(
+        role, granted_ids, effort, model_hint=hint, granted_hints=granted_hints
+    )
+    if not mu["accept"] and role != roles.ROLE_COS:
+        return {
+            "ok": False,
+            "error": (
+                f"marginal utility ΔU={mu['delta_u']:.4f} ≤ 0 "
+                f"(I={mu['I_marginal']:.3f}, c={mu['c_scaled']:.3f}) at effort={effort}"
+            ),
+            "guard": "marginal_utility",
+            "marginal": mu,
+            "effort": effort,
+            "cap": cap,
+            "roles": granted_ids,
+            "effort_slider": effort_slider(effort, desk_id=getattr(d, "id", None)),
+        }
+
     granted_ids.append(role)
     granted_ids = ensure_cos(granted_ids)
-    granted.append(
-        _granted_entry(role, model_hint=req["model_hint"], effort=effort)
-    )
+    granted.append(_granted_entry(role, model_hint=hint, effort=effort))
     org = {
         "cos": roles.ROLE_COS,
         "effort": effort,
         "cap": cap,
         "granted": granted if granted else [_granted_entry(r, effort=effort) for r in granted_ids],
         "model_policy": "strongest_available_or_user_choice",
-        "stub": True,
+        "stub": False,
+        "bandit": True,
     }
     # Keep granted list aligned with ids
     seen = {str(x.get("id")) for x in org["granted"]}
@@ -403,13 +504,53 @@ def hire(desk: Any, request: Any) -> dict[str, Any]:
         "ok": True,
         "action": "hire",
         "role": role,
-        "model_hint": req["model_hint"] or roles.model_hint_for(role),
+        "model_hint": hint,
         "desk_id": getattr(d, "id", None),
         "roles": granted_ids,
         "org": org,
         "cap": cap,
         "effort": effort,
+        "marginal": mu,
+        "bandit": True,
     }
+
+
+def notify_outcome(
+    outcome: str,
+    *,
+    desk: Any | None = None,
+    node_id: str | None = None,
+    had_claim: bool | None = None,
+) -> dict[str, Any]:
+    """
+    Update bandit arms from node/worker outcomes.
+
+    outcome: done | failed | timeout | retired_without_claim | retired
+    """
+    d, _reg = _resolve_desk(desk)
+    desk_id = getattr(d, "id", None) if d is not None else _desk_id_of(desk)
+    oc = (outcome or "").strip().lower()
+    if oc == "done":
+        reward = bandit.REWARD_DONE
+    elif oc in ("failed", "fail", "timeout"):
+        reward = bandit.REWARD_FAILED if oc != "timeout" else bandit.REWARD_TIMEOUT
+    elif oc in ("retired_without_claim", "retired_no_claim"):
+        reward = bandit.REWARD_RETIRED_NO_CLAIM
+    elif oc == "retired":
+        reward = bandit.REWARD_DONE if had_claim else bandit.REWARD_RETIRED_NO_CLAIM
+    else:
+        return {"ok": False, "error": f"unknown outcome: {outcome!r}"}
+    arm_id = None
+    if d is not None:
+        hire = getattr(d, "hire", None) or {}
+        if isinstance(hire, dict):
+            arm_id = (hire.get("bandit_decision") or {}).get("arm_id")
+        org = getattr(d, "org", None) or {}
+        if isinstance(org, dict) and not arm_id:
+            arm_id = org.get("bandit_arm")
+    return bandit.record_reward(
+        reward, desk_id=desk_id, arm_id=arm_id, reason=f"{oc}:{node_id or ''}"
+    )
 
 
 def retire_worker(
@@ -423,6 +564,7 @@ def retire_worker(
 
     Archives a succinct summary to the blackboard so the DAG does not grow
     without bound (Switchbay bug). Standing root is refused.
+    Updates the effort bandit (retired with/without claim).
     """
     nid = (node_id or "").strip()
     if not nid:
@@ -437,6 +579,10 @@ def retire_worker(
 
     text = (summary or node.notes or node.title or nid).strip()
     text = text[:500]
+    # Claim heuristic: blackboard evidence/claim mentioning this node, or non-empty notes
+    had_claim = bool((node.notes or "").strip()) or bool(
+        blackboard.search(nid)
+    ) or bool(summary and summary.strip())
     note = blackboard.post(
         f"retired {nid}: {text}",
         author="kernel",
@@ -453,6 +599,7 @@ def retire_worker(
         "notes": (node.notes or "")[:500],
         "summary": text,
     }
+    prior_state = node.state
     g.remove(nid, save=True)
 
     d, reg = _resolve_desk(desk)
@@ -463,6 +610,20 @@ def retire_worker(
             reg.save()
         except Exception:  # noqa: BLE001
             pass
+
+    # Bandit reward
+    if prior_state == "failed":
+        bandit_out = notify_outcome("failed", desk=d, node_id=nid)
+    elif prior_state == "done" or had_claim:
+        bandit_out = notify_outcome(
+            "retired" if prior_state != "done" else "done",
+            desk=d,
+            node_id=nid,
+            had_claim=had_claim,
+        )
+    else:
+        bandit_out = notify_outcome("retired_without_claim", desk=d, node_id=nid)
+
     try:
         from . import status as status_mod
 
@@ -478,5 +639,7 @@ def retire_worker(
         "blackboard_note_id": note.get("id"),
         "dag_nodes": len(g.nodes),
         "desk_id": getattr(d, "id", None) if d is not None else None,
+        "bandit_reward": bandit_out,
+        "had_claim": had_claim,
         "message": "Short-lived worker removed from active DAG; summary on blackboard",
     }

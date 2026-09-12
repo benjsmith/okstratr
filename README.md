@@ -45,15 +45,16 @@ Either plugin can be useful alone. They share a future multi-workspace layout, n
 
 - Omarchy kinds: `service`, `bar-widget`, `panel` (no Atlas overlay)
 - **Desk lifecycle**: `desk start|stop|dismiss|status|schedule` (states `working|quiet|dismissed`)
-- **Kernel**: hire / ensure_cos / retire_worker; persist org + effort + model hints (no real LLM)
+- **Kernel**: live **effort-bandit** hire / ensure_cos / retire_worker; persist org + effort + model hints (no real LLM)
+- **Web egress gate**: default off; `web on --once|--session`; status chip Web: Off|Once|Session
 - **Schedule parse**: named cadences + intervals (`90`, `1h30m`, `2 wks`, …)
 - **Persistent DAG** (`dag.json` + per-desk copies): add / ready / done / fail / reset / topo + cycle detect
 - **Persistent blackboard** (`blackboard.jsonl`): post / head / search / clear (archive)
 - **Planner** kind-aware templates: work/auto → investigator/synthesizer/verifier
 - **Herdr** `herdr run-ready`: finite jobs, labels `okstratr-{desk}-{role}-{node}`, dry-run via `OKSTRATR_HERDR_DRY_RUN` / `--dry-run`
-- CLI: `status | desk (start|stop|dismiss|status|schedule|hire|retire|focus) | seat(deprecated) | cos | herdr | dag | bb | serve`
-- HTTP: `/health`, `/api/status`, `/api/desk/*` (incl. hire/retire/focus), `/api/seat` (alias), `/api/cos/break`, `/api/herdr/run-ready`, `/api/dag`, `/api/blackboard`
-- Bar chip shows desk kind · state (working|quiet) + DAG count; panel has no text input
+- CLI: `status | desk (start|stop|dismiss|status|schedule|hire|effort|retire|focus) | web | seat(deprecated) | cos | herdr | dag | bb | serve`
+- HTTP: `/health`, `/api/status`, `/api/desk/*` (incl. hire/effort/retire/focus), `/api/web`, `/api/seat` (alias), `/api/cos/break`, `/api/herdr/run-ready`, `/api/dag`, `/api/blackboard`
+- Bar chip shows desk kind · state + DAG count + **Web:** chip; panel has web Once/Session/Off + no text input
 
 State dir: `~/.local/state/okstratr/` (tests: `OKSTRATR_STATE_DIR`).
 
@@ -62,8 +63,9 @@ State dir: `~/.local/state/okstratr/` (tests: `OKSTRATR_STATE_DIR`).
 - Not a knowledge graph or wiki (that is okbay)
 - Not an Atlas / CE overlay (do not copy okbay Atlas/static)
 - Not a replacement for Herdr — okstratr *pairs* with it
-- Not full Auto bandit / live Herdr focus sync (stubs + docs only)
-- Not real Grok/Herdr API calls from the kernel
+- Not live Herdr focus sync (stub `focus_desk` only)
+- Not real Grok/Herdr API calls from the kernel (finite dry-run)
+- Not real network inside the web gate (approve → caller may search)
 - Not AG-UI / A2A / model ladder
 - Not inside `benjsmith/okbay`
 
@@ -92,8 +94,12 @@ PYTHONPATH=src python3 -m okstratr status
 # Start a desk (kind optional; kernel may pick)
 PYTHONPATH=src python3 -m okstratr desk start work "Ship desk brain"
 PYTHONPATH=src python3 -m okstratr desk hire investigator
+PYTHONPATH=src python3 -m okstratr desk effort 0.7
 PYTHONPATH=src python3 -m okstratr desk retire investigator
 PYTHONPATH=src python3 -m okstratr desk status
+PYTHONPATH=src python3 -m okstratr web status
+PYTHONPATH=src python3 -m okstratr web on --once
+PYTHONPATH=src python3 -m okstratr web off
 PYTHONPATH=src python3 -m okstratr desk schedule 1h30m
 PYTHONPATH=src python3 -m okstratr desk stop      # quiet; DAG kept
 PYTHONPATH=src python3 -m okstratr desk dismiss   # disband; DAG archived

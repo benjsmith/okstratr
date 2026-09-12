@@ -9,7 +9,8 @@
 
 Okstratr is the **orchestrator / desk brain**. It owns:
 
-- **Kernel** — hiring manager (`hire` / `ensure_cos` / `retire_worker`; no live LLM)
+- **Kernel** — hiring manager with live effort-bandit (`hire` / `ensure_cos` / `retire_worker` / `set_effort`; no live LLM)
+- **Web egress** — gate (`off`\|`once`\|`session`); all web search via `web_egress.authorize`
 - **Desks** — standing orgs with states `working | quiet | dismissed` (persisted org + effort + model hints)
 - **DAG** — durable tasks and dependencies per desk (global `dag.json` + per-desk copies)
 - **Chief of staff (CoS)** — only user interface into a desk; kind-aware heuristic breakdown
@@ -49,11 +50,13 @@ Text input lives in **Herdr**; okstratr UI is left-pane desk switch + DAG/blackb
 desk start [kind] [objective…]   # kinds: curate|work|code|deck|auto (defaults, not closed)
 desk stop                        # quiet; keep last live DAG; CoS ready
 desk dismiss                     # disband standing org; archive/clear DAG
-desk status                      # includes effort slider stub + herdr_labels
+desk status                      # includes bandit snapshot + web_egress + herdr_labels
 desk schedule <spec…>            # hourly|daily|… | 90 | 1h30m | 2 wks | …
-desk hire <role>                 # kernel.hire (cap + curate guards)
-desk retire <node_id>            # retire short-lived DAG worker
+desk hire <role>                 # kernel.hire (bandit + cap + curate guards)
+desk effort <0..1>               # set effort slider / utility weights
+desk retire <node_id>            # retire short-lived DAG worker (+ bandit reward)
 desk focus [desk_id]             # stub Herdr focus sync
+okstratr web status|on|off       # web egress gate
 ```
 
 `seat` is a **deprecated** thin alias for one release: warns → `desk start auto …`.
@@ -106,6 +109,8 @@ State directory: `~/.local/state/okstratr/` (override with `OKSTRATR_STATE_DIR` 
 |------|------|
 | `status.json` | Snapshot for QML `FileView` (desk kind/state, effort, herdr_labels, dag) |
 | `desks.json` | Desk registry (active_id, focus_id, standing orgs + org/effort) |
+| `bandit.json` | Per-desk + global hire-policy arm stats / last decision |
+| `web_egress.json` | Web gate mode (`off`\|`once`\|`session`) |
 | `desks/<id>/dag.json` | Per-desk live DAG (kept on stop) |
 | `desks/<id>/archive/` | Archived DAGs on dismiss |
 | `dag.json` | Active desk’s DAG mirror for CLI/panel |
@@ -126,8 +131,10 @@ State directory: `~/.local/state/okstratr/` (override with `OKSTRATR_STATE_DIR` 
 - `GET|POST /api/desk/status`
 - `POST /api/desk/schedule` — `{spec|schedule|args, desk_id?}`
 - `POST /api/desk/hire` — `{role|id, model_hint?, desk_id?}`
+- `POST /api/desk/effort` — `{effort|value: 0..1, desk_id?}`
 - `POST /api/desk/retire` — `{node_id|id, desk_id?}`
 - `POST /api/desk/focus` — `{desk_id|id}`
+- `GET|POST /api/web` — `{action: on|off|once|session}`
 - `POST /api/seat` — **deprecated** alias → desk start auto
 - `POST /api/cos/break` — `{objective?}`
 - `POST /api/herdr/run-ready` — `{limit?, dry_run?}`
@@ -140,7 +147,7 @@ State directory: `~/.local/state/okstratr/` (override with `OKSTRATR_STATE_DIR` 
 ## CLI
 
 ```
-okstratr status | desk start|stop|dismiss|status|schedule|hire|retire|focus | serve
+okstratr status | desk start|stop|dismiss|status|schedule|hire|effort|retire|focus | web | serve
 okstratr seat …                 # deprecated → desk start auto
 okstratr cos break [objective] | cos [objective]
 okstratr herdr run-ready [--limit N] [--dry-run]
@@ -196,9 +203,11 @@ Either okbay or okstratr should remain useful alone; side-by-side is the compose
 ```
 src/okstratr/
   paths.py           OKSTRATR_STATE_DIR / ~/.local/state/okstratr
-  kernel.py          hire / ensure_cos / retire_worker / route_herdr_input
+  kernel.py          hire / ensure_cos / retire_worker / set_effort / route_herdr_input
+  bandit.py          effort→weights, UCB1 arms, rewards
+  web_egress.py      web gate off|once|session
   roles.py           role catalog + model hints
-  desks.py           registry: start/stop/dismiss/status/schedule/hire/retire/focus
+  desks.py           registry: start/stop/dismiss/status/schedule/hire/effort/retire/focus
   okbay.py           work-coverage / reviews / split stubs (no ingest)
   schedule_parse.py  named + interval schedule parser
   schedule.py        attention window stubs

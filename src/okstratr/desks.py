@@ -295,6 +295,13 @@ class DeskRegistry:
         desk.state = "quiet"
         desk.updated_at = time()
         self.save()
+        web_revoked = None
+        try:
+            from . import web_egress
+
+            web_revoked = web_egress.on_desk_stop_or_dismiss()
+        except Exception:  # noqa: BLE001
+            web_revoked = None
         status.write_status()
         return {
             "ok": True,
@@ -302,6 +309,7 @@ class DeskRegistry:
             "desk": desk.to_dict(),
             "dag_kept": True,
             "cos_ready": roles.ROLE_COS in desk.roles,
+            "web_egress": web_revoked,
             "message": "Desk quiet; last live DAG kept; CoS ready for input",
         }
 
@@ -340,6 +348,13 @@ class DeskRegistry:
         if self.focus_id == desk.id:
             self.focus_id = self.active_id
         self.save()
+        web_revoked = None
+        try:
+            from . import web_egress
+
+            web_revoked = web_egress.on_desk_stop_or_dismiss()
+        except Exception:  # noqa: BLE001
+            web_revoked = None
         status.write_status()
         return {
             "ok": True,
@@ -347,6 +362,7 @@ class DeskRegistry:
             "desk": desk.to_dict(),
             "archived_dag": str(archived) if archived else None,
             "standing_cleared": was_active,
+            "web_egress": web_revoked,
             "message": "Desk disbanded; standing org torn down; DAG archived",
         }
 
@@ -380,6 +396,12 @@ class DeskRegistry:
 
     def status_snapshot(self) -> dict[str, Any]:
         active = self.active()
+        try:
+            from . import web_egress
+
+            web = web_egress.status()
+        except Exception:  # noqa: BLE001
+            web = {"mode": "off", "label": "Off", "chip": "Web: Off"}
         return {
             "ok": True,
             "active_id": self.active_id,
@@ -394,7 +416,11 @@ class DeskRegistry:
             },
             "roles_catalog": roles.catalog_summary(),
             "effort": active.effort if active else None,
-            "effort_slider": kernel.effort_slider(active.effort if active else None),
+            "effort_slider": kernel.effort_slider(
+                active.effort if active else None,
+                desk_id=active.id if active else None,
+            ),
+            "web_egress": web,
             "okbay_workspace": okbay.active_workspace(),
         }
 
@@ -411,6 +437,10 @@ class DeskRegistry:
     ) -> dict[str, Any]:
         desk = self._resolve(desk_id)
         return kernel.retire_worker(node_id, desk=desk, summary=summary)
+
+    def set_effort(self, value: float, *, desk_id: str | None = None) -> dict[str, Any]:
+        desk = self._resolve(desk_id)
+        return kernel.set_effort(desk, value)
 
     def focus(self, desk_id: str | None = None) -> dict[str, Any]:
         """Stub: record focus for future bidirectional Herdr sync."""
@@ -468,6 +498,10 @@ def retire_worker(
     summary: str | None = None,
 ) -> dict[str, Any]:
     return default_registry().retire_worker(node_id, desk_id=desk_id, summary=summary)
+
+
+def set_effort(value: float, *, desk_id: str | None = None) -> dict[str, Any]:
+    return default_registry().set_effort(value, desk_id=desk_id)
 
 
 def focus(desk_id: str | None = None) -> dict[str, Any]:

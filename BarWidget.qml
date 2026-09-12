@@ -22,6 +22,7 @@ BarWidget {
     return Number(v)
   }
   readonly property string chipText: Model.label(status, stale)
+  readonly property string webChip: Model.webEgressChip(status)
   readonly property bool setupMode: Model.needsSetup(status)
 
   FileView {
@@ -90,7 +91,7 @@ BarWidget {
 
   Text {
     anchors.centerIn: parent
-    text: "\u25b6 " + root.chipText
+    text: "\u25b6 " + root.chipText + " · " + root.webChip
     color: {
       if (root.setupMode || root.stale)
         return "#d97757"

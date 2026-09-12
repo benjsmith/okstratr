@@ -9,7 +9,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from . import PORT
-from . import blackboard, cos, dag, desks, herdr, status
+from . import blackboard, cos, dag, desks, herdr, status, web_egress
 
 _NODE_STATE_RE = re.compile(r"^/api/dag/nodes/([^/]+)/state$")
 
@@ -79,6 +79,10 @@ class Handler(BaseHTTPRequestHandler):
                 items = blackboard.head(n)
             payload = {"summary": blackboard.summary(), "items": items}
             code, body, ct = _json_bytes(payload)
+            return self._send(code, body, ct)
+
+        if path == "/api/web":
+            code, body, ct = _json_bytes(web_egress.status())
             return self._send(code, body, ct)
 
         code, body, ct = _json_bytes({"error": "not found", "path": path}, 404)
@@ -287,6 +291,39 @@ class Handler(BaseHTTPRequestHandler):
             code, body, ct = _json_bytes(entry)
             return self._send(code, body, ct)
 
+        if path == "/api/desk/effort":
+            desk_id = payload.get("desk_id") or payload.get("id")
+            value = payload.get("effort", payload.get("value"))
+            if value is None:
+                code, body, ct = _json_bytes({"error": "effort required (0..1)"}, 400)
+                return self._send(code, body, ct)
+            code, body, ct = _json_bytes(
+                desks.set_effort(value, desk_id=str(desk_id) if desk_id else None)
+            )
+            return self._send(code, body, ct)
+
+        if path == "/api/web":
+            action = str(payload.get("action") or payload.get("mode") or "").strip().lower()
+            if action in ("status", "get", ""):
+                code, body, ct = _json_bytes(web_egress.status())
+                return self._send(code, body, ct)
+            if action in ("off", "revoke"):
+                code, body, ct = _json_bytes(web_egress.revoke())
+                return self._send(code, body, ct)
+            if action in ("on", "once", "session"):
+                mode = "session" if action == "on" else action
+                if payload.get("once"):
+                    mode = "once"
+                elif payload.get("session"):
+                    mode = "session"
+                code, body, ct = _json_bytes(web_egress.set_mode(mode))
+                return self._send(code, body, ct)
+            code, body, ct = _json_bytes(
+                {"error": "action must be on|off|once|session|status", "got": action},
+                400,
+            )
+            return self._send(code, body, ct)
+
         code, body, ct = _json_bytes({"error": "not found", "path": path}, 404)
         self._send(code, body, ct)
 
@@ -296,7 +333,7 @@ def serve(host: str = "127.0.0.1", port: int = PORT) -> int:
     httpd = ThreadingHTTPServer((host, port), Handler)
     print(
         f"okstratr listening on http://{host}:{port}  "
-        "(/health /api/status /api/desk/* /api/seat /api/dag /api/blackboard "
+        "(/health /api/status /api/desk/* /api/web /api/seat /api/dag /api/blackboard "
         "/api/cos/break /api/herdr/run-ready)"
     )
     try:

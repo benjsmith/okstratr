@@ -1,10 +1,9 @@
 # Desk kernel (Switchbay-style)
 
 > Design authority for okstratr’s hiring manager, desk lifecycle, roles, and Herdr pairing.
-> Implementation today: desk lifecycle + kernel hire/retire + kind-aware planner
-> templates + Herdr labels/focus stub. No live Grok/Herdr model calls; finite-job /
-> dry-run Herdr rules remain. Full Auto bandit and live Herdr focus sync are
-> **not** in this slice.
+> Implementation today: desk lifecycle + **live effort-bandit hire** + web egress gate +
+> kind-aware planner templates + Herdr labels/focus stub. No live Grok/Herdr model calls;
+> finite-job / dry-run Herdr rules remain. Live Herdr focus sync is still a stub.
 >
 > **Switchbay release pending** — deep parity check against Switchbay once that tree is
 > available; vocabulary here is Switchbay-inspired and may be tightened after review.
@@ -65,7 +64,8 @@ Desks store `okbay_workspace_id` + `thread_id` and label Herdr with both.
 7. Workers send **succinct summaries only** — never full reasoning traces (channel capacity). Token spend must land useful work.
 8. `kernel.retire_worker(node_id)` removes short-lived nodes from the active DAG and archives a summary to the blackboard (prevents DAG buildup).
 
-Stub today: no real LLMs. `hire_plan` / `spin_up_desk_spec` / `hire` / `retire_worker` / `route_herdr_input` are structural.
+No real LLMs. `hire_plan` / `spin_up_desk_spec` / `hire` / `retire_worker` / `route_herdr_input`
+are structural but **effort-bandit gated** (persist under `OKSTRATR_STATE_DIR/bandit.json`).
 
 ### Planner breakdown → Switchbay roles
 
@@ -124,11 +124,13 @@ See `okstratr.roles` for constants, model hints, and independence notes.
 desk start [kind] [objective…]   → state=working; hire CoS + defaults; seed DAG
 desk stop                        → state=quiet; keep last live DAG; CoS ready
 desk dismiss                     → state=dismissed; tear down standing org; archive/clear DAG
-desk status                      → active + registry snapshot (effort slider stub)
+desk status                      → active + registry snapshot (bandit + web chip)
 desk schedule …                  → parse + attach schedule (dialog UI later)
-desk hire <role>                 → kernel.hire (cap + curate guards)
-desk retire <node_id>            → retire_worker; summary → blackboard
+desk hire <role>                 → kernel.hire (bandit + cap + curate guards)
+desk effort <0..1>               → set effort slider (utility weights)
+desk retire <node_id>            → retire_worker; summary → blackboard; bandit reward
 desk focus [desk_id]             → stub bidirectional Herdr sync
+okstratr web status|on|off       → web egress gate (default off)
 ```
 
 States: **`working` | `quiet` | `dismissed`**.
@@ -162,8 +164,12 @@ Implemented in `okstratr.schedule_parse` with exhaustive tests.
    or `desk.commit_path`). No token burn without a land path. Ingest stays in okbay.
 3. **Token usage must land useful work** — summaries on the blackboard / DAG
    outcomes, not reasoning dumps.
-4. **Hire cap** — effort slider sets a max granted-role count (low 2 / mid 6 / high 10).
-   Further `hire` calls return `guard=hire_cap`.
+4. **Hire cap + bandit** — effort slider sets a hard max granted-role count (low 2 /
+   mid 6 / high 10). Bandit selects policy arms within the cap; further `hire` calls
+   may return `guard=hire_cap` or `guard=marginal_utility`.
+5. **Web egress** — default **off**. All researcher / web tool paths call
+   `web_egress.authorize()` / `request_web()`; without approval they return
+   `{needs_approval: true}` and post a blackboard note (no network).
 
 ## Herdr interaction
 
@@ -197,35 +203,88 @@ Status JSON includes `herdr_labels` and `focus_desk_id`.
 
 Finite-job rule unchanged: never leave Grok/Herdr agents running after a node — always stop/release. Dry-run via `OKSTRATR_HERDR_DRY_RUN` / `--dry-run`. Tests default dry-run.
 
-## Effort slider → utility (sketch)
+## Effort slider → utility (live bandit)
 
-Not a live bandit yet. Stub is published on desk/kernel **status** (`effort`, `effort_slider`).
+Live bandit. Published on desk/kernel **status** (`effort`, `effort_slider` with
+`stub: false`, `bandit: true`, `weights`, `arms`, `last_decision`). Persists under
+`OKSTRATR_STATE_DIR/bandit.json` (per-desk + global arm stats).
 
-- Effort high (≥ 0.70) → cap 10; more workers per quality unit, more model diversity, deeper verify.
-- Effort mid → cap 6 (default kinds).
-- Effort low (< 0.35) → cap 2; minimal desk (CoS+planner), shorter channels.
-- Utility is information-theoretic: expected bits of useful blackboard/DAG progress per token, with a cost on redundant correlated opinions.
+### Formula
+
+Effort \(e \in [0,1]\) maps to utility weights:
+
+- \(w_{\mathrm{quality}} = e\)
+- \(w_{\mathrm{cost}} = 1 - e\)
+
+Hire one more **independent** worker iff marginal utility beats effort-scaled cost:
+
+\[
+\Delta U = w_{\mathrm{quality}} \cdot I_{\mathrm{marginal}} - w_{\mathrm{cost}} \cdot c_{\mathrm{scaled}} > 0
+\]
+
+where
+
+- \(I_{\mathrm{marginal}} \in (0,1]\) — independence of the candidate vs already-granted
+  (1.0 for an orthogonal new role; lower for duplicates / overlapping permission tags;
+  diversity bonus when `model_hint` differs for multiples of a role)
+- \(c_{\mathrm{scaled}} = \mathrm{COST\_UNIT} \cdot (1 + \lambda n) / (1 + \mu e)\)
+  — effort scales down effective cost so high effort buys more workers
+  (`COST_UNIT≈0.35`, \(\lambda≈0.25\), \(\mu≈1.5\); `n` = non-CoS granted count)
+
+Hard ceiling remains `hire_cap(e)`:
+
+- Effort high (≥ 0.70) → cap 10; bandit prefers diversity arms
+- Effort mid → cap 6
+- Effort low (< 0.35) → cap 2; minimal desk (CoS+planner)
+
+**Arms** are hire policies: role-set key × N workers × model-diversity on/off.
+UCB1 selects among arms feasible under the cap. Rewards on outcomes:
+
+| Outcome | Reward |
+|---------|--------|
+| node `done` | +1 |
+| node `failed` / timeout | −1 |
+| `retired_without_claim` | −0.5 |
+
+CLI: `desk effort <0..1>`. HTTP: `POST /api/desk/effort` body `{effort: 0..1}`.
+
+## Web egress gate
+
+All web egress goes through `okstratr.web_egress` (default **off**).
+
+| Mode | Behavior |
+|------|----------|
+| `off` | Deny; `authorize` / `request_web` → `{needs_approval: true}` (no network) |
+| `once` | Allow a single search, then auto-off |
+| `session` | Allow until `web off` / desk stop / dismiss |
+
+CLI: `okstratr web status` | `okstratr web on --once|--session` | `okstratr web off` /
+`okstratr web search off`. HTTP: `GET /api/web`, `POST /api/web` `{action: on|off|once|session}`.
+Status JSON + Panel/BarWidget chip: **Web: Off|Once|Session** (`status.web_egress`).
+When CoS/researcher would search without auth → blackboard note + `needs_approval` for UI.
 
 ## Package map (this slice)
 
 ```
 docs/DESK-KERNEL.md          this document
-src/okstratr/kernel.py       hire / ensure_cos / retire_worker / route_herdr_input
+src/okstratr/kernel.py       hire / ensure_cos / retire_worker / route_herdr_input / set_effort
+src/okstratr/bandit.py       effort→weights, arms, UCB1, rewards
+src/okstratr/web_egress.py   web gate: off|once|session
 src/okstratr/roles.py        role catalog + model hints + Switchbay plan roles
-src/okstratr/desks.py        registry: start/stop/dismiss/status/schedule/hire/retire/focus
+src/okstratr/desks.py        registry: start/stop/dismiss/status/schedule/hire/effort/retire/focus
 src/okstratr/okbay.py        work-coverage / reviews / split stubs (no ingest)
 src/okstratr/cos.py          kind-aware planner templates
 src/okstratr/herdr.py        finite seats + okstratr-{desk}-{role}-{node} labels
 src/okstratr/schedule_parse.py  interval / named schedule parser
-CLI: desk … ; seat → deprecated alias
-HTTP: /api/desk/start|stop|dismiss|status|schedule|hire|retire|focus (+ /api/seat alias)
+CLI: desk … ; web … ; seat → deprecated alias
+HTTP: /api/desk/* (incl. effort) /api/web (+ /api/seat alias)
 ```
 
 ## What is deliberately out of scope (for now)
 
-- Full Auto bandit / live effort optimization
 - Live Herdr focus sync (stub `focus_desk` only)
-- Real Grok/Herdr API calls from the kernel
+- Real Grok/Herdr API calls from the kernel (finite dry-run remains)
+- Real network inside `web_egress` (gate only; callers search after approve)
 - Scheduling dialog UI / full left-pane desk switch UI
 - okbay ingest / work-coverage implementation (hooks only)
-- Inventing arbitrary new desk kinds at runtime (documented; stub may only pick defaults)
+- Inventing arbitrary new desk kinds at runtime (documented; may only pick defaults)

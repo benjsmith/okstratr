@@ -134,9 +134,18 @@ def snapshot() -> dict[str, Any]:
     try:
         from . import kernel as kernel_mod
 
-        effort_slider = kernel_mod.effort_slider(effort)
+        desk_id = (desk_brief or {}).get("active_id")
+        effort_slider = kernel_mod.effort_slider(effort, desk_id=desk_id)
     except Exception:  # noqa: BLE001
-        effort_slider = {"value": effort, "stub": True}
+        effort_slider = {"value": effort, "stub": False, "bandit": True}
+
+    web_egress = None
+    try:
+        from . import web_egress as web_mod
+
+        web_egress = web_mod.status()
+    except Exception:  # noqa: BLE001
+        web_egress = {"mode": "off", "label": "Off", "chip": "Web: Off", "gate": True}
 
     return {
         "ts": time(),
@@ -156,6 +165,7 @@ def snapshot() -> dict[str, Any]:
         "focus_desk_id": focus_desk_id,
         "effort": effort,
         "effort_slider": effort_slider,
+        "web_egress": web_egress,
         "okbay": okbay.active_workspace(),
         "ui": {
             "left_pane": "desk_switch",

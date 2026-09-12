@@ -106,6 +106,46 @@ Item {
           Button { text: "Open in Herdr"; onClicked: root.openHerdr() }
         }
         Text {
+          text: root.status && root.status.web_egress
+                ? (root.status.web_egress.chip || ("Web: " + (root.status.web_egress.label || "Off")))
+                : "Web: Off"
+          color: root.themeAccent
+          font.pixelSize: 12
+        }
+        Row {
+          spacing: 6
+          Button {
+            text: "Web Once"
+            onClicked: Model.postJson(root.apiUrl + "/api/web", {action: "once"}, function (parsed) {
+              if (parsed) {
+                if (!root.status) root.status = {}
+                root.status.web_egress = parsed
+              }
+              statusFile.reload()
+            })
+          }
+          Button {
+            text: "Web Session"
+            onClicked: Model.postJson(root.apiUrl + "/api/web", {action: "session"}, function (parsed) {
+              if (parsed) {
+                if (!root.status) root.status = {}
+                root.status.web_egress = parsed
+              }
+              statusFile.reload()
+            })
+          }
+          Button {
+            text: "Web Off"
+            onClicked: Model.postJson(root.apiUrl + "/api/web", {action: "off"}, function (parsed) {
+              if (parsed) {
+                if (!root.status) root.status = {}
+                root.status.web_egress = parsed
+              }
+              statusFile.reload()
+            })
+          }
+        }
+        Text {
           text: root.status
                 ? ((root.deskState || root.status.state || "?") + " · dag=" + root.dagCount)
                 : "daemon not publishing status"

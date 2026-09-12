@@ -13,10 +13,12 @@ def state_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     d.mkdir()
     monkeypatch.setenv("OKSTRATR_STATE_DIR", str(d))
     monkeypatch.setenv("OKSTRATR_HERDR_DRY_RUN", "1")
+    import okstratr.bandit as bandit
     import okstratr.blackboard as bb
     import okstratr.dag as dag
     import okstratr.desks as desks
     import okstratr.status as status
+    import okstratr.web_egress as web
 
     bb._DEFAULT = None
     bb._DEFAULT_PATH = None
@@ -28,6 +30,8 @@ def state_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     status._loaded_from = None
     status._seated_objective = ""
     status._state = "setup"
+    bandit.reset_cache()
+    web.reset_cache()
     return d
 
 
@@ -45,7 +49,9 @@ def test_desk_org_persists_model_hints_and_effort(state_dir: Path) -> None:
     assert all("model_hint" in g for g in org["granted"])
     snap = status.write_status()
     assert snap["effort"] == pytest.approx(0.6)
-    assert snap["effort_slider"]["stub"] is True
+    assert snap["effort_slider"]["stub"] is False
+    assert snap["effort_slider"]["bandit"] is True
+    assert "weights" in snap["effort_slider"]
     assert snap["herdr_labels"]["desk_id"] == desk["id"]
     assert snap["herdr_labels"]["thread_id"] == desk["thread_id"]
     assert snap["focus_desk_id"] == desk["id"]
