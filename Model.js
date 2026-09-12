@@ -147,3 +147,64 @@ function webEgressChip(status) {
     return "Web: " + webEgress(status)
 }
 
+function standingDesks(status) {
+    if (!status)
+        return []
+    var desk = status.desk || {}
+    var list = desk.standing
+    if (Array.isArray(list))
+        return list
+    // Older status published standing as a count only
+    if (status.standing && Array.isArray(status.standing))
+        return status.standing
+    return []
+}
+
+function focusDeskId(status) {
+    if (!status)
+        return ""
+    if (status.focus_desk_id)
+        return String(status.focus_desk_id)
+    if (status.desk && status.desk.focus_desk_id)
+        return String(status.desk.focus_desk_id)
+    if (status.desk && status.desk.active_id)
+        return String(status.desk.active_id)
+    return ""
+}
+
+function dagSummaryText(status) {
+    if (!status)
+        return "daemon not publishing status"
+    var d = status.dag || {}
+    var n = status.dag_nodes || d.nodes || 0
+    var by = d.by_state || {}
+    var parts = []
+    var keys = Object.keys(by)
+    for (var i = 0; i < keys.length; i++)
+        parts.push(keys[i] + "=" + by[keys[i]])
+    var ready = d.ready || []
+    var readyN = Array.isArray(ready) ? ready.length : 0
+    var readyIds = Array.isArray(ready) ? ready.slice(0, 6).join(", ") : ""
+    var line = "nodes=" + n
+    if (parts.length)
+        line += " · " + parts.join(" ")
+    line += " · ready=" + readyN
+    if (readyIds)
+        line += " (" + readyIds + (readyN > 6 ? ", …" : "") + ")"
+    if (d.cycle)
+        line += " · CYCLE: " + d.cycle
+    return line
+}
+
+function blackboardHead(status) {
+    if (!status)
+        return []
+    var bb = status.blackboard
+    if (!bb)
+        return []
+    if (Array.isArray(bb.head))
+        return bb.head
+    if (Array.isArray(bb))
+        return bb
+    return []
+}

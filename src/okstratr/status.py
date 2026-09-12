@@ -97,6 +97,15 @@ def snapshot() -> dict[str, Any]:
         active = reg.active()
         focus_desk_id = reg.focus_id or reg.active_id
         effort = active.effort if active else None
+        standing_list = [
+            {
+                "id": sd.id,
+                "kind": sd.kind,
+                "state": sd.state,
+                "objective": sd.objective,
+            }
+            for sd in reg.standing()
+        ]
         desk_brief = {
             "active_id": reg.active_id,
             "focus_desk_id": focus_desk_id,
@@ -106,7 +115,8 @@ def snapshot() -> dict[str, Any]:
             "effort": effort,
             "roles": list(active.roles) if active else [],
             "org": dict(active.org) if active else {},
-            "standing": len(reg.standing()),
+            "standing": standing_list,
+            "standing_count": len(standing_list),
             "okbay_workspace_id": active.okbay_workspace_id if active else "",
             "thread_id": active.thread_id if active else "",
             "dag_nodes": d.get("nodes") or 0,

@@ -173,7 +173,7 @@ okstratr bb post|head|search|clear
 
 - `service` — keep-loaded headless
 - `bar-widget` — chip: desk **kind · state** (working|quiet) + DAG count / SETUP / STALE — not “seated”
-- `panel` — desk brain UI + DAG count + “Open in Herdr” (left-pane desk switch stub; no text input)
+- `panel` — fullscreen FloatingWindow desk UI (not Overlay): standing-desk rail, DAG + blackboard, “Open in Herdr” (no text input)
 
 No overlay kind in v0 (okbay owns Atlas overlay).
 

@@ -54,7 +54,7 @@ Either plugin can be useful alone. They share a future multi-workspace layout, n
 - **Herdr** `herdr run-ready`: finite jobs, labels `okstratr-{desk}-{role}-{node}`, dry-run via `OKSTRATR_HERDR_DRY_RUN` / `--dry-run`
 - CLI: `status | desk (start|stop|dismiss|status|schedule|hire|effort|retire|focus) | web | seat(deprecated) | cos | herdr | dag | bb | serve`
 - HTTP: `/health`, `/api/status`, `/api/desk/*` (incl. hire/effort/retire/focus), `/api/web`, `/api/seat` (alias), `/api/cos/break`, `/api/herdr/run-ready`, `/api/dag`, `/api/blackboard`
-- Bar chip shows desk kind · state + DAG count + **Web:** chip; panel has web Once/Session/Off + no text input
+- Bar chip shows desk kind · state + DAG count + **Web:** chip; **panel is a fullscreen desk UI** (FloatingWindow toplevel — not Overlay; stays under lock/screensaver) with standing-desk rail, DAG/blackboard, web Once/Session/Off, no text input
 
 State dir: `~/.local/state/okstratr/` (tests: `OKSTRATR_STATE_DIR`).
 
@@ -74,7 +74,7 @@ State dir: `~/.local/state/okstratr/` (tests: `OKSTRATR_STATE_DIR`).
 ```
 manifest.json          Omarchy plugin contract (id benjsmith.okstratr)
 BarWidget.qml          bar pulse — desk objective
-Panel.qml              desk brain panel + Herdr launch
+Panel.qml              fullscreen FloatingWindow desk UI + Herdr launch
 Service.qml            headless keep-alive
 Model.js               status helpers
 src/okstratr/          kernel, desks, roles, schedule_parse, DAG, CoS, …
@@ -84,6 +84,10 @@ docs/DESK-KERNEL.md    kernel / desk / Herdr design (authoritative)
 docs/ARCHITECTURE.md   package map + APIs
 tests/                 schedule parse, desk lifecycle, DAG, CoS, Herdr dry-run
 ```
+
+## Panel UI
+
+The Omarchy **panel** (`Panel.qml`) is a **fullscreen desk UI**: a Quickshell `FloatingWindow` toplevel (native window chrome / maximize), not a tiny corner Overlay layershell. Super+Shift+O (see `contrib/hypr-bindings.lua`) or the bar chip summons it. Left rail lists standing desks; main shows objective, DAG, blackboard head, and Open in Herdr. Free-text input stays in Herdr.
 
 ## Local try
 
