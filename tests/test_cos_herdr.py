@@ -251,6 +251,57 @@ def test_herdr_launch_candidates_prefer_bins(monkeypatch: pytest.MonkeyPatch, tm
     assert out["exec"] == [str(fake_herdr), "ship it"]
     assert out["attempts"][0]["ok"] is True
     assert popped == [[str(fake_herdr), "ship it"]]
+    assert out["objective"] == "ship it"
+
+
+def test_herdr_launch_candidates_omarchy_terminal_first(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """omarchy-launch-terminal-herdr wins and never gets objective argv."""
+    from okstratr import herdr
+
+    term_herdr = tmp_path / "omarchy-launch-terminal-herdr"
+    term_herdr.write_text("#!/bin/sh\nexit 0\n")
+    term_herdr.chmod(0o755)
+    term = tmp_path / "omarchy-launch-terminal"
+    term.write_text("#!/bin/sh\nexit 0\n")
+    term.chmod(0o755)
+    fake_herdr = tmp_path / "herdr"
+    fake_herdr.write_text("#!/bin/sh\nexit 0\n")
+    fake_herdr.chmod(0o755)
+
+    monkeypatch.setenv("PATH", str(tmp_path))
+    cands = herdr._launch_candidates("do not put this on argv")
+    assert cands[0] == [str(term_herdr)]
+    assert cands[1] == [str(term), "herdr"]
+    # Direct herdr still listed later, and may take objective argv
+    assert [str(fake_herdr), "do not put this on argv"] in cands
+    # Omarchy wrappers must not receive free-text objective
+    assert all(
+        "do not put this on argv" not in c
+        for c in cands
+        if herdr._is_omarchy_terminal_launcher(c)
+    )
+
+    popped: list[list[str]] = []
+    envs: list[dict] = []
+
+    def fake_popen(cmd, env=None, start_new_session=False):  # noqa: ANN001
+        popped.append(list(cmd))
+        envs.append(dict(env or {}))
+
+        class _P:
+            pid = 1
+
+        return _P()
+
+    monkeypatch.setattr(herdr.subprocess, "Popen", fake_popen)
+    out = herdr.launch("do not put this on argv")
+    assert out["ok"] is True
+    assert out["exec"] == [str(term_herdr)]
+    assert popped == [[str(term_herdr)]]
+    assert envs[0].get("OKSTRATR_OBJECTIVE") == "do not put this on argv"
+    assert envs[0].get("HERDR_OBJECTIVE") == "do not put this on argv"
 
 
 def test_herdr_launch_dry_when_missing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -260,7 +311,9 @@ def test_herdr_launch_dry_when_missing(monkeypatch: pytest.MonkeyPatch, tmp_path
     out = herdr.launch("x")
     assert out["ok"] is False
     assert out.get("dry_run") is True
-    assert out["would_exec"] == ["herdr", "x"]
+    assert out["would_exec"] == ["omarchy-launch-terminal-herdr"]
+    assert "Herdr not installed" in out["message"]
+    assert "omarchy-launch-terminal-herdr" in out["message"]
 
 
 def test_http_herdr_launch(state_dir: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -306,3 +359,28 @@ def test_http_herdr_launch(state_dir: Path, monkeypatch: pytest.MonkeyPatch, tmp
         assert popped
     finally:
         httpd.shutdown()
+
+def test_dag_graph_view_idle_and_switchbay(state_dir: Path) -> None:
+    from okstratr import cos, dag
+
+    g = dag.default_dag()
+    idle = g.graph_view()
+    assert idle["idle"] is True
+    ids = [n["id"] for n in idle["nodes"]]
+    assert ids == ["cos", "blackboard"]
+    assert idle["edges"] == [{"from": "cos", "to": "blackboard"}]
+
+    dag.seat_root("Graph obj")
+    cos.break_down("Graph obj", kind="auto")
+    g = dag.default_dag(force_reload=True)
+    view = g.graph_view()
+    assert view["idle"] is False
+    ids = {n["id"] for n in view["nodes"]}
+    assert "cos" in ids and "blackboard" in ids
+    assert "investigator" in ids
+    assert "synthesizer" in ids or "verifier" in ids
+    # summary exposes graph for /api/status and /api/dag
+    summary = g.summary()
+    assert "graph" in summary
+    assert summary["graph"]["nodes"]
+

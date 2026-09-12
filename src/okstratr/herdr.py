@@ -32,8 +32,32 @@ def herdr_bin() -> str | None:
     return shutil.which("herdr") or shutil.which("omarchy-herdr")
 
 
+NOT_INSTALLED_MSG = (
+    "Herdr not installed — install the herdr package / "
+    "run omarchy-launch-terminal-herdr once herdr is on PATH"
+)
+
+
+def _basename(path: str) -> str:
+    return path.rsplit("/", 1)[-1]
+
+
+def _is_omarchy_terminal_launcher(cmd: list[str]) -> bool:
+    """True when cmd is omarchy-launch-terminal-herdr or omarchy-launch-terminal …"""
+    if not cmd:
+        return False
+    name = _basename(cmd[0])
+    return name in ("omarchy-launch-terminal-herdr", "omarchy-launch-terminal")
+
+
 def _launch_candidates(objective: str = "") -> list[list[str]]:
-    """Ordered Omarchy-friendly Herdr launch commands (only bins that exist)."""
+    """Ordered Omarchy-friendly Herdr launch commands (only bins that exist).
+
+    Prefer omarchy-launch-terminal-herdr / omarchy-launch-terminal herdr when
+    present — those wrappers take no objective argv (it would become a wrong
+    terminal command). Direct herdr / omarchy-herdr / uwsm-app may take argv.
+    Objective is always also passed via OKSTRATR_OBJECTIVE / HERDR_OBJECTIVE env.
+    """
     obj = (objective or "").strip()
     out: list[list[str]] = []
     seen: set[tuple[str, ...]] = set()
@@ -44,20 +68,30 @@ def _launch_candidates(objective: str = "") -> list[list[str]]:
             seen.add(key)
             out.append(cmd)
 
+    # 1) Omarchy terminal wrappers first — never append free-text objective
+    term_herdr = shutil.which("omarchy-launch-terminal-herdr")
+    if term_herdr:
+        add([term_herdr])
+
+    term = shutil.which("omarchy-launch-terminal")
+    if term:
+        add([term, "herdr"])
+
+    # 2) Direct herdr binaries (objective argv OK)
     for name in ("herdr", "omarchy-herdr"):
         path = shutil.which(name)
         if path:
             add([path] + ([obj] if obj else []))
 
+    # 3) uwsm-app — may resolve herdr even when which missed a wrapper
     uwsm = shutil.which("uwsm-app")
     if uwsm:
-        # uwsm may resolve herdr even when our which missed a wrapper
         add([uwsm, "--", "herdr"] + ([obj] if obj else []))
         if shutil.which("omarchy-herdr"):
             add([uwsm, "--", "omarchy-herdr"] + ([obj] if obj else []))
 
+    # 4) Last-resort raise only when no herdr/uwsm/omarchy candidate — no objective argv
     xdg = shutil.which("xdg-open")
-    # Last-resort raise only when no herdr/uwsm candidate — no objective argv
     if xdg and not out:
         for desktop in (
             "herdr.desktop",
@@ -95,10 +129,15 @@ def dry_run_enabled(explicit: bool | None = None) -> bool:
 
 def launch(objective: str = "", *, focus: bool = True) -> dict[str, Any]:
     """
-    Best-effort: run Herdr with objective as argv / env.
+    Best-effort: run Herdr with objective as env (and argv only for real herdr bins).
 
-    Tries common Omarchy launchers in order: herdr, omarchy-herdr,
-    uwsm-app -- herdr (if present), then xdg-open *.desktop (if present).
+    Tries Omarchy launchers in order:
+      omarchy-launch-terminal-herdr,
+      omarchy-launch-terminal herdr,
+      herdr / omarchy-herdr,
+      uwsm-app -- herdr,
+      then xdg-open *.desktop when nothing else is present.
+    Omarchy terminal wrappers never get free-text objective as argv.
     Logs each attempt in the return dict.
     """
     obj = (objective or "").strip()
@@ -111,11 +150,11 @@ def launch(objective: str = "", *, focus: bool = True) -> dict[str, Any]:
 
     candidates = _launch_candidates(obj)
     if not candidates:
-        would = ["herdr", obj] if obj else ["herdr"]
+        would = ["omarchy-launch-terminal-herdr"]
         return {
             "ok": False,
             "dry_run": True,
-            "message": "Herdr not on PATH; install native Omarchy Herdr",
+            "message": NOT_INSTALLED_MSG,
             "objective": obj,
             "would_exec": would,
             "attempts": [],

@@ -137,7 +137,7 @@ State directory: `~/.local/state/okstratr/` (override with `OKSTRATR_STATE_DIR` 
 - `GET|POST /api/web` — `{action: on|off|once|session}`
 - `POST /api/seat` — **deprecated** alias → desk start auto
 - `POST /api/cos/break` — `{objective?}`
-- `POST /api/herdr/launch` — `{objective?}` → `herdr.focus` / launch UI (PATH from serve)
+- `POST /api/herdr/launch` — `{objective?}` → `herdr.focus` / launch UI (PATH from serve; prefers `omarchy-launch-terminal-herdr`, objective via env)
 - `POST /api/herdr/run-ready` — `{limit?, dry_run?}`
 - `GET /api/dag` — full DAG summary
 - `POST /api/dag/nodes` — create node
@@ -174,7 +174,7 @@ okstratr bb post|head|search|clear
 
 - `service` — keep-loaded headless
 - `bar-widget` — chip: desk **kind · state** (working|quiet) + DAG count / SETUP / STALE — not “seated”
-- `panel` — fullscreen FloatingWindow desk UI (not Overlay): standing-desk rail, DAG + blackboard, “Open in Herdr” (no text input)
+- `panel` — fullscreen FloatingWindow desk UI (not Overlay): standing-desk rail, AGENT SPACE DAG canvas + blackboard, “Open in Herdr” (no text input)
 
 No overlay kind in v0 (okbay owns Atlas overlay).
 

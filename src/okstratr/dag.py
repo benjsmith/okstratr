@@ -296,6 +296,188 @@ class Dag:
             raise CycleError(f"cycle detected involving: {', '.join(leftover)}")
         return order
 
+    def graph_view(self) -> dict[str, Any]:
+        """Layout-friendly DAG for the Agent Space canvas.
+
+        Always includes virtual Chief of Staff + Blackboard nodes so the panel
+        shows a Switchbay-like frame even when the desk is idle / empty.
+        """
+        # Role → row tier (0=CoS, 1=workers, 2=blackboard, 3=verify/synth)
+        tier_for_role = {
+            "cos": 0,
+            "root": 0,
+            "planner": 1,
+            "investigator": 1,
+            "researcher": 1,
+            "curator_planner": 1,
+            "curator_worker": 1,
+            "curator_judge": 1,
+            "blackboard": 2,
+            "verifier": 3,
+            "synthesizer": 3,
+        }
+
+        real_items = [
+            n for n in self.nodes.values()
+            if n.id != "root" and (n.kind or "") != "root"
+        ]
+        idle = len(real_items) == 0
+
+        nodes: list[dict[str, Any]] = []
+        edges: list[dict[str, str]] = []
+        seen: set[str] = set()
+
+        def add_node(
+            nid: str,
+            *,
+            label: str,
+            role: str,
+            kind: str | None = None,
+            state: str = "ready",
+            virtual: bool = False,
+            title: str = "",
+        ) -> None:
+            if nid in seen:
+                return
+            seen.add(nid)
+            r = role or "worker"
+            nodes.append(
+                {
+                    "id": nid,
+                    "label": label,
+                    "title": title or label,
+                    "role": r,
+                    "kind": kind or r,
+                    "state": state,
+                    "tier": tier_for_role.get(r, 1),
+                    "virtual": virtual,
+                }
+            )
+
+        # Always: Chief of Staff (top) + Blackboard
+        cos_state = "ready"
+        root = self.nodes.get("root")
+        if root is not None:
+            cos_state = root.state
+        # Prefer an explicit cos-role node if present
+        for n in self.nodes.values():
+            if (n.role or n.kind) == "cos" and n.id != "root":
+                cos_state = n.state
+                break
+        add_node(
+            "cos",
+            label="chief of staff",
+            role="cos",
+            kind="cos",
+            state=cos_state,
+            virtual=True,
+            title="Chief of Staff",
+        )
+        add_node(
+            "blackboard",
+            label="blackboard",
+            role="blackboard",
+            kind="blackboard",
+            state="ready",
+            virtual=True,
+            title="Blackboard",
+        )
+
+        # Real worker / verify / synth nodes
+        id_map: dict[str, str] = {"root": "cos"}  # root edges attach to CoS
+        for n in real_items:
+            role = (n.role or n.kind or "worker").lower()
+            if role == "root":
+                continue
+            # Collapse dedicated CoS-role nodes into the virtual CoS
+            # (keep cos-verify etc. when role is verifier/synthesizer)
+            if role == "cos":
+                id_map[n.id] = "cos"
+                continue
+            gid = n.id
+            id_map[n.id] = gid
+            short = n.id
+            if len(short) > 18:
+                short = short[:16] + "…"
+            add_node(
+                gid,
+                label=short,
+                role=role,
+                kind=n.kind,
+                state=n.state,
+                virtual=False,
+                title=n.title or n.id,
+            )
+
+        # Edges from depends_on, remapped through id_map; plus CoS→workers→BB
+        worker_ids = [
+            nd["id"] for nd in nodes
+            if nd["id"] not in ("cos", "blackboard") and nd.get("tier") == 1
+        ]
+        terminal_ids = [
+            nd["id"] for nd in nodes
+            if nd["id"] not in ("cos", "blackboard") and nd.get("tier") == 3
+        ]
+        edge_seen: set[tuple[str, str]] = set()
+
+        def add_edge(a: str, b: str) -> None:
+            if a == b or a not in seen or b not in seen:
+                return
+            key = (a, b)
+            if key in edge_seen:
+                return
+            edge_seen.add(key)
+            edges.append({"from": a, "to": b})
+
+        if idle:
+            add_edge("cos", "blackboard")
+        else:
+            for n in real_items:
+                src = id_map.get(n.id)
+                if not src or src == "cos" and (n.role or n.kind) == "cos":
+                    # still process deps for cos-chain nodes collapsed into cos
+                    pass
+                deps = n.depends_on or []
+                if not deps and src and src != "cos":
+                    add_edge("cos", src)
+                for d in deps:
+                    a = id_map.get(d, d if d in seen else None)
+                    if a is None and d == "root":
+                        a = "cos"
+                    b = id_map.get(n.id)
+                    if a and b:
+                        add_edge(a, b)
+
+            # Fan workers into blackboard; blackboard into terminals when present
+            for wid in worker_ids:
+                add_edge(wid, "blackboard")
+            if terminal_ids:
+                add_edge("cos", "blackboard")  # soft spine
+                for tid in terminal_ids:
+                    add_edge("blackboard", tid)
+            elif worker_ids:
+                pass  # workers already → blackboard
+            else:
+                # Only cos-chain / unusual nodes — still show CoS → BB
+                add_edge("cos", "blackboard")
+
+            # Ensure every non-cos/bb node has at least one edge from CoS if orphan
+            pointed = {e["to"] for e in edges}
+            for nd in nodes:
+                if nd["id"] in ("cos", "blackboard"):
+                    continue
+                if nd["id"] not in pointed:
+                    add_edge("cos", nd["id"])
+
+        # Stable order: by tier then id
+        nodes.sort(key=lambda nd: (nd.get("tier", 1), nd["id"]))
+        return {
+            "nodes": nodes,
+            "edges": edges,
+            "idle": idle,
+            "label": "AGENT SPACE",
+        }
+
     def summary(self) -> dict[str, Any]:
         by_state: dict[str, int] = {}
         for n in self.nodes.values():
@@ -314,6 +496,7 @@ class Dag:
             "cycle": cycle,
             "blocked_reasons": self.blocked_reasons(),
             "items": [n.to_dict() for n in self.nodes.values()],
+            "graph": self.graph_view(),
         }
 
     def seat_root(self, objective: str, *, reset: bool = False, save: bool = True) -> Node:

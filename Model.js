@@ -208,3 +208,84 @@ function blackboardHead(status) {
         return bb
     return []
 }
+
+function dagGraph(status) {
+    // Bindable Agent Space graph; idle defaults when empty.
+    var idleNodes = [
+        { id: "cos", label: "chief of staff", title: "Chief of Staff", role: "cos", kind: "cos", state: "ready", tier: 0, virtual: true },
+        { id: "blackboard", label: "blackboard", title: "Blackboard", role: "blackboard", kind: "blackboard", state: "ready", tier: 2, virtual: true }
+    ]
+    var idleEdges = [{ from: "cos", to: "blackboard" }]
+    if (!status)
+        return { nodes: idleNodes, edges: idleEdges, idle: true, label: "AGENT SPACE" }
+    var d = status.dag || {}
+    var g = d.graph || status.graph || null
+    if (g && Array.isArray(g.nodes) && g.nodes.length >= 2)
+        return g
+    // Fallback: synthesize from items
+    var items = d.items || []
+    var nodes = idleNodes.slice()
+    var edges = []
+    var seen = { cos: true, blackboard: true }
+    var workers = []
+    var terminals = []
+    for (var i = 0; i < items.length; i++) {
+        var it = items[i]
+        if (!it || !it.id || it.id === "root" || it.kind === "root")
+            continue
+        var role = String(it.role || it.kind || "worker").toLowerCase()
+        if (role === "cos")
+            continue
+        var tier = 1
+        if (role === "verifier" || role === "synthesizer")
+            tier = 3
+        var nd = {
+            id: String(it.id),
+            label: String(it.id).length > 18 ? String(it.id).slice(0, 16) + "…" : String(it.id),
+            title: it.title || it.id,
+            role: role,
+            kind: it.kind || role,
+            state: it.state || "pending",
+            tier: tier,
+            virtual: false
+        }
+        nodes.push(nd)
+        seen[nd.id] = true
+        if (tier === 1) workers.push(nd.id)
+        else if (tier === 3) terminals.push(nd.id)
+        var deps = it.depends_on || []
+        if (!deps.length)
+            edges.push({ from: "cos", to: nd.id })
+        for (var j = 0; j < deps.length; j++) {
+            var dep = deps[j] === "root" ? "cos" : deps[j]
+            if (dep === "cos" || seen[dep] || dep)
+                edges.push({ from: (dep === "root" ? "cos" : String(dep)), to: nd.id })
+        }
+    }
+    for (var w = 0; w < workers.length; w++)
+        edges.push({ from: workers[w], to: "blackboard" })
+    if (terminals.length) {
+        edges.push({ from: "cos", to: "blackboard" })
+        for (var t = 0; t < terminals.length; t++)
+            edges.push({ from: "blackboard", to: terminals[t] })
+    } else if (!workers.length) {
+        edges.push({ from: "cos", to: "blackboard" })
+    }
+    return {
+        nodes: nodes,
+        edges: edges,
+        idle: workers.length + terminals.length === 0,
+        label: "AGENT SPACE"
+    }
+}
+
+function nodeColorForRole(role) {
+    var r = String(role || "").toLowerCase()
+    if (r === "cos" || r === "root") return "#2dd4bf"      // cyan/teal
+    if (r === "blackboard") return "#a78bfa"              // purple
+    if (r === "investigator" || r === "researcher") return "#60a5fa"  // blue
+    if (r === "verifier") return "#fbbf24"                // amber
+    if (r === "synthesizer") return "#4ade80"             // green
+    if (r === "planner" || r.indexOf("curator") === 0) return "#94a3b8"
+    return "#7dd3fc"
+}

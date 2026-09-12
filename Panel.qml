@@ -28,6 +28,8 @@ Item {
   readonly property var standingDesks: Model.standingDesks(status)
   readonly property string focusDeskId: Model.focusDeskId(status)
   readonly property string closeWarning: (status && status.ui && status.ui.close_warning) ? status.ui.close_warning : "Closing Okstratr will shut down the kernel. Standing desks will suspend (quiet) and the session returns to regular Herdr. Continue?"
+  property string herdrLaunchMsg: ""
+  readonly property var dagGraph: Model.dagGraph(status)
 
   function open(payloadJson) {
     opened = true
@@ -48,13 +50,32 @@ Item {
 
   function openHerdr() {
     var obj = (root.status && root.status.objective) ? String(root.status.objective) : ""
+    root.herdrLaunchMsg = "Launching Herdr…"
     // Prefer HTTP so PATH matches the serve daemon (~/.local/bin), not Quickshell's sparse env.
-    Model.postJson(root.apiUrl + "/api/herdr/launch", {objective: obj}, function (parsed) {})
-    // Belt-and-suspenders: raise/focus Herdr with a PATH that includes ~/.local/bin
+    Model.postJson(root.apiUrl + "/api/herdr/launch", {objective: obj}, function (parsed) {
+      if (!parsed) {
+        root.herdrLaunchMsg = "Launch request failed (is okstratr serve running?)"
+        return
+      }
+      if (parsed.ok === false) {
+        root.herdrLaunchMsg = parsed.message || parsed.error || "Herdr launch failed"
+        return
+      }
+      var via = parsed.launcher || (parsed.exec && parsed.exec[0]) || "herdr"
+      root.herdrLaunchMsg = "Opened via " + via
+    })
+    // Belt-and-suspenders: Omarchy terminal launcher + login PATH; objective via env only
+    var esc = String(obj).replace(/'/g, "'\\''")
     Quickshell.execDetached([
       "sh", "-lc",
       "export PATH=\"$HOME/.local/bin:/usr/local/bin:$PATH\"; "
-      + "(command -v herdr && exec herdr) || (command -v okstratr && exec okstratr herdr)"
+      + (obj ? ("export OKSTRATR_OBJECTIVE='" + esc + "'; export HERDR_OBJECTIVE='" + esc + "'; ") : "")
+      + "(command -v omarchy-launch-terminal-herdr >/dev/null && exec omarchy-launch-terminal-herdr) || "
+      + "(command -v omarchy-launch-terminal >/dev/null && exec omarchy-launch-terminal herdr) || "
+      + "(command -v herdr >/dev/null && exec herdr) || "
+      + "(command -v omarchy-herdr >/dev/null && exec omarchy-herdr) || "
+      + "(command -v uwsm-app >/dev/null && exec uwsm-app -- herdr) || "
+      + "(command -v okstratr >/dev/null && exec okstratr herdr) || true"
     ])
   }
 
@@ -358,18 +379,180 @@ Item {
                   color: root.themeBorder
                 }
 
-                Text {
-                  text: "DAG"
-                  color: root.themeMuted
-                  font.pixelSize: 11
-                  font.bold: true
-                }
-                Text {
-                  text: Model.dagSummaryText(root.status)
-                  color: root.themeFg
-                  font.pixelSize: 13
-                  wrapMode: Text.Wrap
+                // AGENT SPACE — Switchbay-like visual DAG frame (pure QML)
+                Rectangle {
+                  id: agentSpace
                   width: parent.width
+                  height: 248
+                  radius: 10
+                  color: "#0d1117"
+                  border.color: "#2a2f3a"
+                  border.width: 1
+
+                  property var graph: root.dagGraph
+                  property var layoutNodes: []
+
+                  function rebuildLayout() {
+                    var g = agentSpace.graph || { nodes: [], edges: [] }
+                    var nodes = g.nodes || []
+                    var w = Math.max(dagArea.width, 200)
+                    var h = Math.max(dagArea.height, 160)
+                    // Group by tier
+                    var tiers = {}
+                    for (var i = 0; i < nodes.length; i++) {
+                      var t = (nodes[i].tier !== undefined) ? Number(nodes[i].tier) : 1
+                      if (!tiers[t]) tiers[t] = []
+                      tiers[t].push(nodes[i])
+                    }
+                    var tierKeys = Object.keys(tiers).map(function (k) { return Number(k) })
+                    tierKeys.sort(function (a, b) { return a - b })
+                    var tierCount = Math.max(tierKeys.length, 1)
+                    var out = []
+                    for (var ti = 0; ti < tierKeys.length; ti++) {
+                      var key = tierKeys[ti]
+                      var row = tiers[key]
+                      var y = (ti + 0.5) * (h / tierCount)
+                      for (var j = 0; j < row.length; j++) {
+                        var x = (row.length === 1)
+                          ? w / 2
+                          : (j + 0.5) * (w / row.length)
+                        var node = row[j]
+                        out.push({
+                          id: node.id,
+                          label: node.label || node.id,
+                          role: node.role || node.kind || "",
+                          state: node.state || "",
+                          virtual: !!node.virtual,
+                          x: x,
+                          y: y,
+                          color: Model.nodeColorForRole(node.role || node.kind)
+                        })
+                      }
+                    }
+                    agentSpace.layoutNodes = out
+                    dagCanvas.requestPaint()
+                  }
+
+                  Component.onCompleted: rebuildLayout()
+                  onWidthChanged: rebuildLayout()
+                  onGraphChanged: rebuildLayout()
+
+                  Text {
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.margins: 10
+                    text: (agentSpace.graph && agentSpace.graph.label) ? agentSpace.graph.label : "AGENT SPACE"
+                    color: "#8b949e"
+                    font.pixelSize: 10
+                    font.bold: true
+                    font.letterSpacing: 1.2
+                  }
+
+                  Text {
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: 10
+                    text: Model.dagSummaryText(root.status)
+                    color: "#6e7681"
+                    font.pixelSize: 10
+                    elide: Text.ElideRight
+                    width: Math.min(implicitWidth, parent.width * 0.55)
+                    horizontalAlignment: Text.AlignRight
+                  }
+
+                  Item {
+                    id: dagArea
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    anchors.leftMargin: 12
+                    anchors.rightMargin: 12
+                    anchors.topMargin: 32
+                    anchors.bottomMargin: 12
+                    onWidthChanged: agentSpace.rebuildLayout()
+                    onHeightChanged: agentSpace.rebuildLayout()
+
+                    Canvas {
+                      id: dagCanvas
+                      anchors.fill: parent
+                      onPaint: {
+                        var ctx = getContext("2d")
+                        ctx.reset()
+                        ctx.clearRect(0, 0, width, height)
+                        var g = agentSpace.graph || { edges: [] }
+                        var edges = g.edges || []
+                        var pos = {}
+                        var layout = agentSpace.layoutNodes || []
+                        for (var i = 0; i < layout.length; i++)
+                          pos[layout[i].id] = layout[i]
+                        ctx.strokeStyle = "#3d4450"
+                        ctx.lineWidth = 1
+                        for (var e = 0; e < edges.length; e++) {
+                          var a = pos[edges[e].from]
+                          var b = pos[edges[e].to]
+                          if (!a || !b) continue
+                          ctx.beginPath()
+                          ctx.moveTo(a.x, a.y)
+                          ctx.lineTo(b.x, b.y)
+                          ctx.stroke()
+                        }
+                      }
+                    }
+
+                    Repeater {
+                      model: agentSpace.layoutNodes
+                      delegate: Item {
+                        required property var modelData
+                        x: modelData.x - 18
+                        y: modelData.y - 18
+                        width: 36
+                        height: 36
+
+                        // Glow ring for Chief of Staff
+                        Rectangle {
+                          visible: String(modelData.role) === "cos"
+                          anchors.centerIn: parent
+                          width: 44
+                          height: 44
+                          radius: 22
+                          color: "transparent"
+                          border.width: 2
+                          border.color: "#662dd4bf"
+                        }
+                        Rectangle {
+                          visible: String(modelData.role) === "cos"
+                          anchors.centerIn: parent
+                          width: 52
+                          height: 52
+                          radius: 26
+                          color: "#222dd4bf"
+                        }
+
+                        Rectangle {
+                          id: nodeDot
+                          anchors.centerIn: parent
+                          width: 22
+                          height: 22
+                          radius: 11
+                          color: modelData.color
+                          border.width: String(modelData.role) === "cos" ? 2 : 1
+                          border.color: String(modelData.role) === "cos" ? "#99f6e4" : "#1f2937"
+                          opacity: (modelData.state === "done") ? 0.55 : 1.0
+                        }
+
+                        Text {
+                          anchors.horizontalCenter: parent.horizontalCenter
+                          anchors.bottom: parent.top
+                          anchors.bottomMargin: 2
+                          text: modelData.label
+                          color: "#c9d1d9"
+                          font.pixelSize: 9
+                          font.bold: String(modelData.role) === "cos" || String(modelData.role) === "blackboard"
+                        }
+                      }
+                    }
+                  }
                 }
 
                 Text {
@@ -418,6 +601,15 @@ Item {
                     label: "Refresh"
                     onClicked: root.refreshLive()
                   }
+                }
+
+                Text {
+                  visible: root.herdrLaunchMsg.length > 0
+                  text: root.herdrLaunchMsg
+                  color: root.themeMuted
+                  font.pixelSize: 11
+                  wrapMode: Text.Wrap
+                  width: parent.width
                 }
 
                 Text {

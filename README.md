@@ -54,7 +54,7 @@ Either plugin can be useful alone. They share a future multi-workspace layout, n
 - **Herdr** `herdr run-ready`: finite jobs, labels `okstratr-{desk}-{role}-{node}`, dry-run via `OKSTRATR_HERDR_DRY_RUN` / `--dry-run`
 - CLI: `status | desk (start|stop|dismiss|status|schedule|hire|effort|retire|focus) | web | seat(deprecated) | cos | herdr | dag | bb | serve`
 - HTTP: `/health`, `/api/status`, `/api/desk/*` (incl. hire/effort/retire/focus), `/api/web`, `/api/seat` (alias), `/api/cos/break`, `/api/herdr/launch`, `/api/herdr/run-ready`, `/api/dag`, `/api/blackboard`
-- Bar chip shows desk kind · state + DAG count + **Web:** chip; **panel is a fullscreen desk UI** (FloatingWindow toplevel — not Overlay; stays under lock/screensaver) with standing-desk rail, DAG/blackboard, Omarchy chip actions (Open in Herdr / Refresh / web), POST /api/herdr/launch, no text input
+- Bar chip shows desk kind · state + DAG count + **Web:** chip; **panel is a fullscreen desk UI** (FloatingWindow toplevel — not Overlay; stays under lock/screensaver) with standing-desk rail, **AGENT SPACE** visual DAG (CoS + Blackboard idle defaults), blackboard, Omarchy chip actions (Open in Herdr via `omarchy-launch-terminal-herdr` / POST `/api/herdr/launch` / Refresh / web), no text input
 
 State dir: `~/.local/state/okstratr/` (tests: `OKSTRATR_STATE_DIR`).
 
@@ -87,7 +87,7 @@ tests/                 schedule parse, desk lifecycle, DAG, CoS, Herdr dry-run
 
 ## Panel UI
 
-The Omarchy **panel** (`Panel.qml`) is a **fullscreen desk UI**: a Quickshell `FloatingWindow` toplevel (native window chrome / maximize), not a tiny corner Overlay layershell. Super+Shift+O (see `contrib/hypr-bindings.lua`) or the bar chip summons it. Left rail lists standing desks; main shows objective, DAG, blackboard head, and Open in Herdr. Free-text input stays in Herdr.
+The Omarchy **panel** (`Panel.qml`) is a **fullscreen desk UI**: a Quickshell `FloatingWindow` toplevel (native window chrome / maximize), not a tiny corner Overlay layershell. Super+Shift+O (see `contrib/hypr-bindings.lua`) or the bar chip summons it. Left rail lists standing desks; main shows objective, an **AGENT SPACE** DAG canvas (always CoS + Blackboard), blackboard head, and Open in Herdr (prefers `omarchy-launch-terminal-herdr`; objective via env only). Free-text input stays in Herdr.
 
 ## Local try
 
