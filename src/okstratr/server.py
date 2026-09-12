@@ -128,12 +128,12 @@ class Handler(BaseHTTPRequestHandler):
             plan = cos_mod.advise(objective, blackboard.texts(5)) if objective else cos_mod.advise("")
             snap["cos"] = plan
             g = dag.default_dag(force_reload=True)
-            cos_ids = [n for n in g.nodes if n.startswith("cos-")]
-            if cos_ids:
+            child_ids = [n for n in g.nodes if n != "root"]
+            if child_ids:
                 snap["cos_break"] = {
-                    "created": cos_ids,
+                    "created": child_ids,
                     "updated": [],
-                    "ready": [n for n in cos_ids if g.nodes[n].state == "ready"],
+                    "ready": [n for n in child_ids if g.nodes[n].state == "ready"],
                     "idempotent": False,
                 }
             if path == "/api/seat":
@@ -170,6 +170,26 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/desk/status":
             code, body, ct = _json_bytes(desks.status_snapshot())
+            return self._send(code, body, ct)
+
+        if path == "/api/desk/hire":
+            desk_id = payload.get("desk_id")
+            code, body, ct = _json_bytes(
+                desks.hire(payload, desk_id=str(desk_id) if desk_id else None)
+            )
+            return self._send(code, body, ct)
+
+        if path == "/api/desk/retire":
+            node_id = str(payload.get("node_id") or payload.get("id") or "").strip()
+            desk_id = payload.get("desk_id")
+            code, body, ct = _json_bytes(
+                desks.retire_worker(node_id, desk_id=str(desk_id) if desk_id else None)
+            )
+            return self._send(code, body, ct)
+
+        if path == "/api/desk/focus":
+            desk_id = payload.get("desk_id") or payload.get("id")
+            code, body, ct = _json_bytes(desks.focus(str(desk_id) if desk_id else None))
             return self._send(code, body, ct)
 
         if path == "/api/cos/break":

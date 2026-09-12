@@ -16,7 +16,7 @@
   },
   "barWidget": {
     "displayName": "Okstratr",
-    "description": "Seated objective + Herdr link — orchestrator pulse.",
+    "description": "Desk kind/state + Herdr link — orchestrator pulse.",
     "category": "Agents",
     "allowMultiple": false,
     "defaultSection": "right",

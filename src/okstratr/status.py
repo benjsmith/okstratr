@@ -8,7 +8,7 @@ from time import time
 from typing import Any
 
 from . import PORT, __version__
-from . import blackboard, dag, schedule
+from . import blackboard, dag, herdr, okbay, schedule
 # desks imported lazily in snapshot to avoid cycles
 from .paths import state_dir as _state_dir
 
@@ -46,9 +46,14 @@ def _load_from_disk() -> None:
     obj = str(data.get("objective") or "").strip()
     if obj:
         _seated_objective = obj
-        _state = str(data.get("state") or "seated")
-    elif data.get("state") in ("ready", "seated", "running"):
-        _state = str(data.get("state"))
+        st = str(data.get("state") or "ready")
+        # Prefer working|quiet; map legacy "seated" → working
+        if st == "seated":
+            st = "working"
+        _state = st
+    elif data.get("state") in ("ready", "working", "quiet", "seated", "running"):
+        st = str(data.get("state"))
+        _state = "working" if st == "seated" else st
 
 
 def get_objective() -> str:
@@ -61,7 +66,7 @@ def set_objective(objective: str) -> None:
     _loaded = True
     _loaded_from = status_path()
     _seated_objective = (objective or "").strip()
-    _state = "seated" if _seated_objective else "ready"
+    _state = "ready" if not _seated_objective else "working"
 
 
 def mark_ready() -> None:
@@ -76,38 +81,89 @@ def snapshot() -> dict[str, Any]:
     d = dag.default_dag().summary()
     bb = blackboard.summary()
     desk_brief = None
+    focus_desk_id = None
+    effort = None
+    labels: dict[str, Any] = {
+        "desk_id": None,
+        "thread_id": None,
+        "focus_desk_id": None,
+        "format": herdr.AGENT_ID_FORMAT,
+    }
     try:
         from . import desks as desks_mod
+        from . import kernel
 
         reg = desks_mod.default_registry()
         active = reg.active()
+        focus_desk_id = reg.focus_id or reg.active_id
+        effort = active.effort if active else None
         desk_brief = {
             "active_id": reg.active_id,
+            "focus_desk_id": focus_desk_id,
             "state": active.state if active else None,
             "kind": active.kind if active else None,
             "objective": active.objective if active else None,
+            "effort": effort,
+            "roles": list(active.roles) if active else [],
+            "org": dict(active.org) if active else {},
             "standing": len(reg.standing()),
+            "okbay_workspace_id": active.okbay_workspace_id if active else "",
+            "thread_id": active.thread_id if active else "",
+            "dag_nodes": d.get("nodes") or 0,
         }
+        if active:
+            labels = herdr.labels_for_desk(active)
+            labels["focus_desk_id"] = focus_desk_id
     except Exception:  # noqa: BLE001
         desk_brief = None
+        kernel = None  # type: ignore[assignment]
 
-    msg = (
-        f"Desk: {_seated_objective}"
-        if _seated_objective
-        else "No desk objective"
+    display_state = (desk_brief or {}).get("state") or (
+        "working" if _seated_objective else ("ready" if _state != "setup" else "ready")
     )
+    kind = (desk_brief or {}).get("kind")
+    obj = _seated_objective or ((desk_brief or {}).get("objective") or "")
+    if obj and kind and display_state in ("working", "quiet"):
+        msg = f"{kind} · {display_state}: {obj}"
+    elif obj:
+        msg = f"Desk: {obj}"
+    else:
+        msg = "No desk objective"
+
+    effort_slider = None
+    try:
+        from . import kernel as kernel_mod
+
+        effort_slider = kernel_mod.effort_slider(effort)
+    except Exception:  # noqa: BLE001
+        effort_slider = {"value": effort, "stub": True}
+
     return {
         "ts": time(),
-        "state": _state if _seated_objective or _state != "setup" else "ready",
-        "objective": _seated_objective,
-        "seated": bool(_seated_objective),
+        "state": display_state,
+        "objective": obj,
+        "seated": bool(obj),  # compat; UI should bind desk.state not this
         "desk": desk_brief,
+        "desk_kind": kind,
+        "desk_state": (desk_brief or {}).get("state"),
         "dag_nodes": d.get("nodes") or 0,
         "dag": d,
         "schedule": schedule.summary(),
         "blackboard": bb,
         "api_url": f"http://127.0.0.1:{PORT}",
         "herdr": "herdr",
+        "herdr_labels": labels,
+        "focus_desk_id": focus_desk_id,
+        "effort": effort,
+        "effort_slider": effort_slider,
+        "okbay": okbay.active_workspace(),
+        "ui": {
+            "left_pane": "desk_switch",
+            "show_dag": True,
+            "show_blackboard": True,
+            "text_input": False,
+            "close_warning": herdr.CLOSE_WARNING,
+        },
         "version": __version__,
         "message": msg,
     }

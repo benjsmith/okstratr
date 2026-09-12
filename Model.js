@@ -1,5 +1,6 @@
 // Shared status helpers for Okstratr QML surfaces.
 // The daemon publishes ~/.local/state/okstratr/status.json.
+// Bind desk.kind + desk.state (working|quiet), not "seated".
 
 .pragma library
 
@@ -10,9 +11,13 @@ function defaultStatus() {
         objective: "",
         seated: false,
         dag_nodes: 0,
+        desk: { kind: "", state: null },
+        herdr_labels: {},
+        focus_desk_id: null,
+        effort: null,
         api_url: "http://127.0.0.1:8767",
         herdr: "herdr",
-        message: "Run okstratr setup / seat an objective"
+        message: "Run okstratr setup / start a desk"
     }
 }
 
@@ -29,8 +34,29 @@ function parseStatus(text) {
     }
 }
 
+function deskKind(status) {
+    if (status && status.desk && status.desk.kind)
+        return String(status.desk.kind)
+    if (status && status.desk_kind)
+        return String(status.desk_kind)
+    return ""
+}
+
+function deskState(status) {
+    if (status && status.desk && status.desk.state)
+        return String(status.desk.state)
+    if (status && status.desk_state)
+        return String(status.desk_state)
+    return ""
+}
+
 function isReady(status) {
-    return !!(status && (status.state === "ready" || status.state === "seated" || status.state === "running"))
+    if (!status)
+        return false
+    var st = status.state
+    var ds = deskState(status)
+    return !!(st === "ready" || st === "working" || st === "quiet" || st === "seated" || st === "running"
+              || ds === "working" || ds === "quiet")
 }
 
 function needsSetup(status) {
@@ -42,14 +68,23 @@ function label(status, stale) {
         return "SETUP"
     if (stale)
         return "STALE"
+    var kind = deskKind(status)
+    var st = deskState(status)
+    var n = status.dag_nodes || (status.dag && status.dag.nodes) || 0
+    if (kind && (st === "working" || st === "quiet")) {
+        var t = kind + "·" + st
+        if (n)
+            t = t + " " + n
+        if (t.length > 18)
+            return t.slice(0, 16) + "…"
+        return t
+    }
     var obj = status.objective ? String(status.objective) : ""
     if (obj) {
         if (obj.length > 18)
             return obj.slice(0, 16) + "…"
         return obj
     }
-    if (status.state === "seated" || status.state === "running")
-        return "SEATED"
     return "READY"
 }
 

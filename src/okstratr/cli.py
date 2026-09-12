@@ -77,6 +77,15 @@ def _cmd_desk(args) -> int:
     if cmd == "schedule":
         return _print(desks.schedule(list(args.spec or [])))
 
+    if cmd == "hire":
+        return _print(desks.hire(args.role, desk_id=args.desk_id))
+
+    if cmd == "retire":
+        return _print(desks.retire_worker(args.node_id, desk_id=args.desk_id))
+
+    if cmd == "focus":
+        return _print(desks.focus(args.desk_id or None))
+
     return 1
 
 
@@ -87,7 +96,7 @@ def main(argv=None) -> int:
     sub.add_parser("status", help="Print and publish status.json")
 
     # --- desk (primary) ---
-    desk_p = sub.add_parser("desk", help="Desk lifecycle: start|stop|dismiss|status|schedule")
+    desk_p = sub.add_parser("desk", help="Desk lifecycle: start|stop|dismiss|status|schedule|hire|retire|focus")
     desk_sub = desk_p.add_subparsers(dest="desk_cmd", required=True)
 
     desk_start = desk_sub.add_parser("start", help="Start a desk (hire CoS + roles)")
@@ -139,6 +148,17 @@ def main(argv=None) -> int:
         nargs="*",
         help="hourly|daily|weekly|monthly|yearly|annually | 90 | 1h30m | 2 wks | …",
     )
+
+    desk_hire = desk_sub.add_parser("hire", help="Grant a role (kernel hire; cap + curate guards)")
+    desk_hire.add_argument("role", help="Role id to grant (investigator, verifier, …)")
+    desk_hire.add_argument("--desk-id", dest="desk_id", default=None)
+
+    desk_retire = desk_sub.add_parser("retire", help="Retire a short-lived DAG worker node")
+    desk_retire.add_argument("node_id", help="DAG node id to remove (summary → blackboard)")
+    desk_retire.add_argument("--desk-id", dest="desk_id", default=None)
+
+    desk_focus = desk_sub.add_parser("focus", help="Stub: focus a desk (Herdr sync later)")
+    desk_focus.add_argument("desk_id", nargs="?", default=None)
 
     # Deprecated alias — one release
     seat = sub.add_parser(

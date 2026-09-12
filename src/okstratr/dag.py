@@ -24,6 +24,8 @@ class Node:
     created_at: float = 0.0
     updated_at: float = 0.0
     notes: str = ""
+    role: str | None = None
+    """Hired role that owns this node (investigator, verifier, …)."""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -45,6 +47,7 @@ class Node:
             created_at=float(data.get("created_at") or now),
             updated_at=float(data.get("updated_at") or now),
             notes=str(data.get("notes") or ""),
+            role=str(data["role"]) if data.get("role") else None,
         )
 
 
@@ -108,6 +111,7 @@ class Dag:
         objective: str = "",
         state: str | None = None,
         notes: str = "",
+        role: str | None = None,
         save: bool = True,
     ) -> Node:
         now = time()
@@ -123,6 +127,7 @@ class Dag:
             created_at=now,
             updated_at=now,
             notes=notes or "",
+            role=role,
         )
         self.nodes[node_id] = n
         self.refresh_ready(save=False)

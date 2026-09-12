@@ -69,7 +69,7 @@ def test_seat_auto_cos_and_flag(state_dir: Path) -> None:
 
     assert main(["seat", "Auto CoS objective"]) == 0
     g = dag.default_dag(force_reload=True)
-    assert "cos-clarify" in g.nodes
+    assert "investigator" in g.nodes
     assert g.nodes["root"].state == "done"
 
     # With existing children, seat without --cos should not re-break... wait:
@@ -78,13 +78,13 @@ def test_seat_auto_cos_and_flag(state_dir: Path) -> None:
     n_before = len(g.nodes)
     assert main(["seat", "Still seated"]) == 0
     g = dag.default_dag(force_reload=True)
-    # no new cos nodes; still 5 (root + 4)
+    # new auto desk gets the same Switchbay shape
     assert len(g.nodes) == n_before
 
     # Explicit --cos refreshes (idempotent)
     assert main(["seat", "Force CoS", "--cos"]) == 0
     g = dag.default_dag(force_reload=True)
-    assert "cos-clarify" in g.nodes
+    assert "investigator" in g.nodes
 
 
 def test_cos_break_cli(state_dir: Path) -> None:
@@ -94,7 +94,7 @@ def test_cos_break_cli(state_dir: Path) -> None:
     assert main(["seat", "--reset", "CLI break obj"]) == 0
     # seat auto-broke already; reset path: seat --reset creates only root then auto-breaks
     g = dag.default_dag(force_reload=True)
-    assert "cos-execute" in g.nodes
+    assert "synthesizer" in g.nodes
 
     assert main(["cos", "break"]) == 0
     assert main(["cos", "Advise only objective"]) == 0
@@ -194,7 +194,9 @@ def test_http_cos_and_herdr_run_ready(state_dir: Path) -> None:
         with urllib.request.urlopen(req) as r:
             seat = json.loads(r.read().decode())
         assert "cos_break" in seat
-        assert "cos-clarify" in (seat["cos_break"].get("created") or seat["dag"]["ready"] or [])
+        created = seat["cos_break"].get("created") or []
+        ready = (seat.get("dag") or {}).get("ready") or []
+        assert "investigator" in created or "investigator" in ready
 
         req = urllib.request.Request(
             base + "/api/herdr/run-ready",
@@ -205,11 +207,11 @@ def test_http_cos_and_herdr_run_ready(state_dir: Path) -> None:
         with urllib.request.urlopen(req) as r:
             body = json.loads(r.read().decode())
         assert body["dry_run"] is True
-        assert body["ran"] == ["cos-clarify"]
+        assert body["ran"] == ["investigator"]
         assert body["results"][0]["state"] == "done"
 
         with urllib.request.urlopen(base + "/api/dag") as r:
             dag_body = json.loads(r.read().decode())
-        assert "cos-gather" in dag_body["ready"]
+        assert "synthesizer" in dag_body["ready"]
     finally:
         httpd.shutdown()

@@ -5,28 +5,43 @@
 
 ## Intent
 
-Okstratr is the **orchestrator / desk brain** for Omarchy. It owns:
+**Omarchy product = okbay (knowledge) + okstratr (orchestrator).**
 
-- **Kernel** — hiring manager stub (kind heuristic, always hire CoS; no live LLM)
-- **Desks** — standing orgs with states `working | quiet | dismissed`
+Okstratr is the **orchestrator / desk brain**. It owns:
+
+- **Kernel** — hiring manager (`hire` / `ensure_cos` / `retire_worker`; no live LLM)
+- **Desks** — standing orgs with states `working | quiet | dismissed` (persisted org + effort + model hints)
 - **DAG** — durable tasks and dependencies per desk (global `dag.json` + per-desk copies)
-- **Chief of staff (CoS)** — only user interface into a desk; heuristic prioritize / break down
+- **Chief of staff (CoS)** — only user interface into a desk; kind-aware heuristic breakdown
 - **Schedule** — parse named/interval cadences; attach to desk (dialog UI later)
 - **Blackboard** — shared claims / notes / decisions / evidence (append JSONL + index)
-- **Herdr bridge** — seat ready DAG nodes into live agent terminals via Herdr’s runtime API (**finite jobs only**)
+- **Herdr bridge** — seat ready DAG nodes into live agent terminals via Herdr’s runtime API (**finite jobs only**); labels `okstratr-{desk}-{role}-{node}`
 
-It does **not** own the knowledge graph, Atlas, or Nautilus reveal — those stay in **okbay**.
+It does **not** own the knowledge graph, Atlas, Nautilus reveal, or work-coverage
+ingest — those stay in **okbay**. Desks bind the **active okbay workspace / thread ids**.
+
+## Work-coverage (okbay; hooks only)
+
+- **Default:** magical **all-`~/Work`** coverage (okbay ingest).
+- **Biocure:** current **demo** workspace in use — **not** an opt-in.
+- **Optional:** create additional **focused** workspaces.
+- **Smooth path:** okbay **split** tool — subset of `~/Work` subfolders → new wiki;
+  those folders join the new watch list and are excluded from default Work coverage.
+
+`okstratr.okbay` is hooks/stubs only (`active_workspace`, `reviews_commit_path`,
+`split_workspace`). Do not reimplement ingest here.
 
 ## Role split
 
 | Layer | Owner | What it does |
 |-------|--------|----------------|
+| **Knowledge / coverage** | **okbay** | Graph, Atlas, ingest, reviews land path, workspaces |
 | **Runtime / multiplexer** | **Herdr** | Panes, workspaces, agent lifecycle (`working` / `blocked` / `idle`), socket/CLI to start / prompt / wait / stop agents |
 | **Plan + memory of the desk** | **okstratr** | Kernel + desks, durable product DAG, CoS, human blackboard, schedule, Omarchy bar/panel desk UI |
 
 **okstratr** owns the plan + memory; **Herdr** owns live agent terminals. Neither replaces the other.
 
-Text input lives in **Herdr**; okstratr UI is desk list + DAG/blackboard controls (**no free text**). See [DESK-KERNEL.md](DESK-KERNEL.md#herdr-interaction).
+Text input lives in **Herdr**; okstratr UI is left-pane desk switch + DAG/blackboard (**no free text**). Close warns / suspends kernel. See [DESK-KERNEL.md](DESK-KERNEL.md#herdr-interaction).
 
 ## Desk verbs (CLI)
 
@@ -34,8 +49,11 @@ Text input lives in **Herdr**; okstratr UI is desk list + DAG/blackboard control
 desk start [kind] [objective…]   # kinds: curate|work|code|deck|auto (defaults, not closed)
 desk stop                        # quiet; keep last live DAG; CoS ready
 desk dismiss                     # disband standing org; archive/clear DAG
-desk status
+desk status                      # includes effort slider stub + herdr_labels
 desk schedule <spec…>            # hourly|daily|… | 90 | 1h30m | 2 wks | …
+desk hire <role>                 # kernel.hire (cap + curate guards)
+desk retire <node_id>            # retire short-lived DAG worker
+desk focus [desk_id]             # stub Herdr focus sync
 ```
 
 `seat` is a **deprecated** thin alias for one release: warns → `desk start auto …`.
@@ -43,9 +61,11 @@ desk schedule <spec…>            # hourly|daily|… | 90 | 1h30m | 2 wks | …
 ## CoS v1 flow
 
 1. **Desk start** an objective (`okstratr desk start …`, panel, or `POST /api/desk/start`).
-2. **Kernel** chooses kind (heuristic / explicit) and hires CoS + default roles.
-3. **CoS break** (heuristic, no LLM) expands the objective into stable child nodes under `root`:
-   - `cos-clarify` → `cos-gather` → `cos-execute` → `cos-verify`
+2. **Kernel** chooses kind (heuristic / explicit) and hires CoS + default roles (org persisted with model hints + effort).
+3. **Planner / CoS break** (heuristic, no LLM) expands the objective into stable child nodes under `root`:
+   - `work` / `auto` → Switchbay **investigator → synthesizer → verifier**
+   - `curate` / `code` / `deck` keep kind-specific templates
+   - no kind + no desk → historical `cos-clarify` chain
    - Idempotent; posts a blackboard `decision`; marks `root` **done**.
 4. Trigger:
    - `okstratr cos break`
@@ -62,9 +82,12 @@ desk schedule <spec…>            # hourly|daily|… | 90 | 1h30m | 2 wks | …
    - **Dry-run** (`--dry-run` or `OKSTRATR_HERDR_DRY_RUN=1`): record would-exec, mark `done`, post blackboard — **no real API calls**
    - **Live:** `herdr agent start` → `prompt` → `wait` (bounded) → **always** `agent stop`
    - Update DAG + blackboard
-3. Agents in Herdr are labeled with **desk id + thread id** (stub labels today).
+3. Agent ids: **`okstratr-{desk}-{role}-{node}`** (capped 64). Every label includes **desk_id + thread_id**.
+4. Status JSON includes `herdr_labels` and `focus_desk_id`. `focus_desk(desk_id)` is a stub for bidirectional sync.
 
 Tests must use `OKSTRATR_STATE_DIR` temp dirs and `OKSTRATR_HERDR_DRY_RUN=1`.
+
+**Close-warning copy** (QML later): see `herdr.CLOSE_WARNING` / `status.ui.close_warning`.
 
 ## Ports
 
@@ -81,8 +104,8 @@ State directory: `~/.local/state/okstratr/` (override with `OKSTRATR_STATE_DIR` 
 
 | File | Role |
 |------|------|
-| `status.json` | Snapshot for QML `FileView` (objective, desk, dag, blackboard) |
-| `desks.json` | Desk registry (active_id, standing orgs) |
+| `status.json` | Snapshot for QML `FileView` (desk kind/state, effort, herdr_labels, dag) |
+| `desks.json` | Desk registry (active_id, focus_id, standing orgs + org/effort) |
 | `desks/<id>/dag.json` | Per-desk live DAG (kept on stop) |
 | `desks/<id>/archive/` | Archived DAGs on dismiss |
 | `dag.json` | Active desk’s DAG mirror for CLI/panel |
@@ -91,16 +114,20 @@ State directory: `~/.local/state/okstratr/` (override with `OKSTRATR_STATE_DIR` 
 
 - **stop**: keep last live DAG visible.
 - **dismiss**: archive DAG, tear down standing org, clear active global DAG.
+- **retire**: drop short-lived node from live DAG; summary stays on blackboard.
 
 ## HTTP
 
 - `GET /health` — liveness
-- `GET /api/status` — objective + desk brief + dag + blackboard
+- `GET /api/status` — objective + desk brief + effort + herdr_labels + dag + blackboard
 - `POST /api/desk/start` — `{objective, kind?, reset?, cos?, effort?, herdr?}`
 - `POST /api/desk/stop` — `{desk_id?}`
 - `POST /api/desk/dismiss` — `{desk_id?}`
 - `GET|POST /api/desk/status`
 - `POST /api/desk/schedule` — `{spec|schedule|args, desk_id?}`
+- `POST /api/desk/hire` — `{role|id, model_hint?, desk_id?}`
+- `POST /api/desk/retire` — `{node_id|id, desk_id?}`
+- `POST /api/desk/focus` — `{desk_id|id}`
 - `POST /api/seat` — **deprecated** alias → desk start auto
 - `POST /api/cos/break` — `{objective?}`
 - `POST /api/herdr/run-ready` — `{limit?, dry_run?}`
@@ -113,7 +140,7 @@ State directory: `~/.local/state/okstratr/` (override with `OKSTRATR_STATE_DIR` 
 ## CLI
 
 ```
-okstratr status | desk start|stop|dismiss|status|schedule | serve
+okstratr status | desk start|stop|dismiss|status|schedule|hire|retire|focus | serve
 okstratr seat …                 # deprecated → desk start auto
 okstratr cos break [objective] | cos [objective]
 okstratr herdr run-ready [--limit N] [--dry-run]
@@ -130,12 +157,16 @@ okstratr bb post|head|search|clear
 | `OKSTRATR_HERDR_DRY_RUN` | `1`/`true` → no real Herdr/Grok calls |
 | `OKSTRATR_HERDR_TIMEOUT` / `OKSTRATR_HERDR_WAIT_TIMEOUT` | Bounded wait seconds (default 120) |
 | `OKSTRATR_HERDR_KIND` | Agent kind for start (default `grok`) |
+| `OKSTRATR_OKBAY_WORKSPACE` | Active okbay workspace id (`work` default; `biocure` = demo) |
+| `OKSTRATR_OKBAY_WORK_ROOT` | Override workspace path |
+| `OKSTRATR_OKBAY_THREAD_IDS` | Comma-separated okbay thread ids |
+| `OKSTRATR_OKBAY_REVIEWS` / `OKSTRATR_CURATE_COMMIT` / `OKSTRATR_OKBAY_COMMIT_PATH` | Enable curate land path (hook) |
 
 ## Plugin kinds
 
 - `service` — keep-loaded headless
-- `bar-widget` — chip: desk objective / SETUP / STALE
-- `panel` — desk brain UI + “Open in Herdr”
+- `bar-widget` — chip: desk **kind · state** (working|quiet) + DAG count / SETUP / STALE — not “seated”
+- `panel` — desk brain UI + DAG count + “Open in Herdr” (left-pane desk switch stub; no text input)
 
 No overlay kind in v0 (okbay owns Atlas overlay).
 
@@ -165,15 +196,16 @@ Either okbay or okstratr should remain useful alone; side-by-side is the compose
 ```
 src/okstratr/
   paths.py           OKSTRATR_STATE_DIR / ~/.local/state/okstratr
-  kernel.py          stub hiring manager (kind heuristic, ensure CoS)
-  roles.py           role catalog + independence notes
-  desks.py           registry: start/stop/dismiss/status/schedule
+  kernel.py          hire / ensure_cos / retire_worker / route_herdr_input
+  roles.py           role catalog + model hints
+  desks.py           registry: start/stop/dismiss/status/schedule/hire/retire/focus
+  okbay.py           work-coverage / reviews / split stubs (no ingest)
   schedule_parse.py  named + interval schedule parser
   schedule.py        attention window stubs
-  dag.py             persistent task graph
-  cos.py             CoS heuristic breakdown + advise
+  dag.py             persistent task graph (node.role)
+  cos.py             kind-aware planner templates
   blackboard.py      persistent JSONL blackboard
-  herdr.py           launch/focus + run_ready finite seats
+  herdr.py           finite seats + labels + focus_desk stub
   server.py          HTTP on 8767
   cli.py             status | desk | seat(deprecated) | …
   status.py          status.json publisher
@@ -184,6 +216,7 @@ src/okstratr/
 - Separate git repo / plugin id: `benjsmith.okstratr`
 - No copy of okbay Atlas/static
 - No nest under `/workspace/okbay`
+- No work-coverage ingest here — hooks only
 - Optional later IPC (HTTP or status files), not a shared process
 
 ## Layout e2e gate (Ben)

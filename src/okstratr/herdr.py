@@ -17,6 +17,15 @@ from . import blackboard, dag, status
 DEFAULT_KIND = "grok"
 DEFAULT_TIMEOUT_SEC = 120
 DEFAULT_LIMIT = 1
+AGENT_ID_MAX = 64
+AGENT_ID_FORMAT = "okstratr-{desk}-{role}-{node}"
+
+# QML close-dialog copy (bind status.ui.close_warning). Kernel suspends; desks quiet.
+CLOSE_WARNING = (
+    "Closing Okstratr will shut down the kernel. "
+    "Standing desks will suspend (quiet) and the session returns to regular Herdr. "
+    "Continue?"
+)
 
 
 def herdr_bin() -> str | None:
@@ -93,20 +102,129 @@ def _node_prompt(node: dag.Node) -> str:
     return " — ".join(parts)
 
 
-def _agent_id_for(node: dag.Node) -> str:
-    # Herdr agent ids: keep short, stable, filesystem-safe
-    raw = f"okstratr-{node.id}"
-    return re_sub_safe(raw)
-
-
-def re_sub_safe(s: str) -> str:
+def re_sub_safe(s: str, max_len: int = AGENT_ID_MAX) -> str:
     out = []
     for ch in s:
         if ch.isalnum() or ch in "-_":
             out.append(ch)
         else:
             out.append("-")
-    return "".join(out)[:64].strip("-") or "okstratr-node"
+    return "".join(out)[: max(1, int(max_len))].strip("-") or "okstratr-node"
+
+
+def _clip(s: str, n: int) -> str:
+    return re_sub_safe(s, max_len=n)
+
+
+def make_agent_id(desk_id: str, role: str, node_id: str) -> str:
+    """okstratr-{desk}-{role}-{node} capped safely (filesystem / Herdr id)."""
+    desk = _clip(desk_id or "desk", 20)
+    role_s = _clip(role or "worker", 16)
+    node = _clip(node_id or "node", 16)
+    raw = f"okstratr-{desk}-{role_s}-{node}"
+    return re_sub_safe(raw, max_len=AGENT_ID_MAX)
+
+
+def _active_desk_ctx() -> dict[str, str]:
+    try:
+        from . import desks
+
+        d = desks.default_registry().active()
+        if d is not None:
+            return {
+                "desk_id": d.id,
+                "thread_id": d.thread_id or f"thread-{d.id}",
+                "kind": d.kind,
+            }
+    except Exception:  # noqa: BLE001
+        pass
+    return {"desk_id": "desk", "thread_id": "thread", "kind": "auto"}
+
+
+def labels_for_desk(
+    desk: Any | None = None,
+    *,
+    role: str = "cos",
+    node_id: str = "root",
+) -> dict[str, Any]:
+    """Every Herdr agent label includes desk_id + thread_id."""
+    if desk is None:
+        ctx = _active_desk_ctx()
+        desk_id = ctx["desk_id"]
+        thread_id = ctx["thread_id"]
+    else:
+        desk_id = getattr(desk, "id", None) or (desk.get("id") if isinstance(desk, dict) else None) or "desk"
+        thread_id = (
+            getattr(desk, "thread_id", None)
+            or (desk.get("thread_id") if isinstance(desk, dict) else None)
+            or f"thread-{desk_id}"
+        )
+    agent_id = make_agent_id(str(desk_id), role, node_id)
+    return {
+        "desk_id": str(desk_id),
+        "thread_id": str(thread_id),
+        "role": role,
+        "node_id": node_id,
+        "agent_id": agent_id,
+        "label": f"{desk_id} {thread_id}",
+        "format": AGENT_ID_FORMAT,
+        "focus_desk_id": str(desk_id),
+    }
+
+
+def labels_for_node(node: dag.Node, *, desk: Any | None = None) -> dict[str, Any]:
+    role = getattr(node, "role", None) or node.kind or "worker"
+    return labels_for_desk(desk, role=str(role), node_id=node.id)
+
+
+def _agent_id_for(node: dag.Node, *, desk_id: str | None = None, role: str | None = None) -> str:
+    ctx = _active_desk_ctx()
+    did = desk_id or ctx["desk_id"]
+    r = role or getattr(node, "role", None) or node.kind or "worker"
+    return make_agent_id(did, str(r), node.id)
+
+
+def focus_desk(desk_id: str | None = None) -> dict[str, Any]:
+    """
+    Stub: bidirectional Herdr ↔ okstratr focus sync.
+
+    Records focus_desk_id, makes the standing desk active, and would later
+    focus that CoS pane in Herdr. Live pane sync is not wired yet.
+    """
+    from . import desks as desks_mod
+
+    reg = desks_mod.default_registry()
+    target_id = (desk_id or "").strip() or reg.active_id
+    if not target_id:
+        return {"ok": False, "error": "no desk to focus", "stub": True}
+    desk = reg.desks.get(target_id)
+    if desk is None or desk.state == "dismissed":
+        return {
+            "ok": False,
+            "error": "unknown or dismissed desk",
+            "desk_id": target_id,
+            "stub": True,
+        }
+    reg.focus_id = desk.id
+    if desk.state != "dismissed":
+        reg.active_id = desk.id
+        if desk.state == "working":
+            reg._sync_global_dag_from_desk(desk)
+    reg.save()
+    status.write_status()
+    labels = labels_for_desk(desk)
+    return {
+        "ok": True,
+        "stub": True,
+        "action": "focus",
+        "focus_desk_id": desk.id,
+        "desk_id": desk.id,
+        "thread_id": desk.thread_id,
+        "herdr_labels": labels,
+        "herdr_sync": "pending",
+        "close_warning": CLOSE_WARNING,
+        "message": "Focus recorded; live Herdr pane sync not wired yet",
+    }
 
 
 def _run_cmd(
@@ -300,6 +418,9 @@ def run_one(
     elapsed = time() - t0
     result["node_id"] = node_id
     result["elapsed_sec"] = round(elapsed, 3)
+    labels = labels_for_node(node)
+    result["herdr_labels"] = labels
+    result.setdefault("agent_id", labels["agent_id"])
 
     # Re-load in case another writer touched state
     g = dag.default_dag(force_reload=True)
@@ -375,6 +496,7 @@ def run_ready(
     g.refresh_ready(save=True)
     status.write_status()
 
+    ctx = _active_desk_ctx()
     return {
         "ok": all(r.get("ok") for r in results) if results else True,
         "dry_run": use_dry,
@@ -388,4 +510,7 @@ def run_ready(
             if not (skip_root and (n.id == "root" or n.kind == "root"))
         ],
         "dag": g.summary(),
+        "herdr_labels": labels_for_desk(),
+        "focus_desk_id": ctx["desk_id"],
+        "agent_id_format": AGENT_ID_FORMAT,
     }

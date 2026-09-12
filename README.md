@@ -15,9 +15,11 @@ HTTP: **127.0.0.1:8767** (okbay keeps **8766**)
 
 | Piece | Role |
 |-------|------|
-| **okbay** (`benjsmith.okbay`) | Knowledge graph + Atlas + Nautilus reveal |
+| **okbay** (`benjsmith.okbay`) | Knowledge graph + Atlas + Nautilus reveal + work-coverage ingest |
 | **okstratr** (this repo) | Orchestrator / desk brain — kernel, desks, durable DAG, CoS, schedule, blackboard, bar/panel |
 | **Herdr** (native Omarchy) | Agent **runtime / multiplexer** — panes, workspaces, agent lifecycle, socket API |
+
+Work-coverage default lives in **okbay** (magical all-`~/Work`). **Biocure** is the current demo workspace in use (not an opt-in). Optional = create more focused workspaces via okbay split (subset of Work folders → new wiki; those folders leave default coverage). okstratr desks bind the active okbay workspace / thread ids — they do not ingest.
 
 ### Does Herdr already do orchestration like okstratr?
 
@@ -43,15 +45,15 @@ Either plugin can be useful alone. They share a future multi-workspace layout, n
 
 - Omarchy kinds: `service`, `bar-widget`, `panel` (no Atlas overlay)
 - **Desk lifecycle**: `desk start|stop|dismiss|status|schedule` (states `working|quiet|dismissed`)
-- **Kernel stub**: kind heuristic + always hire CoS (no real LLM)
+- **Kernel**: hire / ensure_cos / retire_worker; persist org + effort + model hints (no real LLM)
 - **Schedule parse**: named cadences + intervals (`90`, `1h30m`, `2 wks`, …)
 - **Persistent DAG** (`dag.json` + per-desk copies): add / ready / done / fail / reset / topo + cycle detect
 - **Persistent blackboard** (`blackboard.jsonl`): post / head / search / clear (archive)
-- **CoS v1** heuristic breakdown → stable `cos-*` child nodes (idempotent)
-- **Herdr** `herdr run-ready`: finite jobs, dry-run via `OKSTRATR_HERDR_DRY_RUN` / `--dry-run`
-- CLI: `status | desk | seat(deprecated) | cos | herdr | dag | bb | serve`
-- HTTP: `/health`, `/api/status`, `/api/desk/*`, `/api/seat` (alias), `/api/cos/break`, `/api/herdr/run-ready`, `/api/dag`, `/api/blackboard`
-- Bar chip shows desk objective; panel links to Herdr
+- **Planner** kind-aware templates: work/auto → investigator/synthesizer/verifier
+- **Herdr** `herdr run-ready`: finite jobs, labels `okstratr-{desk}-{role}-{node}`, dry-run via `OKSTRATR_HERDR_DRY_RUN` / `--dry-run`
+- CLI: `status | desk (start|stop|dismiss|status|schedule|hire|retire|focus) | seat(deprecated) | cos | herdr | dag | bb | serve`
+- HTTP: `/health`, `/api/status`, `/api/desk/*` (incl. hire/retire/focus), `/api/seat` (alias), `/api/cos/break`, `/api/herdr/run-ready`, `/api/dag`, `/api/blackboard`
+- Bar chip shows desk kind · state (working|quiet) + DAG count; panel has no text input
 
 State dir: `~/.local/state/okstratr/` (tests: `OKSTRATR_STATE_DIR`).
 
@@ -89,6 +91,8 @@ PYTHONPATH=src python3 -m okstratr status
 
 # Start a desk (kind optional; kernel may pick)
 PYTHONPATH=src python3 -m okstratr desk start work "Ship desk brain"
+PYTHONPATH=src python3 -m okstratr desk hire investigator
+PYTHONPATH=src python3 -m okstratr desk retire investigator
 PYTHONPATH=src python3 -m okstratr desk status
 PYTHONPATH=src python3 -m okstratr desk schedule 1h30m
 PYTHONPATH=src python3 -m okstratr desk stop      # quiet; DAG kept

@@ -146,6 +146,31 @@ ROLE_CATALOG: dict[str, RoleSpec] = {
 }
 
 
+# Model hints: kernel prefers strongest for CoS/planner/judge; diversity for multiples.
+DEFAULT_MODEL_HINTS: dict[str, str] = {
+    ROLE_COS: "strongest_available",
+    ROLE_PLANNER: "strongest_available",
+    ROLE_INVESTIGATOR: "diverse",
+    ROLE_VERIFIER: "diverse",
+    ROLE_SYNTHESIZER: "strongest_available",
+    ROLE_CURATOR_WORKER: "diverse",
+    ROLE_CURATOR_PLANNER: "strongest_available",
+    ROLE_CURATOR_JUDGE: "strongest_available",
+    ROLE_RESEARCHER: "diverse",
+}
+
+# Switchbay planner breakdown roles (work/auto desks).
+SWITCHBAY_PLAN_ROLES: tuple[str, ...] = (
+    ROLE_INVESTIGATOR,
+    ROLE_SYNTHESIZER,
+    ROLE_VERIFIER,
+)
+
+
+def model_hint_for(role_id: str) -> str:
+    return DEFAULT_MODEL_HINTS.get(role_id, "strongest_available")
+
+
 def roles_for_kind(kind: str) -> list[str]:
     """Default role ids for a desk kind (CoS always first)."""
     k = (kind or "auto").strip().lower() or "auto"
@@ -164,5 +189,7 @@ def catalog_summary() -> dict[str, Any]:
         "kinds": {k: list(v) for k, v in DEFAULT_KIND_ROLES.items()},
         "independence": "orthogonal permissions/precedents; different models when multiples allowed",
         "channel_rule": "workers send succinct summaries only — never full reasoning traces",
+        "model_hints": dict(DEFAULT_MODEL_HINTS),
+        "switchbay_plan": list(SWITCHBAY_PLAN_ROLES),
         "roles": {rid: ROLE_CATALOG[rid].summary for rid in ALL_ROLES if rid in ROLE_CATALOG},
     }

@@ -1,4 +1,4 @@
-// Okstratr bar widget. Left click: panel. Shows seated objective.
+// Okstratr bar widget. Left click: panel. Shows desk kind + state (working|quiet) and DAG count.
 // Uses the Quattro BarWidget host type (same contract as okbay / khephri.sia).
 
 import QtQuick

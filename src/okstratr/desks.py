@@ -17,7 +17,7 @@ from time import time
 from typing import Any
 
 from . import dag as dag_mod
-from . import kernel, roles, status
+from . import kernel, okbay, roles, status
 from .paths import state_dir
 from .schedule_parse import ScheduleParseError, describe, parse_schedule_args
 
@@ -44,6 +44,10 @@ class Desk:
     dag_relpath: str = ""
     """Relative to state_dir; live DAG for this desk."""
     hire: dict[str, Any] = field(default_factory=dict)
+    effort: float | None = None
+    org: dict[str, Any] = field(default_factory=dict)
+    okbay_workspace_id: str = ""
+    commit_path: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -66,6 +70,18 @@ class Desk:
             thread_id=str(data.get("thread_id") or ""),
             dag_relpath=str(data.get("dag_relpath") or ""),
             hire=dict(data.get("hire") or {}),
+            effort=(
+                float(data["effort"])
+                if data.get("effort") is not None and data.get("effort") != ""
+                else None
+            ),
+            org=dict(data.get("org") or {}),
+            okbay_workspace_id=str(data.get("okbay_workspace_id") or ""),
+            commit_path=(
+                dict(data["commit_path"])
+                if isinstance(data.get("commit_path"), dict)
+                else None
+            ),
         )
 
 
@@ -73,11 +89,13 @@ class DeskRegistry:
     def __init__(self, path: Path | None = None) -> None:
         self.path = Path(path) if path else state_dir() / REGISTRY_NAME
         self.active_id: str | None = None
+        self.focus_id: str | None = None
         self.desks: dict[str, Desk] = {}
 
     def load(self) -> DeskRegistry:
         self.desks = {}
         self.active_id = None
+        self.focus_id = None
         if not self.path.is_file():
             return self
         try:
@@ -89,6 +107,9 @@ class DeskRegistry:
         self.active_id = raw.get("active_id")
         if self.active_id is not None:
             self.active_id = str(self.active_id) or None
+        self.focus_id = raw.get("focus_id")
+        if self.focus_id is not None:
+            self.focus_id = str(self.focus_id) or None
         for item in raw.get("desks") or []:
             if not isinstance(item, dict) or "id" not in item:
                 continue
@@ -98,6 +119,10 @@ class DeskRegistry:
             self.desks[d.id] = d
         if self.active_id and self.active_id not in self.desks:
             self.active_id = None
+        if self.focus_id and self.focus_id not in self.desks:
+            self.focus_id = self.active_id
+        if not self.focus_id:
+            self.focus_id = self.active_id
         return self
 
     def save(self) -> None:
@@ -106,6 +131,7 @@ class DeskRegistry:
             "version": 1,
             "updated_at": time(),
             "active_id": self.active_id,
+            "focus_id": self.focus_id,
             "desks": [d.to_dict() for d in self.desks.values()],
         }
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
@@ -173,6 +199,8 @@ class DeskRegistry:
         obj = (objective or "").strip()
         plan = kernel.spin_up_desk_spec(obj, kind=kind, effort=effort)
         chosen_kind = plan["kind"]
+        org = plan.get("org") or kernel.org_from_plan(plan)
+        ws = okbay.active_workspace()
         now = time()
 
         # Resume quiet desk with same objective+kind if present
@@ -189,7 +217,11 @@ class DeskRegistry:
             desk.updated_at = now
             desk.roles = list(plan["roles"])
             desk.hire = plan
+            desk.effort = plan.get("effort")
+            desk.org = org
+            desk.okbay_workspace_id = str(ws.get("id") or "")
             self.active_id = desk.id
+            self.focus_id = desk.id
             self._sync_global_dag_from_desk(desk)
         else:
             desk_id = _new_id()
@@ -204,9 +236,14 @@ class DeskRegistry:
                 thread_id=f"thread-{desk_id}",
                 dag_relpath=f"desks/{desk_id}/dag.json",
                 hire=plan,
+                effort=plan.get("effort"),
+                org=org,
+                okbay_workspace_id=str(ws.get("id") or ""),
+                commit_path=plan.get("commit_path") if plan.get("commit_path", {}).get("configured") else None,
             )
             self.desks[desk.id] = desk
             self.active_id = desk.id
+            self.focus_id = desk.id
 
             # Fresh desk DAG
             dest = self.dag_path_for(desk)
@@ -221,7 +258,7 @@ class DeskRegistry:
             if run_cos and obj:
                 from . import cos
 
-                cos.break_down(obj)
+                cos.break_down(obj, kind=chosen_kind)
             self._persist_desk_dag(desk)
 
         status.set_objective(obj)
@@ -237,7 +274,13 @@ class DeskRegistry:
             "herdr_labels": {
                 "desk_id": desk.id,
                 "thread_id": desk.thread_id,
+                "focus_desk_id": self.focus_id or desk.id,
+                "format": "okstratr-{desk}-{role}-{node}",
             },
+            "focus_desk_id": self.focus_id or desk.id,
+            "effort": desk.effort,
+            "org": desk.org,
+            "okbay_workspace": ws,
         }
 
     def stop(self, desk_id: str | None = None) -> dict[str, Any]:
@@ -287,11 +330,15 @@ class DeskRegistry:
             g = dag_mod.default_dag(force_reload=True)
             g.reset()
             self.active_id = None
+            if self.focus_id == desk.id:
+                self.focus_id = None
             status.set_objective("")
 
         desk.state = "dismissed"
         desk.updated_at = time()
         desk.roles = []  # standing org torn down
+        if self.focus_id == desk.id:
+            self.focus_id = self.active_id
         self.save()
         status.write_status()
         return {
@@ -336,6 +383,7 @@ class DeskRegistry:
         return {
             "ok": True,
             "active_id": self.active_id,
+            "focus_desk_id": self.focus_id or self.active_id,
             "active": active.to_dict() if active else None,
             "standing": [d.to_dict() for d in self.standing()],
             "all": [d.to_dict() for d in self.desks.values()],
@@ -345,7 +393,30 @@ class DeskRegistry:
                 "dismissed": sum(1 for d in self.desks.values() if d.state == "dismissed"),
             },
             "roles_catalog": roles.catalog_summary(),
+            "effort": active.effort if active else None,
+            "effort_slider": kernel.effort_slider(active.effort if active else None),
+            "okbay_workspace": okbay.active_workspace(),
         }
+
+    def hire(self, request: Any, *, desk_id: str | None = None) -> dict[str, Any]:
+        desk = self._resolve(desk_id)
+        return kernel.hire(desk, request)
+
+    def retire_worker(
+        self,
+        node_id: str,
+        *,
+        desk_id: str | None = None,
+        summary: str | None = None,
+    ) -> dict[str, Any]:
+        desk = self._resolve(desk_id)
+        return kernel.retire_worker(node_id, desk=desk, summary=summary)
+
+    def focus(self, desk_id: str | None = None) -> dict[str, Any]:
+        """Stub: record focus for future bidirectional Herdr sync."""
+        from . import herdr as herdr_mod
+
+        return herdr_mod.focus_desk(desk_id)
 
     def _resolve(self, desk_id: str | None) -> Desk | None:
         if desk_id:
@@ -384,3 +455,20 @@ def schedule(args: list[str] | str, **kwargs: Any) -> dict[str, Any]:
 
 def status_snapshot() -> dict[str, Any]:
     return default_registry().status_snapshot()
+
+
+def hire(request: Any, *, desk_id: str | None = None) -> dict[str, Any]:
+    return default_registry().hire(request, desk_id=desk_id)
+
+
+def retire_worker(
+    node_id: str,
+    *,
+    desk_id: str | None = None,
+    summary: str | None = None,
+) -> dict[str, Any]:
+    return default_registry().retire_worker(node_id, desk_id=desk_id, summary=summary)
+
+
+def focus(desk_id: str | None = None) -> dict[str, Any]:
+    return default_registry().focus(desk_id)

@@ -43,7 +43,7 @@ def test_desk_start_hires_cos(state_dir: Path) -> None:
     assert "cos" in desk["roles"]
     g = dag.default_dag(force_reload=True)
     assert "root" in g.nodes
-    assert "cos-clarify" in g.nodes  # CoS breakdown ran
+    assert "investigator" in g.nodes  # Switchbay work template
 
 
 def test_desk_stop_keeps_dag(state_dir: Path) -> None:
@@ -52,7 +52,7 @@ def test_desk_stop_keeps_dag(state_dir: Path) -> None:
     desks.start("Keep my DAG", kind="code")
     g1 = dag.default_dag(force_reload=True)
     node_ids = set(g1.nodes)
-    assert "cos-clarify" in node_ids
+    assert "code-investigate" in node_ids
 
     stopped = desks.stop()
     assert stopped["ok"] is True
@@ -67,7 +67,7 @@ def test_desk_stop_keeps_dag(state_dir: Path) -> None:
     assert live.is_file()
     payload = json.loads(live.read_text())
     ids = {n["id"] for n in payload["nodes"]}
-    assert "cos-clarify" in ids
+    assert "code-investigate" in ids
     assert ids >= node_ids or "root" in ids
 
 
@@ -134,3 +134,4 @@ def test_kernel_kind_heuristic() -> None:
     plan = hire_plan("anything", kind="curate")
     assert plan["roles"][0] == "cos"
     assert "curator_judge" in plan["roles"]
+    assert "curator_worker" not in plan["roles"]  # no commit path

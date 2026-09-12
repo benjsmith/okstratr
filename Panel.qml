@@ -1,5 +1,7 @@
-// Okstratr panel: seated objective, blackboard head, launch Herdr.
-// Thinner sibling of okbay Panel — no Atlas, no reviews inbox.
+// Okstratr panel: desk kind + state (working|quiet), DAG + blackboard.
+// LEFT PANE (stub): desk switch binds status.desk.standing / status.focus_desk_id
+// Main pane: DAG + blackboard. No free-text input (Herdr owns text).
+// Close: warn via status.ui.close_warning; kernel suspends (desks go quiet).
 
 import QtQuick
 import QtQuick.Controls
@@ -19,6 +21,10 @@ Item {
   readonly property color themeMuted: (typeof Color !== "undefined" && Color.dark_foreground) ? Color.dark_foreground : "#888888"
   readonly property color themeAccent: (typeof Color !== "undefined" && Color.accent) ? Color.accent : "#6be8b3"
   readonly property string apiUrl: (status && status.api_url) ? status.api_url : "http://127.0.0.1:8767"
+  readonly property string deskKind: Model.deskKind(status)
+  readonly property string deskState: Model.deskState(status)
+  readonly property int dagCount: (status && status.dag_nodes) ? Number(status.dag_nodes) : 0
+  readonly property string closeWarning: (status && status.ui && status.ui.close_warning) ? status.ui.close_warning : "Closing Okstratr will shut down the kernel. Standing desks will suspend (quiet) and the session returns to regular Herdr. Continue?"
 
   function open(payloadJson) {
     opened = true
@@ -27,20 +33,15 @@ Item {
       if (parsed) root.status = parsed
     })
   }
-  function close() { opened = false }
+  function close() {
+    // TODO QML dialog: root.closeWarning — then suspend kernel / quiet desks
+    opened = false
+  }
   function toggle(payloadJson) { opened ? close() : open(payloadJson) }
 
   function openHerdr() {
     var obj = (root.status && root.status.objective) ? String(root.status.objective) : ""
     Quickshell.execDetached(["okstratr", "herdr", obj])
-  }
-
-  function seatFromField() {
-    var text = objectiveField.text || ""
-    Model.postJson(root.apiUrl + "/api/seat", {"objective": text}, function (parsed) {
-      if (parsed) root.status = parsed
-      statusFile.reload()
-    })
   }
 
   FileView {
@@ -78,33 +79,35 @@ Item {
         spacing: 10
         Text { text: "Okstratr"; color: root.themeFg; font.pixelSize: 16; font.bold: true }
         Text {
-          text: "desk brain · pairs with Herdr"
+          text: "desk brain · pairs with Herdr · no text input"
           color: root.themeMuted
           font.pixelSize: 11
         }
         Text {
-          text: root.status && root.status.objective
-                ? ("Seated: " + root.status.objective)
-                : "No objective seated"
+          text: {
+            var kind = root.deskKind
+            var st = root.deskState
+            var obj = root.status && root.status.objective ? String(root.status.objective) : ""
+            if (kind && st)
+              return kind + " · " + st + (obj ? (" — " + obj) : "")
+            if (obj)
+              return obj
+            return "No desk"
+          }
           color: root.themeAccent
           font.pixelSize: 13
           wrapMode: Text.Wrap
           width: parent.width
         }
-        TextField {
-          id: objectiveField
-          width: parent.width
-          placeholderText: "Seat an objective…"
-          color: root.themeFg
-        }
+        // Text input lives in Herdr. Left-pane desk switch (stub) binds
+        // status.focus_desk_id / status.desk.standing / status.herdr_labels.
         Row {
           spacing: 6
-          Button { text: "Seat"; onClicked: root.seatFromField() }
           Button { text: "Open in Herdr"; onClicked: root.openHerdr() }
         }
         Text {
           text: root.status
-                ? ("state=" + (root.status.state || "?") + " · dag=" + (root.status.dag_nodes || 0))
+                ? ((root.deskState || root.status.state || "?") + " · dag=" + root.dagCount)
                 : "daemon not publishing status"
           color: root.themeMuted
           font.pixelSize: 11
