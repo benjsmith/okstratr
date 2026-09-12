@@ -5,7 +5,6 @@
 // No free-text input (Herdr owns that). Keep open/close/toggle for shell summon.
 
 import QtQuick
-import QtQuick.Controls
 import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
@@ -49,7 +48,14 @@ Item {
 
   function openHerdr() {
     var obj = (root.status && root.status.objective) ? String(root.status.objective) : ""
-    Quickshell.execDetached(["okstratr", "herdr", obj])
+    // Prefer HTTP so PATH matches the serve daemon (~/.local/bin), not Quickshell's sparse env.
+    Model.postJson(root.apiUrl + "/api/herdr/launch", {objective: obj}, function (parsed) {})
+    // Belt-and-suspenders: raise/focus Herdr with a PATH that includes ~/.local/bin
+    Quickshell.execDetached([
+      "sh", "-lc",
+      "export PATH=\"$HOME/.local/bin:/usr/local/bin:$PATH\"; "
+      + "(command -v herdr && exec herdr) || (command -v okstratr && exec okstratr herdr)"
+    ])
   }
 
   function focusDesk(deskId) {
@@ -80,6 +86,45 @@ Item {
     onLoaded: {
       var parsed = Model.parseStatus(statusFile.text())
       if (parsed) root.status = parsed
+    }
+  }
+
+
+  // Omarchy-native chip control (mint accent) — replaces Qt Quick Controls Button
+  component Chip: Rectangle {
+    id: chip
+    property string label: ""
+    property bool primary: false
+    signal clicked()
+
+    implicitWidth: Math.max(chipLabel.implicitWidth + 20, primary ? 108 : 52)
+    implicitHeight: 28
+    radius: 9
+    color: {
+      if (primary) {
+        var a = chipMa.containsMouse ? 0.38 : 0.22
+        return Qt.rgba(root.themeAccent.r, root.themeAccent.g, root.themeAccent.b, a)
+      }
+      return chipMa.containsMouse ? "#33ffffff" : root.themeBg
+    }
+    border.width: 1
+    border.color: (primary || chipMa.containsMouse) ? root.themeAccent : root.themeBorder
+
+    Text {
+      id: chipLabel
+      anchors.centerIn: parent
+      text: chip.label
+      color: root.themeFg
+      font.pixelSize: 12
+      font.bold: chip.primary
+    }
+
+    MouseArea {
+      id: chipMa
+      anchors.fill: parent
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      onClicked: chip.clicked()
     }
   }
 
@@ -142,25 +187,23 @@ Item {
               font.pixelSize: 12
             }
 
-            Button {
-              text: "Once"
+            Chip {
+              label: "Once"
               onClicked: root.setWeb("once")
             }
-            Button {
-              text: "Session"
+            Chip {
+              label: "Session"
               onClicked: root.setWeb("session")
             }
-            Button {
-              text: "Off"
+            Chip {
+              label: "Off"
               onClicked: root.setWeb("off")
             }
 
-            Button {
-              text: "✕"
-              flat: true
+            Chip {
+              label: "✕"
+              implicitWidth: 32
               onClicked: root.close()
-              ToolTip.visible: hovered
-              ToolTip.text: "Close panel"
             }
           }
 
@@ -366,12 +409,13 @@ Item {
 
                 Row {
                   spacing: 10
-                  Button {
-                    text: "Open in Herdr"
+                  Chip {
+                    label: "Open in Herdr"
+                    primary: true
                     onClicked: root.openHerdr()
                   }
-                  Button {
-                    text: "Refresh"
+                  Chip {
+                    label: "Refresh"
                     onClicked: root.refreshLive()
                   }
                 }

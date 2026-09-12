@@ -203,6 +203,14 @@ class Handler(BaseHTTPRequestHandler):
             code, body, ct = _json_bytes(result)
             return self._send(code, body, ct)
 
+        if path == "/api/herdr/launch":
+            # Same process as `okstratr serve` — PATH includes ~/.local/bin when daemon
+            # was started from a normal user session (unlike Quickshell execDetached).
+            objective = str(payload.get("objective") or "").strip()
+            result = herdr.focus(objective)
+            code, body, ct = _json_bytes(result)
+            return self._send(code, body, ct)
+
         if path == "/api/herdr/run-ready":
             limit = payload.get("limit", 1)
             try:
@@ -334,7 +342,7 @@ def serve(host: str = "127.0.0.1", port: int = PORT) -> int:
     print(
         f"okstratr listening on http://{host}:{port}  "
         "(/health /api/status /api/desk/* /api/web /api/seat /api/dag /api/blackboard "
-        "/api/cos/break /api/herdr/run-ready)"
+        "/api/cos/break /api/herdr/launch /api/herdr/run-ready)"
     )
     try:
         httpd.serve_forever()

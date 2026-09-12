@@ -53,8 +53,8 @@ Either plugin can be useful alone. They share a future multi-workspace layout, n
 - **Planner** kind-aware templates: work/auto → investigator/synthesizer/verifier
 - **Herdr** `herdr run-ready`: finite jobs, labels `okstratr-{desk}-{role}-{node}`, dry-run via `OKSTRATR_HERDR_DRY_RUN` / `--dry-run`
 - CLI: `status | desk (start|stop|dismiss|status|schedule|hire|effort|retire|focus) | web | seat(deprecated) | cos | herdr | dag | bb | serve`
-- HTTP: `/health`, `/api/status`, `/api/desk/*` (incl. hire/effort/retire/focus), `/api/web`, `/api/seat` (alias), `/api/cos/break`, `/api/herdr/run-ready`, `/api/dag`, `/api/blackboard`
-- Bar chip shows desk kind · state + DAG count + **Web:** chip; **panel is a fullscreen desk UI** (FloatingWindow toplevel — not Overlay; stays under lock/screensaver) with standing-desk rail, DAG/blackboard, web Once/Session/Off, no text input
+- HTTP: `/health`, `/api/status`, `/api/desk/*` (incl. hire/effort/retire/focus), `/api/web`, `/api/seat` (alias), `/api/cos/break`, `/api/herdr/launch`, `/api/herdr/run-ready`, `/api/dag`, `/api/blackboard`
+- Bar chip shows desk kind · state + DAG count + **Web:** chip; **panel is a fullscreen desk UI** (FloatingWindow toplevel — not Overlay; stays under lock/screensaver) with standing-desk rail, DAG/blackboard, Omarchy chip actions (Open in Herdr / Refresh / web), POST /api/herdr/launch, no text input
 
 State dir: `~/.local/state/okstratr/` (tests: `OKSTRATR_STATE_DIR`).
 

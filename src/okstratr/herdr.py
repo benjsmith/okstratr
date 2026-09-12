@@ -32,6 +32,43 @@ def herdr_bin() -> str | None:
     return shutil.which("herdr") or shutil.which("omarchy-herdr")
 
 
+def _launch_candidates(objective: str = "") -> list[list[str]]:
+    """Ordered Omarchy-friendly Herdr launch commands (only bins that exist)."""
+    obj = (objective or "").strip()
+    out: list[list[str]] = []
+    seen: set[tuple[str, ...]] = set()
+
+    def add(cmd: list[str]) -> None:
+        key = tuple(cmd)
+        if key not in seen:
+            seen.add(key)
+            out.append(cmd)
+
+    for name in ("herdr", "omarchy-herdr"):
+        path = shutil.which(name)
+        if path:
+            add([path] + ([obj] if obj else []))
+
+    uwsm = shutil.which("uwsm-app")
+    if uwsm:
+        # uwsm may resolve herdr even when our which missed a wrapper
+        add([uwsm, "--", "herdr"] + ([obj] if obj else []))
+        if shutil.which("omarchy-herdr"):
+            add([uwsm, "--", "omarchy-herdr"] + ([obj] if obj else []))
+
+    xdg = shutil.which("xdg-open")
+    # Last-resort raise only when no herdr/uwsm candidate — no objective argv
+    if xdg and not out:
+        for desktop in (
+            "herdr.desktop",
+            "omarchy-herdr.desktop",
+            "org.omarchy.herdr.desktop",
+        ):
+            add([xdg, desktop])
+
+    return out
+
+
 def _env_truthy(name: str, default: bool = False) -> bool:
     raw = (os.environ.get(name) or "").strip().lower()
     if not raw:
@@ -59,34 +96,55 @@ def dry_run_enabled(explicit: bool | None = None) -> bool:
 def launch(objective: str = "", *, focus: bool = True) -> dict[str, Any]:
     """
     Best-effort: run Herdr with objective as argv / env.
-    On boxes without Herdr installed, returns a dry-run payload.
+
+    Tries common Omarchy launchers in order: herdr, omarchy-herdr,
+    uwsm-app -- herdr (if present), then xdg-open *.desktop (if present).
+    Logs each attempt in the return dict.
     """
     obj = (objective or "").strip()
-    bin_path = herdr_bin()
     env = os.environ.copy()
     if obj:
         env["OKSTRATR_OBJECTIVE"] = obj
         env["HERDR_OBJECTIVE"] = obj
+    if focus:
+        env["HERDR_FOCUS"] = "1"
 
-    if not bin_path:
+    candidates = _launch_candidates(obj)
+    if not candidates:
+        would = ["herdr", obj] if obj else ["herdr"]
         return {
             "ok": False,
             "dry_run": True,
             "message": "Herdr not on PATH; install native Omarchy Herdr",
             "objective": obj,
-            "would_exec": ["herdr", obj] if obj else ["herdr"],
+            "would_exec": would,
+            "attempts": [],
+            "candidates": [],
         }
 
-    cmd = [bin_path]
-    if obj:
-        cmd.append(obj)
-    if focus:
-        env["HERDR_FOCUS"] = "1"
-    try:
-        subprocess.Popen(cmd, env=env, start_new_session=True)
-        return {"ok": True, "exec": cmd, "objective": obj}
-    except OSError as e:
-        return {"ok": False, "error": str(e), "exec": cmd, "objective": obj}
+    attempts: list[dict[str, Any]] = []
+    for cmd in candidates:
+        try:
+            subprocess.Popen(cmd, env=env, start_new_session=True)
+            attempts.append({"ok": True, "exec": cmd})
+            return {
+                "ok": True,
+                "exec": cmd,
+                "objective": obj,
+                "attempts": attempts,
+                "candidates": candidates,
+                "launcher": cmd[0],
+            }
+        except OSError as e:
+            attempts.append({"ok": False, "exec": cmd, "error": str(e)})
+
+    return {
+        "ok": False,
+        "error": attempts[-1].get("error") if attempts else "no launcher",
+        "objective": obj,
+        "attempts": attempts,
+        "candidates": candidates,
+    }
 
 
 def focus(objective: str = "") -> dict[str, Any]:

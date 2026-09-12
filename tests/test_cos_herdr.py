@@ -215,3 +215,94 @@ def test_http_cos_and_herdr_run_ready(state_dir: Path) -> None:
         assert "synthesizer" in dag_body["ready"]
     finally:
         httpd.shutdown()
+
+
+def test_herdr_launch_candidates_prefer_bins(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from okstratr import herdr
+
+    fake_herdr = tmp_path / "herdr"
+    fake_herdr.write_text("#!/bin/sh\nexit 0\n")
+    fake_herdr.chmod(0o755)
+    fake_uwsm = tmp_path / "uwsm-app"
+    fake_uwsm.write_text("#!/bin/sh\nexit 0\n")
+    fake_uwsm.chmod(0o755)
+
+    monkeypatch.setenv("PATH", str(tmp_path))
+    # Clear any cached which — shutil.which reads PATH live
+    cands = herdr._launch_candidates("ship it")
+    assert cands[0] == [str(fake_herdr), "ship it"]
+    assert any(c[:2] == [str(fake_uwsm), "--"] for c in cands)
+    # No xdg-open when a direct bin exists
+    assert not any(c and "xdg-open" in c[0] for c in cands)
+
+    popped: list[list[str]] = []
+
+    def fake_popen(cmd, env=None, start_new_session=False):  # noqa: ANN001
+        popped.append(list(cmd))
+
+        class _P:
+            pid = 1
+
+        return _P()
+
+    monkeypatch.setattr(herdr.subprocess, "Popen", fake_popen)
+    out = herdr.launch("ship it")
+    assert out["ok"] is True
+    assert out["exec"] == [str(fake_herdr), "ship it"]
+    assert out["attempts"][0]["ok"] is True
+    assert popped == [[str(fake_herdr), "ship it"]]
+
+
+def test_herdr_launch_dry_when_missing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from okstratr import herdr
+
+    monkeypatch.setenv("PATH", str(tmp_path))  # empty dir — no herdr/uwsm/xdg
+    out = herdr.launch("x")
+    assert out["ok"] is False
+    assert out.get("dry_run") is True
+    assert out["would_exec"] == ["herdr", "x"]
+
+
+def test_http_herdr_launch(state_dir: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from okstratr.server import Handler
+    from http.server import ThreadingHTTPServer
+    import threading
+    import urllib.request
+    from okstratr import herdr
+
+    fake = tmp_path / "herdr"
+    fake.write_text("#!/bin/sh\nexit 0\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+
+    popped: list[list[str]] = []
+
+    def fake_popen(cmd, env=None, start_new_session=False):  # noqa: ANN001
+        popped.append(list(cmd))
+
+        class _P:
+            pid = 1
+
+        return _P()
+
+    monkeypatch.setattr(herdr.subprocess, "Popen", fake_popen)
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    port = httpd.server_address[1]
+    t = threading.Thread(target=httpd.serve_forever, daemon=True)
+    t.start()
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/herdr/launch",
+            data=json.dumps({"objective": "focus me"}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req) as r:
+            body = json.loads(r.read().decode())
+        assert body["ok"] is True
+        assert body["objective"] == "focus me"
+        assert body["exec"][0] == str(fake)
+        assert popped
+    finally:
+        httpd.shutdown()

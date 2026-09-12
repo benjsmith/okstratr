@@ -137,6 +137,7 @@ State directory: `~/.local/state/okstratr/` (override with `OKSTRATR_STATE_DIR` 
 - `GET|POST /api/web` — `{action: on|off|once|session}`
 - `POST /api/seat` — **deprecated** alias → desk start auto
 - `POST /api/cos/break` — `{objective?}`
+- `POST /api/herdr/launch` — `{objective?}` → `herdr.focus` / launch UI (PATH from serve)
 - `POST /api/herdr/run-ready` — `{limit?, dry_run?}`
 - `GET /api/dag` — full DAG summary
 - `POST /api/dag/nodes` — create node
