@@ -27,24 +27,135 @@ def _parse_deps(raw: str | None) -> list[str]:
     return [t.strip() for t in raw.replace(" ", ",").split(",") if t.strip()]
 
 
+
+_DEFAULT_KINDS = frozenset({"curate", "work", "code", "deck", "auto"})
+
+
+def _cmd_desk(args) -> int:
+    from . import desks, herdr, status
+
+    cmd = args.desk_cmd
+    if cmd == "start":
+        kind = args.kind
+        first = (args.kind_or_objective or "").strip()
+        rest = list(args.objective or [])
+        if kind:
+            obj_parts = ([first] if first else []) + rest
+            obj = " ".join(obj_parts).strip()
+        elif first.lower() in _DEFAULT_KINDS:
+            kind = first.lower()
+            obj = " ".join(rest).strip()
+        else:
+            obj = " ".join(([first] if first else []) + rest).strip()
+            kind = None
+        result = desks.start(
+            obj,
+            kind=kind,
+            reset=bool(args.reset),
+            effort=args.effort,
+            run_cos=not bool(args.no_cos),
+        )
+        out = status.write_status()
+        out = dict(out)
+        out["desk"] = result
+        if args.herdr and obj:
+            out["herdr_launch"] = herdr.launch(obj)
+        return _print(out)
+
+    if cmd == "stop":
+        return _print(desks.stop())
+
+    if cmd == "dismiss":
+        return _print(desks.dismiss())
+
+    if cmd == "status":
+        snap = desks.status_snapshot()
+        # also refresh status.json
+        status.write_status()
+        return _print(snap)
+
+    if cmd == "schedule":
+        return _print(desks.schedule(list(args.spec or [])))
+
+    return 1
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="okstratr")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("status", help="Print and publish status.json")
 
-    seat = sub.add_parser("seat", help="Seat an objective")
-    seat.add_argument("objective", nargs="?", default="")
+    # --- desk (primary) ---
+    desk_p = sub.add_parser("desk", help="Desk lifecycle: start|stop|dismiss|status|schedule")
+    desk_sub = desk_p.add_subparsers(dest="desk_cmd", required=True)
+
+    desk_start = desk_sub.add_parser("start", help="Start a desk (hire CoS + roles)")
+    desk_start.add_argument(
+        "kind_or_objective",
+        nargs="?",
+        default="",
+        help="Optional kind (curate|work|code|deck|auto) or first word of objective",
+    )
+    desk_start.add_argument(
+        "objective",
+        nargs="*",
+        default=[],
+        help="Objective words (if kind given first, remainder is objective)",
+    )
+    desk_start.add_argument(
+        "--kind",
+        default=None,
+        help="Desk kind override (curate|work|code|deck|auto|custom)",
+    )
+    desk_start.add_argument("--reset", action="store_true", help="Force a fresh desk org")
+    desk_start.add_argument(
+        "--no-cos",
+        action="store_true",
+        help="Skip heuristic CoS DAG breakdown after start",
+    )
+    desk_start.add_argument(
+        "--effort",
+        type=float,
+        default=None,
+        help="Optional effort slider 0..1 (stub hire trim)",
+    )
+    desk_start.add_argument(
+        "--herdr",
+        action="store_true",
+        help="Also launch/focus Herdr UI (no live agent sync yet)",
+    )
+
+    desk_sub.add_parser("stop", help="Quiet desk; keep last live DAG; CoS ready")
+    desk_sub.add_parser("dismiss", help="Disband desk; archive/clear standing org")
+    desk_sub.add_parser("status", help="Show active desk + registry")
+
+    desk_sched = desk_sub.add_parser(
+        "schedule",
+        help="Attach schedule (parse args now; dialog UI later)",
+    )
+    desk_sched.add_argument(
+        "spec",
+        nargs="*",
+        help="hourly|daily|weekly|monthly|yearly|annually | 90 | 1h30m | 2 wks | …",
+    )
+
+    # Deprecated alias — one release
+    seat = sub.add_parser(
+        "seat",
+        help="DEPRECATED: alias for 'desk start auto …' (warns once)",
+    )
+    seat.add_argument("objective", nargs="*", default=[])
     seat.add_argument("--herdr", action="store_true", help="Also launch/focus Herdr")
     seat.add_argument(
         "--cos",
         action="store_true",
-        help="Run CoS heuristic breakdown after seating",
+        help="Ignored (desk start always runs CoS breakdown unless --no-cos on desk)",
     )
     seat.add_argument(
         "--reset",
         action="store_true",
-        help="Clear DAG before seating a fresh root (default: keep existing nodes)",
+        help="Force a fresh desk org",
     )
 
     hh = sub.add_parser("herdr", help="Herdr bridge: launch UI or run-ready finite seats")
@@ -149,34 +260,26 @@ def main(argv=None) -> int:
 
         return _print(status.write_status())
 
+    if args.cmd == "desk":
+        return _cmd_desk(args)
+
     if args.cmd == "seat":
-        from . import blackboard, cos, dag, herdr, status
+        # Deprecated thin alias → desk start auto …
+        print(
+            "warning: 'seat' is deprecated; use 'desk start [kind] [objective…]' "
+            "(alias calls desk start auto for one release)",
+            file=sys.stderr,
+        )
+        from . import desks, herdr, status
 
-        obj = (args.objective or "").strip()
-        status.set_objective(obj)
-        dag.seat_root(obj, reset=bool(args.reset))
-        if obj:
-            blackboard.post(f"seated: {obj}", author="okstratr", kind="note")
-
-        g = dag.default_dag()
-        do_cos = bool(args.cos) or cos.should_auto_break(g)
-        cos_result = None
-        if do_cos and obj:
-            cos_result = cos.break_down(obj)
-            plan = cos_result.get("plan") or cos.advise(obj, blackboard.texts(5))
-        else:
-            plan = cos.advise(obj, blackboard.texts(5))
-
+        obj = " ".join(args.objective).strip() if isinstance(args.objective, list) else (
+            args.objective or ""
+        ).strip()
+        result = desks.start(obj, kind="auto", reset=bool(args.reset), run_cos=True)
         out = status.write_status()
         out = dict(out)
-        out["cos"] = plan
-        if cos_result is not None:
-            out["cos_break"] = {
-                "created": cos_result.get("created"),
-                "updated": cos_result.get("updated"),
-                "ready": cos_result.get("ready"),
-                "idempotent": cos_result.get("idempotent"),
-            }
+        out["desk"] = result
+        out["deprecated"] = "seat"
         if args.herdr and obj:
             out["herdr_launch"] = herdr.launch(obj)
         return _print(out)

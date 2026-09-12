@@ -1,4 +1,4 @@
-"""HTTP API on 8767: health, status, seat, dag, blackboard, herdr run-ready."""
+"""HTTP API on 8767: health, status, desk, seat (alias), dag, blackboard, herdr."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from . import PORT
-from . import blackboard, cos, dag, herdr, status
+from . import blackboard, cos, dag, desks, herdr, status
 
 _NODE_STATE_RE = re.compile(r"^/api/dag/nodes/([^/]+)/state$")
 
@@ -52,6 +52,10 @@ class Handler(BaseHTTPRequestHandler):
             code, body, ct = _json_bytes(snap)
             return self._send(code, body, ct)
 
+        if path == "/api/desk/status":
+            code, body, ct = _json_bytes(desks.status_snapshot())
+            return self._send(code, body, ct)
+
         if path == "/api/dag":
             g = dag.default_dag()
             g.refresh_ready()
@@ -92,45 +96,80 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(payload, dict):
             payload = {}
 
-        if path == "/api/seat":
+        if path in ("/api/desk/start", "/api/seat"):
             objective = str(payload.get("objective") or "").strip()
             launch = bool(payload.get("herdr", False))
             reset = bool(payload.get("reset", False))
+            kind = payload.get("kind")
+            kind = str(kind).strip() if kind else None
+            effort = payload.get("effort")
+            try:
+                effort_f = float(effort) if effort is not None else None
+            except (TypeError, ValueError):
+                effort_f = None
             want_cos = payload.get("cos")
-            status.set_objective(objective)
-            dag.seat_root(objective, reset=reset)
-            if objective:
-                blackboard.post(f"seated: {objective}", author="okstratr", kind="note")
-
-            g = dag.default_dag()
-            if want_cos is None:
-                do_cos = cos.should_auto_break(g) and bool(objective)
-            else:
-                do_cos = bool(want_cos) and bool(objective)
-
-            cos_result = None
-            if do_cos:
-                cos_result = cos.break_down(objective)
-                plan = cos_result.get("plan") or cos.advise(objective, blackboard.texts(5))
-            else:
-                plan = cos.advise(objective, blackboard.texts(5))
-
-            herdr_result = None
-            if launch and objective:
-                herdr_result = herdr.launch(objective)
+            run_cos = True if want_cos is None else bool(want_cos)
+            # /api/seat is deprecated alias → desk start auto
+            if path == "/api/seat" and not kind:
+                kind = "auto"
+            result = desks.start(
+                objective,
+                kind=kind,
+                reset=reset,
+                effort=effort_f,
+                run_cos=run_cos and bool(objective),
+            )
             snap = status.write_status()
             snap = dict(snap)
+            snap["desk"] = result
+            # Backward-compatible CoS fields for callers still expecting seat shape
+            from . import cos as cos_mod
+
+            plan = cos_mod.advise(objective, blackboard.texts(5)) if objective else cos_mod.advise("")
             snap["cos"] = plan
-            if cos_result is not None:
+            g = dag.default_dag(force_reload=True)
+            cos_ids = [n for n in g.nodes if n.startswith("cos-")]
+            if cos_ids:
                 snap["cos_break"] = {
-                    "created": cos_result.get("created"),
-                    "updated": cos_result.get("updated"),
-                    "ready": cos_result.get("ready"),
-                    "idempotent": cos_result.get("idempotent"),
+                    "created": cos_ids,
+                    "updated": [],
+                    "ready": [n for n in cos_ids if g.nodes[n].state == "ready"],
+                    "idempotent": False,
                 }
-            if herdr_result is not None:
-                snap["herdr_launch"] = herdr_result
+            if path == "/api/seat":
+                snap["deprecated"] = "seat"
+                snap["warning"] = "Use POST /api/desk/start; /api/seat aliases desk start auto"
+            if launch and objective:
+                snap["herdr_launch"] = herdr.launch(objective)
             code, body, ct = _json_bytes(snap)
+            return self._send(code, body, ct)
+
+        if path == "/api/desk/stop":
+            desk_id = payload.get("desk_id") or payload.get("id")
+            code, body, ct = _json_bytes(desks.stop(str(desk_id) if desk_id else None))
+            return self._send(code, body, ct)
+
+        if path == "/api/desk/dismiss":
+            desk_id = payload.get("desk_id") or payload.get("id")
+            code, body, ct = _json_bytes(desks.dismiss(str(desk_id) if desk_id else None))
+            return self._send(code, body, ct)
+
+        if path == "/api/desk/schedule":
+            desk_id = payload.get("desk_id") or payload.get("id")
+            spec = payload.get("spec") or payload.get("schedule") or payload.get("args")
+            if isinstance(spec, list):
+                args = [str(x) for x in spec]
+            elif isinstance(spec, str):
+                args = spec
+            else:
+                args = []
+            code, body, ct = _json_bytes(
+                desks.schedule(args, desk_id=str(desk_id) if desk_id else None)
+            )
+            return self._send(code, body, ct)
+
+        if path == "/api/desk/status":
+            code, body, ct = _json_bytes(desks.status_snapshot())
             return self._send(code, body, ct)
 
         if path == "/api/cos/break":
@@ -237,7 +276,7 @@ def serve(host: str = "127.0.0.1", port: int = PORT) -> int:
     httpd = ThreadingHTTPServer((host, port), Handler)
     print(
         f"okstratr listening on http://{host}:{port}  "
-        "(/health /api/status /api/seat /api/dag /api/blackboard "
+        "(/health /api/status /api/desk/* /api/seat /api/dag /api/blackboard "
         "/api/cos/break /api/herdr/run-ready)"
     )
     try:

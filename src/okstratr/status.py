@@ -9,6 +9,7 @@ from typing import Any
 
 from . import PORT, __version__
 from . import blackboard, dag, schedule
+# desks imported lazily in snapshot to avoid cycles
 from .paths import state_dir as _state_dir
 
 STATUS_NAME = "status.json"
@@ -74,11 +75,33 @@ def snapshot() -> dict[str, Any]:
     mark_ready()
     d = dag.default_dag().summary()
     bb = blackboard.summary()
+    desk_brief = None
+    try:
+        from . import desks as desks_mod
+
+        reg = desks_mod.default_registry()
+        active = reg.active()
+        desk_brief = {
+            "active_id": reg.active_id,
+            "state": active.state if active else None,
+            "kind": active.kind if active else None,
+            "objective": active.objective if active else None,
+            "standing": len(reg.standing()),
+        }
+    except Exception:  # noqa: BLE001
+        desk_brief = None
+
+    msg = (
+        f"Desk: {_seated_objective}"
+        if _seated_objective
+        else "No desk objective"
+    )
     return {
         "ts": time(),
         "state": _state if _seated_objective or _state != "setup" else "ready",
         "objective": _seated_objective,
         "seated": bool(_seated_objective),
+        "desk": desk_brief,
         "dag_nodes": d.get("nodes") or 0,
         "dag": d,
         "schedule": schedule.summary(),
@@ -86,9 +109,7 @@ def snapshot() -> dict[str, Any]:
         "api_url": f"http://127.0.0.1:{PORT}",
         "herdr": "herdr",
         "version": __version__,
-        "message": (
-            f"Seated: {_seated_objective}" if _seated_objective else "No objective seated"
-        ),
+        "message": msg,
     }
 
 
