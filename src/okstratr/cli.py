@@ -37,21 +37,53 @@ def main(argv=None) -> int:
     seat.add_argument("objective", nargs="?", default="")
     seat.add_argument("--herdr", action="store_true", help="Also launch/focus Herdr")
     seat.add_argument(
+        "--cos",
+        action="store_true",
+        help="Run CoS heuristic breakdown after seating",
+    )
+    seat.add_argument(
         "--reset",
         action="store_true",
         help="Clear DAG before seating a fresh root (default: keep existing nodes)",
     )
 
-    hh = sub.add_parser("herdr", help="Launch/focus Herdr with objective text")
-    hh.add_argument("objective", nargs="?", default="")
+    hh = sub.add_parser("herdr", help="Herdr bridge: launch UI or run-ready finite seats")
+    hh.add_argument(
+        "objective",
+        nargs="?",
+        default="",
+        help="Objective text to launch, or 'run-ready' to seat ready DAG nodes",
+    )
+    hh.add_argument(
+        "--limit",
+        type=int,
+        default=1,
+        help="For run-ready: max ready nodes to seat (default 1)",
+    )
+    hh.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="For run-ready: no real Herdr/Grok calls (also OKSTRATR_HERDR_DRY_RUN=1)",
+    )
 
     # Legacy alias
     bb_legacy = sub.add_parser("blackboard", help="Blackboard head or post (legacy)")
     bb_legacy.add_argument("text", nargs="?", default="")
     bb_legacy.add_argument("--post", action="store_true")
 
-    cos_p = sub.add_parser("cos", help="Chief-of-staff stub advise")
-    cos_p.add_argument("objective", nargs="?", default="")
+    cos_p = sub.add_parser("cos", help="Chief-of-staff advise / break")
+    cos_p.add_argument(
+        "action_or_objective",
+        nargs="?",
+        default="",
+        help="'break' to expand DAG, or objective text for advise",
+    )
+    cos_p.add_argument(
+        "objective",
+        nargs="?",
+        default="",
+        help="Optional objective when action is 'break'",
+    )
 
     sv = sub.add_parser("serve", help="HTTP on 8767")
     sv.add_argument("--host", default="127.0.0.1")
@@ -125,10 +157,26 @@ def main(argv=None) -> int:
         dag.seat_root(obj, reset=bool(args.reset))
         if obj:
             blackboard.post(f"seated: {obj}", author="okstratr", kind="note")
-        plan = cos.advise(obj, blackboard.texts(5))
+
+        g = dag.default_dag()
+        do_cos = bool(args.cos) or cos.should_auto_break(g)
+        cos_result = None
+        if do_cos and obj:
+            cos_result = cos.break_down(obj)
+            plan = cos_result.get("plan") or cos.advise(obj, blackboard.texts(5))
+        else:
+            plan = cos.advise(obj, blackboard.texts(5))
+
         out = status.write_status()
         out = dict(out)
         out["cos"] = plan
+        if cos_result is not None:
+            out["cos_break"] = {
+                "created": cos_result.get("created"),
+                "updated": cos_result.get("updated"),
+                "ready": cos_result.get("ready"),
+                "idempotent": cos_result.get("idempotent"),
+            }
         if args.herdr and obj:
             out["herdr_launch"] = herdr.launch(obj)
         return _print(out)
@@ -136,7 +184,12 @@ def main(argv=None) -> int:
     if args.cmd == "herdr":
         from . import herdr, status
 
-        obj = (args.objective or "").strip() or status.get_objective()
+        obj = (args.objective or "").strip()
+        if obj == "run-ready":
+            return _print(
+                herdr.run_ready(limit=int(args.limit), dry_run=bool(args.dry_run) or None)
+            )
+        obj = obj or status.get_objective()
         return _print(herdr.launch(obj))
 
     if args.cmd == "blackboard":
@@ -154,7 +207,13 @@ def main(argv=None) -> int:
     if args.cmd == "cos":
         from . import blackboard, cos, status
 
-        obj = (args.objective or "").strip() or status.get_objective()
+        action = (args.action_or_objective or "").strip()
+        if action == "break":
+            obj = (args.objective or "").strip() or status.get_objective()
+            result = cos.break_down(obj)
+            status.write_status()
+            return _print(result)
+        obj = action or status.get_objective()
         return _print(cos.advise(obj, blackboard.texts(5)))
 
     if args.cmd == "serve":

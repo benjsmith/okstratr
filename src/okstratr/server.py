@@ -1,4 +1,4 @@
-"""HTTP API on 8767: health, status, seat, dag, blackboard."""
+"""HTTP API on 8767: health, status, seat, dag, blackboard, herdr run-ready."""
 
 from __future__ import annotations
 
@@ -96,20 +96,63 @@ class Handler(BaseHTTPRequestHandler):
             objective = str(payload.get("objective") or "").strip()
             launch = bool(payload.get("herdr", False))
             reset = bool(payload.get("reset", False))
+            want_cos = payload.get("cos")
             status.set_objective(objective)
             dag.seat_root(objective, reset=reset)
             if objective:
                 blackboard.post(f"seated: {objective}", author="okstratr", kind="note")
-            plan = cos.advise(objective, blackboard.texts(5))
+
+            g = dag.default_dag()
+            if want_cos is None:
+                do_cos = cos.should_auto_break(g) and bool(objective)
+            else:
+                do_cos = bool(want_cos) and bool(objective)
+
+            cos_result = None
+            if do_cos:
+                cos_result = cos.break_down(objective)
+                plan = cos_result.get("plan") or cos.advise(objective, blackboard.texts(5))
+            else:
+                plan = cos.advise(objective, blackboard.texts(5))
+
             herdr_result = None
             if launch and objective:
                 herdr_result = herdr.launch(objective)
             snap = status.write_status()
             snap = dict(snap)
             snap["cos"] = plan
+            if cos_result is not None:
+                snap["cos_break"] = {
+                    "created": cos_result.get("created"),
+                    "updated": cos_result.get("updated"),
+                    "ready": cos_result.get("ready"),
+                    "idempotent": cos_result.get("idempotent"),
+                }
             if herdr_result is not None:
                 snap["herdr_launch"] = herdr_result
             code, body, ct = _json_bytes(snap)
+            return self._send(code, body, ct)
+
+        if path == "/api/cos/break":
+            objective = str(payload.get("objective") or "").strip() or status.get_objective()
+            result = cos.break_down(objective)
+            status.write_status()
+            code, body, ct = _json_bytes(result)
+            return self._send(code, body, ct)
+
+        if path == "/api/herdr/run-ready":
+            limit = payload.get("limit", 1)
+            try:
+                limit = int(limit)
+            except (TypeError, ValueError):
+                limit = 1
+            dry = payload.get("dry_run")
+            if dry is None:
+                dry_run = None  # honor OKSTRATR_HERDR_DRY_RUN
+            else:
+                dry_run = bool(dry)
+            result = herdr.run_ready(limit=limit, dry_run=dry_run)
+            code, body, ct = _json_bytes(result)
             return self._send(code, body, ct)
 
         if path == "/api/dag/nodes":
@@ -194,7 +237,8 @@ def serve(host: str = "127.0.0.1", port: int = PORT) -> int:
     httpd = ThreadingHTTPServer((host, port), Handler)
     print(
         f"okstratr listening on http://{host}:{port}  "
-        "(/health /api/status /api/seat /api/dag /api/blackboard)"
+        "(/health /api/status /api/seat /api/dag /api/blackboard "
+        "/api/cos/break /api/herdr/run-ready)"
     )
     try:
         httpd.serve_forever()
