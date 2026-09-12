@@ -3,36 +3,41 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from time import time
 from typing import Any
 
 from . import PORT, __version__
 from . import blackboard, dag, schedule
+from .paths import state_dir as _state_dir
 
-STATE_DIR = Path(os.path.expanduser("~/.local/state/okstratr"))
-STATUS_PATH = STATE_DIR / "status.json"
+STATUS_NAME = "status.json"
 
 _seated_objective: str = ""
 _state: str = "setup"
 _loaded = False
+_loaded_from: Path | None = None
 
 
 def state_dir() -> Path:
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    return STATE_DIR
+    return _state_dir()
+
+
+def status_path() -> Path:
+    return state_dir() / STATUS_NAME
 
 
 def _load_from_disk() -> None:
-    global _seated_objective, _state, _loaded
-    if _loaded:
+    global _seated_objective, _state, _loaded, _loaded_from
+    path = status_path()
+    if _loaded and _loaded_from == path:
         return
     _loaded = True
-    if not STATUS_PATH.is_file():
+    _loaded_from = path
+    if not path.is_file():
         return
     try:
-        data = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return
     if not isinstance(data, dict):
@@ -51,8 +56,9 @@ def get_objective() -> str:
 
 
 def set_objective(objective: str) -> None:
-    global _seated_objective, _state, _loaded
+    global _seated_objective, _state, _loaded, _loaded_from
     _loaded = True
+    _loaded_from = status_path()
     _seated_objective = (objective or "").strip()
     _state = "seated" if _seated_objective else "ready"
 
@@ -67,6 +73,7 @@ def mark_ready() -> None:
 def snapshot() -> dict[str, Any]:
     mark_ready()
     d = dag.default_dag().summary()
+    bb = blackboard.summary()
     return {
         "ts": time(),
         "state": _state if _seated_objective or _state != "setup" else "ready",
@@ -75,7 +82,7 @@ def snapshot() -> dict[str, Any]:
         "dag_nodes": d.get("nodes") or 0,
         "dag": d,
         "schedule": schedule.summary(),
-        "blackboard": blackboard.summary(),
+        "blackboard": bb,
         "api_url": f"http://127.0.0.1:{PORT}",
         "herdr": "herdr",
         "version": __version__,
@@ -87,6 +94,7 @@ def snapshot() -> dict[str, Any]:
 
 def write_status(data: dict[str, Any] | None = None) -> dict[str, Any]:
     snap = data or snapshot()
-    state_dir()
-    STATUS_PATH.write_text(json.dumps(snap, indent=2) + chr(10), encoding="utf-8")
+    path = status_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(snap, indent=2) + "\n", encoding="utf-8")
     return snap

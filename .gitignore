@@ -6,3 +6,4 @@ __pycache__/
 dist/
 .okstratr-user/
 .okstratr-tmp/
+.pytest_cache/
