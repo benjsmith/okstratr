@@ -26,6 +26,10 @@ Item {
   readonly property color themeMuted: (typeof Color !== "undefined" && Color.muted) ? Color.muted : "#565f89"
   readonly property color themeAccent: (typeof Color !== "undefined" && Color.accent) ? Color.accent : "#7aa2f7"
   readonly property color themeBorder: (typeof Color !== "undefined" && Color.popups && Color.popups.border) ? Color.popups.border : "#292e42"
+  // Quiet chrome hairlines (match Herdr grey dividers) — not accent-heavy popups.border.
+  readonly property color themeDivider: (typeof Color !== "undefined" && Color.muted)
+    ? Qt.rgba(Color.muted.r, Color.muted.g, Color.muted.b, 0.35)
+    : "#292e42"
   // Color singleton has no darker_background; recess AGENT SPACE like Switchbay.
   readonly property color themeRecessed: (typeof Color !== "undefined" && Color.background)
     ? Qt.darker(Color.background, 1.45)
@@ -230,8 +234,15 @@ Item {
           Layout.fillWidth: true
           Layout.preferredHeight: 48
           color: root.themeBg
-          border.color: root.themeBorder
-          border.width: 1
+
+          // Quiet bottom divider (Herdr-like hairline)
+          Rectangle {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            height: 1
+            color: root.themeDivider
+          }
 
           RowLayout {
             anchors.fill: parent
@@ -310,8 +321,16 @@ Item {
             Layout.preferredWidth: 240
             Layout.fillHeight: true
             color: root.themeBg
-            border.color: root.themeBorder
-            border.width: 1
+
+            // Quiet right divider vs main column
+            Rectangle {
+              anchors.top: parent.top
+              anchors.bottom: parent.bottom
+              anchors.right: parent.right
+              width: 1
+              color: root.themeDivider
+              z: 2
+            }
 
             ColumnLayout {
               anchors.fill: parent
@@ -428,7 +447,7 @@ Item {
                 Rectangle {
                   width: parent.width
                   height: 1
-                  color: root.themeBorder
+                  color: root.themeDivider
                 }
 
                 // AGENT SPACE — Switchbay-like visual DAG frame (pure QML)
@@ -438,7 +457,7 @@ Item {
                   height: 248
                   radius: 10
                   color: root.themeRecessed
-                  border.color: root.themeBorder
+                  border.color: root.themeDivider
                   border.width: 1
 
                   property var graph: root.dagGraph
