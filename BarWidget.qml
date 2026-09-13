@@ -4,6 +4,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import qs.Commons
 import qs.Ui
 import "Model.js" as Model
 
@@ -94,10 +95,12 @@ BarWidget {
     text: "\u25b6 " + root.chipText + " · " + root.webChip
     color: {
       if (root.setupMode || root.stale)
-        return "#d97757"
+        return (typeof Color !== "undefined" && Color.urgent) ? Color.urgent : "#f7768e"
       if (root.status && root.status.objective)
-        return "#6be8b3"
-      return parent.bar && parent.bar.foreground ? parent.bar.foreground : "#eeeeee"
+        return (typeof Color !== "undefined" && Color.accent) ? Color.accent : "#7aa2f7"
+      if (typeof Color !== "undefined" && Color.foreground)
+        return Color.foreground
+      return parent.bar && parent.bar.foreground ? parent.bar.foreground : "#a9b1d6"
     }
     font.pixelSize: 12
   }

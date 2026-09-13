@@ -8,6 +8,7 @@ import QtQuick
 import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
+import qs.Commons
 import "Model.js" as Model
 
 Item {
@@ -15,12 +16,18 @@ Item {
   property bool opened: false
   property var status: null
   readonly property string statusPath: (Quickshell.env("HOME") || "") + "/.local/state/okstratr/status.json"
-  readonly property color themeBg: (typeof Color !== "undefined" && Color.popups && Color.popups.background) ? Color.popups.background : "#f2111111"
-  readonly property color themeBorder: (typeof Color !== "undefined" && Color.popups && Color.popups.border) ? Color.popups.border : "#44ffffff"
-  readonly property color themeFg: (typeof Color !== "undefined" && Color.foreground) ? Color.foreground : "#f2f2f2"
-  readonly property color themeMuted: (typeof Color !== "undefined" && Color.dark_foreground) ? Color.dark_foreground : "#888888"
-  readonly property color themeAccent: (typeof Color !== "undefined" && Color.accent) ? Color.accent : "#6be8b3"
-  readonly property color themePanel: (typeof Color !== "undefined" && Color.background) ? Color.background : "#181818"
+  // Omarchy Color (qs.Commons) loads ~/.local/state/omarchy/current/theme/colors.toml.
+  // Fallbacks: Tokyo Night / Switchbay — never flat #181818.
+  readonly property color themePanel: (typeof Color !== "undefined" && Color.background) ? Color.background : "#1a1b26"
+  readonly property color themeBg: (typeof Color !== "undefined" && Color.popups && Color.popups.background) ? Color.popups.background : "#13141c"
+  readonly property color themeFg: (typeof Color !== "undefined" && Color.foreground) ? Color.foreground : "#a9b1d6"
+  readonly property color themeMuted: (typeof Color !== "undefined" && Color.muted) ? Color.muted : "#565f89"
+  readonly property color themeAccent: (typeof Color !== "undefined" && Color.accent) ? Color.accent : "#7aa2f7"
+  readonly property color themeBorder: (typeof Color !== "undefined" && Color.popups && Color.popups.border) ? Color.popups.border : "#292e42"
+  // Color singleton has no darker_background; recess AGENT SPACE like Switchbay.
+  readonly property color themeRecessed: (typeof Color !== "undefined" && Color.background)
+    ? Qt.darker(Color.background, 1.45)
+    : "#0e0e14"
   readonly property string apiUrl: (status && status.api_url) ? status.api_url : "http://127.0.0.1:8767"
   readonly property string deskKind: Model.deskKind(status)
   readonly property string deskState: Model.deskState(status)
@@ -390,8 +397,8 @@ Item {
                   width: parent.width
                   height: 248
                   radius: 10
-                  color: "#0d1117"
-                  border.color: "#2a2f3a"
+                  color: root.themeRecessed
+                  border.color: root.themeBorder
                   border.width: 1
 
                   property var graph: root.dagGraph
@@ -447,7 +454,7 @@ Item {
                     anchors.top: parent.top
                     anchors.margins: 10
                     text: (agentSpace.graph && agentSpace.graph.label) ? agentSpace.graph.label : "AGENT SPACE"
-                    color: "#8b949e"
+                    color: root.themeMuted
                     font.pixelSize: 10
                     font.bold: true
                     font.letterSpacing: 1.2
@@ -458,7 +465,7 @@ Item {
                     anchors.top: parent.top
                     anchors.margins: 10
                     text: Model.dagSummaryText(root.status)
-                    color: "#6e7681"
+                    color: root.themeMuted
                     font.pixelSize: 10
                     elide: Text.ElideRight
                     width: Math.min(implicitWidth, parent.width * 0.55)
@@ -491,7 +498,7 @@ Item {
                         var layout = agentSpace.layoutNodes || []
                         for (var i = 0; i < layout.length; i++)
                           pos[layout[i].id] = layout[i]
-                        ctx.strokeStyle = "#3d4450"
+                        ctx.strokeStyle = Qt.rgba(root.themeBorder.r, root.themeBorder.g, root.themeBorder.b, 0.55)
                         ctx.lineWidth = 1
                         for (var e = 0; e < edges.length; e++) {
                           var a = pos[edges[e].from]
@@ -551,7 +558,7 @@ Item {
                           anchors.bottom: parent.top
                           anchors.bottomMargin: 2
                           text: modelData.label
-                          color: "#c9d1d9"
+                          color: root.themeFg
                           font.pixelSize: 9
                           font.bold: String(modelData.role) === "cos" || String(modelData.role) === "blackboard"
                         }
