@@ -108,6 +108,7 @@ State directory: `~/.local/state/okstratr/` (override with `OKSTRATR_STATE_DIR` 
 | File | Role |
 |------|------|
 | `status.json` | Snapshot for QML `FileView` (desk kind/state, effort, herdr_labels, dag) |
+| `ui.json` | Panel visibility `{ "panel_open": true|false }` — re-summon FloatingWindow after shell restart |
 | `desks.json` | Desk registry (active_id, focus_id, standing orgs + org/effort) |
 | `bandit.json` | Per-desk + global hire-policy arm stats / last decision |
 | `web_egress.json` | Web gate mode (`off`\|`once`\|`session`) |

@@ -15,7 +15,9 @@ Item {
   id: root
   property bool opened: false
   property var status: null
+  property bool restoringPanel: false
   readonly property string statusPath: (Quickshell.env("HOME") || "") + "/.local/state/okstratr/status.json"
+  readonly property string uiPath: (Quickshell.env("HOME") || "") + "/.local/state/okstratr/ui.json"
   // Omarchy Color (qs.Commons) loads ~/.local/state/omarchy/current/theme/colors.toml.
   // Fallbacks: Tokyo Night / Switchbay — never flat #181818.
   readonly property color themePanel: (typeof Color !== "undefined" && Color.background) ? Color.background : "#1a1b26"
@@ -38,16 +40,41 @@ Item {
   property string herdrLaunchMsg: ""
   readonly property var dagGraph: Model.dagGraph(status)
 
+  function persistPanelUi() {
+    // Explicit close → panel_open false → stay closed after shell restart.
+    uiFile.setText(JSON.stringify({ panel_open: !!root.opened }) + "\n")
+  }
+
   function open(payloadJson) {
     opened = true
+    persistPanelUi()
     statusFile.reload()
     refreshLive()
   }
   function close() {
     // TODO QML dialog: root.closeWarning — then suspend kernel / quiet desks
     opened = false
+    persistPanelUi()
   }
   function toggle(payloadJson) { opened ? close() : open(payloadJson) }
+
+  function maybeRestorePanel() {
+    if (root.opened || root.restoringPanel)
+      return
+    try {
+      var raw = uiFile.text()
+      if (!raw || !String(raw).trim())
+        return
+      var u = JSON.parse(raw)
+      if (u && u.panel_open === true) {
+        root.restoringPanel = true
+        root.open()
+        root.restoringPanel = false
+      }
+    } catch (e) {
+      // Missing/invalid ui.json → stay closed (default).
+    }
+  }
 
   function refreshLive() {
     Model.getJson(root.apiUrl + "/api/status", function (parsed) {
@@ -122,6 +149,18 @@ Item {
     }
   }
 
+  // Persist desk UI visibility across omarchy-shell restart (KeepLoaded alone is not enough).
+  FileView {
+    id: uiFile
+    path: root.uiPath
+    watchChanges: false
+    printErrors: false
+    onLoaded: root.maybeRestorePanel()
+    onLoadFailed: { /* no ui.json yet — stay closed */ }
+  }
+
+  Component.onCompleted: uiFile.reload()
+
 
   // Omarchy-native chip control (mint accent) — replaces Qt Quick Controls Button
   component Chip: Rectangle {
@@ -173,8 +212,9 @@ Item {
     minimumSize: Qt.size(720, 480)
 
     onVisibleChanged: {
+      // Window hide / compositor close — same as explicit close (do not re-open after restart).
       if (!visible && root.opened)
-        root.opened = false
+        root.close()
     }
 
     Rectangle {

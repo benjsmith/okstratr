@@ -56,7 +56,7 @@ Either plugin can be useful alone. They share a future multi-workspace layout, n
 - HTTP: `/health`, `/api/status`, `/api/desk/*` (incl. hire/effort/retire/focus), `/api/web`, `/api/seat` (alias), `/api/cos/break`, `/api/herdr/launch`, `/api/herdr/run-ready`, `/api/dag`, `/api/blackboard`
 - Bar chip shows desk kind · state + DAG count + **Web:** chip; **panel is a fullscreen desk UI** (FloatingWindow toplevel — not Overlay; stays under lock/screensaver) with standing-desk rail, **AGENT SPACE** visual DAG (CoS + Blackboard idle defaults), blackboard, Omarchy chip actions (Open in Herdr via POST `/api/herdr/launch` (uwsm-app + terminal + systemd user env) / Refresh / web), no text input
 
-State dir: `~/.local/state/okstratr/` (tests: `OKSTRATR_STATE_DIR`).
+State dir: `~/.local/state/okstratr/` (`status.json`, `ui.json`, desks/DAG/blackboard; tests: `OKSTRATR_STATE_DIR`).
 
 ## Non-goals (near-term)
 
@@ -88,6 +88,8 @@ tests/                 schedule parse, desk lifecycle, DAG, CoS, Herdr dry-run
 ## Panel UI
 
 The Omarchy **panel** (`Panel.qml`) is a **fullscreen desk UI**: a Quickshell `FloatingWindow` toplevel (native window chrome / maximize), not a tiny corner Overlay layershell. Super+Shift+O (see `contrib/hypr-bindings.lua`) or the bar chip summons it. Left rail lists standing desks; main shows objective, an **AGENT SPACE** DAG canvas (always CoS + Blackboard), blackboard head, and Open in Herdr (uwsm-app + xdg-terminal-exec/foot with `--dir $HOME` + systemd user env; objective via env only). Free-text input stays in Herdr.
+
+Panel open/close is persisted in `~/.local/state/okstratr/ui.json` (`panel_open`). After an omarchy-shell restart, if the desk was open it is re-summoned automatically; an explicit close stays closed. Theme colors come from `qs.Commons` `Color` (Omarchy `colors.toml`) with Tokyo Night fallbacks.
 
 ## Local try
 
