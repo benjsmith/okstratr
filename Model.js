@@ -289,3 +289,34 @@ function nodeColorForRole(role) {
     if (r === "planner" || r.indexOf("curator") === 0) return "#94a3b8"
     return "#7dd3fc"
 }
+
+function workspaceRows(status) {
+    if (status && status.okbay_workspaces && Array.isArray(status.okbay_workspaces.workspaces))
+        return status.okbay_workspaces.workspaces
+    return [{ id: "local", name: "local", label: "local", path: "" }]
+}
+
+function workspaceReachable(status) {
+    return !!(status && status.okbay_workspaces && status.okbay_workspaces.reachable)
+}
+
+function selectedWorkspaceId(status) {
+    if (status && status.okbay_workspaces && status.okbay_workspaces.selected)
+        return String(status.okbay_workspaces.selected)
+    if (status && status.okbay && status.okbay.id)
+        return String(status.okbay.id)
+    return "local"
+}
+
+function roleConfigRows(status) {
+    if (status && status.roles_config && Array.isArray(status.roles_config.roles))
+        return status.roles_config.roles
+    return [
+        {id: "cos", title: "CoS", enabled: true, always: true, hire_cap: null, model_hint: "strongest_available", notes: "Always present"},
+        {id: "investigator", title: "Investigator", enabled: true, hire_cap: null, model_hint: "diverse", notes: ""},
+        {id: "synthesizer", title: "Synthesizer", enabled: true, hire_cap: null, model_hint: "strongest_available", notes: ""},
+        {id: "verifier", title: "Verifier", enabled: true, hire_cap: null, model_hint: "diverse", notes: ""},
+        {id: "curator", title: "Curator", enabled: true, hire_cap: null, model_hint: "strongest_available", notes: ""},
+        {id: "researcher", title: "Researcher", enabled: true, hire_cap: null, model_hint: "diverse", notes: ""}
+    ]
+}

@@ -9,7 +9,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from . import PORT
-from . import blackboard, cos, dag, desks, herdr, status, web_egress
+from . import blackboard, cos, dag, desks, herdr, okbay, roles, status, web_egress
 
 _NODE_STATE_RE = re.compile(r"^/api/dag/nodes/([^/]+)/state$")
 
@@ -85,6 +85,14 @@ class Handler(BaseHTTPRequestHandler):
             code, body, ct = _json_bytes(web_egress.status())
             return self._send(code, body, ct)
 
+        if path in ("/api/workspaces", "/api/workspace/list"):
+            code, body, ct = _json_bytes(okbay.list_workspaces())
+            return self._send(code, body, ct)
+
+        if path in ("/api/config/roles", "/api/roles/config"):
+            code, body, ct = _json_bytes(roles.load_role_config())
+            return self._send(code, body, ct)
+
         code, body, ct = _json_bytes({"error": "not found", "path": path}, 404)
         self._send(code, body, ct)
 
@@ -113,6 +121,12 @@ class Handler(BaseHTTPRequestHandler):
                 effort_f = None
             want_cos = payload.get("cos")
             run_cos = True if want_cos is None else bool(want_cos)
+            ws_id = (
+                payload.get("okbay_workspace_id")
+                or payload.get("workspace_id")
+                or payload.get("workspace")
+            )
+            ws_id = str(ws_id).strip() if ws_id else None
             # /api/seat is deprecated alias → desk start auto
             if path == "/api/seat" and not kind:
                 kind = "auto"
@@ -122,6 +136,7 @@ class Handler(BaseHTTPRequestHandler):
                 reset=reset,
                 effort=effort_f,
                 run_cos=run_cos and bool(objective),
+                okbay_workspace_id=ws_id,
             )
             snap = status.write_status()
             snap = dict(snap)
@@ -332,6 +347,30 @@ class Handler(BaseHTTPRequestHandler):
             )
             return self._send(code, body, ct)
 
+        if path in ("/api/workspace/select", "/api/workspaces/select"):
+            ws_id = (
+                payload.get("id")
+                or payload.get("workspace_id")
+                or payload.get("workspace")
+                or payload.get("name")
+                or ""
+            )
+            ws_path = payload.get("path")
+            result = okbay.set_selected_workspace(
+                str(ws_id), path=str(ws_path) if ws_path else None
+            )
+            status.write_status()
+            code, body, ct = _json_bytes(
+                {"ok": True, "okbay": result, "workspaces": okbay.list_workspaces()}
+            )
+            return self._send(code, body, ct)
+
+        if path in ("/api/config/roles", "/api/roles/config"):
+            saved = roles.save_role_config(payload)
+            status.write_status()
+            code, body, ct = _json_bytes({"ok": True, "roles_config": saved})
+            return self._send(code, body, ct)
+
         code, body, ct = _json_bytes({"error": "not found", "path": path}, 404)
         self._send(code, body, ct)
 
@@ -341,8 +380,8 @@ def serve(host: str = "127.0.0.1", port: int = PORT) -> int:
     httpd = ThreadingHTTPServer((host, port), Handler)
     print(
         f"okstratr listening on http://{host}:{port}  "
-        "(/health /api/status /api/desk/* /api/web /api/seat /api/dag /api/blackboard "
-        "/api/cos/break /api/herdr/launch /api/herdr/run-ready)"
+        "(/health /api/status /api/desk/* /api/web /api/workspaces /api/config/roles "
+        "/api/seat /api/dag /api/blackboard /api/cos/break /api/herdr/launch /api/herdr/run-ready)"
     )
     try:
         httpd.serve_forever()

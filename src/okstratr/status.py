@@ -92,19 +92,23 @@ def snapshot() -> dict[str, Any]:
     try:
         from . import desks as desks_mod
         from . import kernel
+        from . import roles as roles_mod
 
         reg = desks_mod.default_registry()
         active = reg.active()
         focus_desk_id = reg.focus_id or reg.active_id
         effort = active.effort if active else None
+        standing_full = desks_mod.default_standing_rows(reg)
         standing_list = [
             {
-                "id": sd.id,
-                "kind": sd.kind,
-                "state": sd.state,
-                "objective": sd.objective,
+                "id": row.get("id"),
+                "kind": row.get("kind"),
+                "state": row.get("state"),
+                "objective": row.get("objective") or "",
+                "placeholder": bool(row.get("placeholder")),
+                "schedule": row.get("schedule"),
             }
-            for sd in reg.standing()
+            for row in standing_full
         ]
         desk_brief = {
             "active_id": reg.active_id,
@@ -117,7 +121,10 @@ def snapshot() -> dict[str, Any]:
             "org": dict(active.org) if active else {},
             "standing": standing_list,
             "standing_count": len(standing_list),
-            "okbay_workspace_id": active.okbay_workspace_id if active else "",
+            "default_kinds": list(roles_mod.DEFAULT_DESK_KINDS),
+            "okbay_workspace_id": (
+                active.okbay_workspace_id if active else str(okbay.active_workspace().get("id") or "")
+            ),
             "thread_id": active.thread_id if active else "",
             "dag_nodes": d.get("nodes") or 0,
         }
@@ -157,6 +164,20 @@ def snapshot() -> dict[str, Any]:
     except Exception:  # noqa: BLE001
         web_egress = {"mode": "off", "label": "Off", "chip": "Web: Off", "gate": True}
 
+    roles_config = None
+    try:
+        from . import roles as roles_cfg
+
+        roles_config = roles_cfg.load_role_config()
+    except Exception:  # noqa: BLE001
+        roles_config = None
+
+    workspaces = None
+    try:
+        workspaces = okbay.list_workspaces()
+    except Exception:  # noqa: BLE001
+        workspaces = {"reachable": False, "workspaces": [], "local_fallback": True}
+
     return {
         "ts": time(),
         "state": display_state,
@@ -177,11 +198,15 @@ def snapshot() -> dict[str, Any]:
         "effort_slider": effort_slider,
         "web_egress": web_egress,
         "okbay": okbay.active_workspace(),
+        "okbay_workspaces": workspaces,
+        "roles_config": roles_config,
         "ui": {
             "left_pane": "desk_switch",
             "show_dag": True,
             "show_blackboard": True,
-            "text_input": False,
+            "text_input": True,
+            "query_input": True,
+            "config_roles": True,
             "close_warning": herdr.CLOSE_WARNING,
         },
         "version": __version__,
