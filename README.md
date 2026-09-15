@@ -87,6 +87,8 @@ tests/                 schedule parse, desk lifecycle, DAG, CoS, Herdr dry-run
 
 ## Panel UI
 
+**Bar chip:** left-click opens/focuses the panel (same as Super+Shift+O); right-click is a **no-op** for now (reserved). Omarchy menu entry: `contrib/okstratr-menu.jsonc` → Panel.
+
 The Omarchy **panel** (`Panel.qml`) is a **fullscreen desk UI**: a Quickshell `FloatingWindow` toplevel (native window chrome / maximize), not a tiny corner Overlay layershell. Super+Shift+O (see `contrib/hypr-bindings.lua`) or the bar chip summons it. Left rail lists standing desks; main shows objective, an **AGENT SPACE** DAG canvas (always CoS + Blackboard), blackboard head, and Open in Herdr (uwsm-app + xdg-terminal-exec/foot with `--dir $HOME` + systemd user env; objective via env only). Free-text input stays in Herdr.
 
 Panel open/close is persisted in `~/.local/state/okstratr/ui.json` (`panel_open`). After an omarchy-shell restart, if the desk was open it is re-summoned automatically; an explicit close stays closed. Theme colors come from `qs.Commons` `Color` (Omarchy `colors.toml`) with Tokyo Night fallbacks.

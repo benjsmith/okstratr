@@ -1,4 +1,7 @@
-// Okstratr bar widget. Left click: panel. Shows desk kind + state (working|quiet) and DAG count.
+// Okstratr / Herdr bar widget.
+// Left-click: open/focus okstratr panel (same as Super+Shift+O summon).
+// Right-click: no-op for now (reserved; explicitly documented).
+// Shows desk kind + state (working|quiet) and DAG count.
 // Uses the Quattro BarWidget host type (same contract as okbay / khephri.sia).
 
 import QtQuick
@@ -86,6 +89,9 @@ BarWidget {
         root.runSetup()
         return
       }
+      // Right-click: no-op for now (reserved for a future Herdr/action menu).
+      if (mouse.button === Qt.RightButton)
+        return
       root.summonOkstratr("{\"surface\":\"panel\"}")
     }
   }
