@@ -41,14 +41,39 @@ EFFORT_LOW = 0.35
 EFFORT_HIGH = 0.70
 
 
-def choose_kind(objective: str, kind: str | None = None) -> str:
-    """Use the explicit kind, otherwise the neutral ``auto`` desk.
+_SLASH_KIND = ("work", "curate", "code", "deck", "auto")
 
-    Classifying objective text and suggesting/selecting a desk kind is product
-    improvement #1 and is deliberately not shipped in this slice.
-    Unknown explicit kinds remain allowed (kinds are not a forever-closed enum).
+
+def parse_objective_slash(objective: str) -> tuple[str | None, str]:
+    """Optional ``/kind rest`` override on the query line.
+
+    Query box defaults to the neutral ``auto`` desk. A leading slash selects an
+    explicit kind and is stripped from the objective. No free-text classifier.
     """
-    del objective  # intentionally not classified
+    import re
+
+    raw = (objective or "").strip()
+    if not raw.startswith("/"):
+        return None, raw
+    m = re.match(
+        r"^/(" + "|".join(_SLASH_KIND) + r")\b\s*(.*)$",
+        raw,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if not m:
+        return None, raw
+    return m.group(1).lower(), (m.group(2) or "").strip()
+
+
+def choose_kind(objective: str, kind: str | None = None) -> str:
+    """Resolve desk kind: slash override > explicit kind > ``auto``.
+
+    Free-text classification / suggestion chips are not shipped. Unknown
+    explicit kinds remain allowed (kinds are not a forever-closed enum).
+    """
+    slash_kind, _ = parse_objective_slash(objective)
+    if slash_kind:
+        return slash_kind
     if kind:
         k = kind.strip().lower()
         if k:

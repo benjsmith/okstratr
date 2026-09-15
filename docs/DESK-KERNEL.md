@@ -95,7 +95,7 @@ Kind-specific templates (kept):
 
 All five default kinds — **`work`, `curate`, `code`, `deck`, `auto`** — are standing rows. Status/API always expose them; a kind with no live desk is `idle`. Dismissing a live desk archives it and reveals that kind’s idle row again.
 
-**Open design question — improvement #1 (explicitly deferred / not shipping):** classify objective text and suggest a desk kind. This slice never auto-suggests from the query. The Panel requires a selected standing kind, and omitted CLI/API kinds resolve to the neutral `auto` desk.
+**Query kind resolution (locked):** the query box starts the neutral **`auto`** desk. A leading slash overrides — `/work`, `/curate`, `/code`, `/deck`, `/auto` — and is stripped from the stored objective. Free-text classification / suggestion chips are **not** shipping (former improvement #1). Standing-rail **Start** uses that row’s kind unless the query contains a slash (slash wins).
 
 Kernel may invent new kinds later when none fit, but no invention or classifier UI ships here.
 

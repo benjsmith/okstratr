@@ -94,7 +94,7 @@ The Omarchy **panel** (`Panel.qml`) is a **fullscreen desk console**: a Quickshe
 
 **Ownership:** okstratr owns desk query input and durable orchestration. Herdr stays the normal agent runtime; a future grouping lens belongs there, but is not part of this slice. Workspace and role config selections persist under `OKSTRATR_STATE_DIR` and are included in status.
 
-**Open design question — improvement #1 (not shipping):** should okstratr classify an objective and suggest a desk kind? This build does **not** classify/suggest. The user chooses a standing kind; omitted CLI/API kinds use the neutral `auto` desk.
+**Query kind (locked):** Start from the query box uses **`auto`**. Prefix with `/work`, `/curate`, `/code`, `/deck`, or `/auto` to override. No free-text kind classifier. Rail **Start** uses the row’s kind unless the query has a slash.
 
 Panel open/close is persisted in `~/.local/state/okstratr/ui.json` (`panel_open`). After an omarchy-shell restart, if the desk was open it is re-summoned automatically; an explicit close stays closed. Theme colors come from `qs.Commons` `Color` (Omarchy `colors.toml`) with Tokyo Night fallbacks.
 

@@ -46,7 +46,7 @@ Item {
   readonly property var workspaceRows: Model.workspaceRows(status)
   readonly property bool workspaceReachable: Model.workspaceReachable(status)
   property string selectedWorkspaceId: Model.selectedWorkspaceId(status)
-  property string selectedKind: "work"
+  property string selectedKind: "auto"
   property bool workspaceMenuOpen: false
   property bool configOpen: false
   property bool scheduleOpen: false
@@ -153,16 +153,32 @@ Item {
     root.refreshLive()
   }
 
+  function parseDeskQuery(text) {
+    // Query defaults to auto. Leading /work|/curate|/code|/deck|/auto overrides.
+    var raw = String(text || "").trim()
+    var m = raw.match(/^\/(work|curate|code|deck|auto)\b\s*([\s\S]*)$/i)
+    if (m)
+      return { kind: String(m[1]).toLowerCase(), objective: String(m[2] || "").trim(), slash: true }
+    return { kind: null, objective: raw, slash: false }
+  }
+
   function startDesk(kind) {
-    var k = String(kind || root.selectedKind || "work")
+    var parsed = root.parseDeskQuery(queryInput.text)
+    // Slash in the query always wins; otherwise use the rail kind / auto.
+    var k = parsed.slash ? parsed.kind : String(kind || root.selectedKind || "auto")
     root.selectedKind = k
-    var objective = String(queryInput.text || "").trim()
+    var objective = parsed.objective
     root.actionMsg = "Starting " + k + " desk…"
     Model.postJson(root.apiUrl + "/api/desk/start", {
       kind: k,
       objective: objective,
       workspace_id: root.selectedWorkspaceId
     }, root.afterDeskAction)
+  }
+
+  function startFromQuery() {
+    var parsed = root.parseDeskQuery(queryInput.text)
+    root.startDesk(parsed.kind || "auto")
   }
 
   function stopDesk(deskId) {
@@ -574,13 +590,13 @@ Item {
                       font.pixelSize: 14
                       clip: true
                       verticalAlignment: TextInput.AlignVCenter
-                      onAccepted: root.startDesk(root.selectedKind)
+                      onAccepted: root.startFromQuery()
                     }
                     Text {
                       anchors.fill: parent
                       anchors.margins: 11
                       visible: !queryInput.text && !queryInput.activeFocus
-                      text: "What should the " + root.selectedKind + " desk do?"
+                      text: "Objective — defaults to auto; /curate /deck /work /code to override"
                       color: root.themeMuted
                       font.pixelSize: 14
                       verticalAlignment: Text.AlignVCenter
@@ -619,11 +635,14 @@ Item {
 
                   Chip {
                     id: startQuery
-                    label: "Start " + root.selectedKind
+                    label: {
+                      var parsed = root.parseDeskQuery(queryInput.text)
+                      return "Start " + (parsed.kind || "auto")
+                    }
                     primary: true
                     implicitHeight: 42
                     implicitWidth: 110
-                    onClicked: root.startDesk(root.selectedKind)
+                    onClicked: root.startFromQuery()
                   }
                 }
 
@@ -945,7 +964,7 @@ Item {
                 }
 
                 Text {
-                  text: "Okstratr owns desk query input. Herdr remains the normal agent runtime. Auto-kind-from-objective is not shipping."
+                  text: "Query starts auto. Slash /curate /deck /work /code overrides. Herdr remains the agent runtime."
                   color: root.themeMuted
                   font.pixelSize: 10
                   wrapMode: Text.Wrap

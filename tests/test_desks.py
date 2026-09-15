@@ -127,11 +127,12 @@ def test_cli_desk_and_deprecated_seat(state_dir: Path, capsys: pytest.CaptureFix
 def test_kernel_kind_heuristic(state_dir: Path) -> None:
     from okstratr.kernel import choose_kind, hire_plan
 
-    # Improvement #1 (classify objective → suggest kind) is intentionally deferred.
+    # Free-text classification is not shipped; slash overrides are.
     assert choose_kind("curate the wiki pages") == "auto"
     assert choose_kind("fix the bug in the PR") == "auto"
     assert choose_kind("build a pitch deck") == "auto"
     assert choose_kind("ship the release", kind="work") == "work"
+    assert choose_kind("/curate tidy it", kind="work") == "curate"
     plan = hire_plan("anything", kind="curate")
     assert plan["roles"][0] == "cos"
     assert "curator_judge" in plan["roles"]
@@ -209,3 +210,22 @@ def test_roles_config_load_save(state_dir: Path) -> None:
     loaded = roles.load_role_config()
     assert loaded == saved
     assert (state_dir / "config" / "roles.json").is_file()
+
+def test_slash_override_and_auto_default(tmp_path, monkeypatch):
+    monkeypatch.setenv("OKSTRATR_STATE_DIR", str(tmp_path))
+    from okstratr.kernel import choose_kind, parse_objective_slash
+    from okstratr import desks
+
+    assert parse_objective_slash("/curate tidy biocure") == ("curate", "tidy biocure")
+    assert parse_objective_slash("just do it") == (None, "just do it")
+    assert choose_kind("no slash here") == "auto"
+    assert choose_kind("/deck make slides", kind="work") == "deck"
+    assert choose_kind("x", kind="code") == "code"
+
+    result = desks.start("/deck Make a Q3 briefing", kind="work")
+    assert result["desk"]["kind"] == "deck"
+    assert result["desk"]["objective"] == "Make a Q3 briefing"
+
+    result2 = desks.start("Neutral objective only")  # no kind → auto
+    assert result2["desk"]["kind"] == "auto"
+    assert result2["desk"]["objective"] == "Neutral objective only"

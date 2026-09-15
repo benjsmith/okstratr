@@ -258,11 +258,15 @@ class DeskRegistry:
         Bind selected okbay workspace when okbay_workspace_id / workspace_id given
         (also persists panel selection).
         """
-        obj = (objective or "").strip()
+        raw = (objective or "").strip()
+        # Slash override: "/curate …" wins over an explicit kind and is stripped
+        # from the stored objective. Query box defaults to auto when no slash.
+        slash_kind, obj = kernel.parse_objective_slash(raw)
+        effective_kind = slash_kind or kind
         wid = (okbay_workspace_id or workspace_id or "").strip()
         if wid and wid not in ("local",):
             okbay.set_selected_workspace(wid)
-        plan = kernel.spin_up_desk_spec(obj, kind=kind, effort=effort)
+        plan = kernel.spin_up_desk_spec(obj, kind=effective_kind, effort=effort)
         chosen_kind = plan["kind"]
         org = plan.get("org") or kernel.org_from_plan(plan)
         ws = okbay.active_workspace()
