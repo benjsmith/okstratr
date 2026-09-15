@@ -7,7 +7,9 @@ succinct summaries only — never full reasoning traces.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 # --- Core roles (always considered) ---
@@ -56,7 +58,7 @@ DEFAULT_KIND_ROLES: dict[str, tuple[str, ...]] = {
     ),
 }
 
-DEFAULT_DESK_KINDS: tuple[str, ...] = ("curate", "work", "code", "deck", "auto")
+DEFAULT_DESK_KINDS: tuple[str, ...] = ("work", "curate", "code", "deck", "auto")
 
 
 @dataclass(frozen=True)
@@ -193,3 +195,129 @@ def catalog_summary() -> dict[str, Any]:
         "switchbay_plan": list(SWITCHBAY_PLAN_ROLES),
         "roles": {rid: ROLE_CATALOG[rid].summary for rid in ALL_ROLES if rid in ROLE_CATALOG},
     }
+
+
+# --- Panel Config ⚙ role defaults (persist under state_dir/config/roles.json) ---
+# UI stub roles: CoS always + investigator/synthesizer/verifier/curator/researcher.
+# Distinct from hire catalog (curator_*); "curator" is the config-facing label.
+
+UI_ROLE_IDS: tuple[str, ...] = (
+    ROLE_COS,
+    ROLE_INVESTIGATOR,
+    ROLE_SYNTHESIZER,
+    ROLE_VERIFIER,
+    "curator",
+    ROLE_RESEARCHER,
+)
+
+_ROLE_CONFIG_REL = "config/roles.json"
+
+
+def _default_ui_role(role_id: str) -> dict[str, Any]:
+    titles = {
+        ROLE_COS: "CoS",
+        ROLE_INVESTIGATOR: "Investigator",
+        ROLE_SYNTHESIZER: "Synthesizer",
+        ROLE_VERIFIER: "Verifier",
+        "curator": "Curator",
+        ROLE_RESEARCHER: "Researcher",
+    }
+    notes = {
+        ROLE_COS: "Always present — sole user interface into a desk.",
+        ROLE_INVESTIGATOR: "Gathers evidence; orthogonal to planner/verifier.",
+        ROLE_SYNTHESIZER: "Merges independent opinions into succinct claims.",
+        ROLE_VERIFIER: "Checks outcomes against success criteria.",
+        "curator": "Config label for curate path (planner/worker/judge).",
+        ROLE_RESEARCHER: "Optional web search behind CoS/human approval.",
+    }
+    hint = DEFAULT_MODEL_HINTS.get(
+        role_id if role_id != "curator" else ROLE_CURATOR_JUDGE,
+        "strongest_available",
+    )
+    return {
+        "id": role_id,
+        "title": titles.get(role_id, role_id),
+        "enabled": True,
+        "hire_cap": None,
+        "model_hint": hint,
+        "notes": notes.get(role_id, ""),
+        "always": role_id == ROLE_COS,
+    }
+
+
+def default_role_config() -> dict[str, Any]:
+    return {
+        "version": 1,
+        "roles": [_default_ui_role(rid) for rid in UI_ROLE_IDS],
+    }
+
+
+def role_config_path() -> Path:
+    from .paths import state_dir
+
+    return state_dir() / _ROLE_CONFIG_REL
+
+
+def load_role_config() -> dict[str, Any]:
+    """Load panel role config; ensure CoS + defaults exist."""
+    path = role_config_path()
+    defaults = default_role_config()
+    if not path.is_file():
+        return defaults
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return defaults
+    if not isinstance(raw, dict):
+        return defaults
+    by_id: dict[str, dict[str, Any]] = {}
+    for item in raw.get("roles") or []:
+        if isinstance(item, dict) and item.get("id"):
+            by_id[str(item["id"])] = dict(item)
+    roles_out: list[dict[str, Any]] = []
+    for rid in UI_ROLE_IDS:
+        base = _default_ui_role(rid)
+        if rid in by_id:
+            merged = {**base, **by_id[rid]}
+            merged["id"] = rid
+            if rid == ROLE_COS:
+                merged["enabled"] = True
+                merged["always"] = True
+            roles_out.append(merged)
+        else:
+            roles_out.append(base)
+    return {"version": int(raw.get("version") or 1), "roles": roles_out}
+
+
+def save_role_config(payload: dict[str, Any] | list[Any] | None = None) -> dict[str, Any]:
+    """Persist role config; returns saved snapshot."""
+    current = load_role_config()
+    if isinstance(payload, list):
+        incoming = {"roles": payload}
+    elif isinstance(payload, dict):
+        incoming = payload
+    else:
+        incoming = {}
+    by_id: dict[str, dict[str, Any]] = {
+        str(r["id"]): dict(r) for r in current["roles"] if r.get("id")
+    }
+    for item in incoming.get("roles") or []:
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        rid = str(item["id"])
+        base = by_id.get(rid) or _default_ui_role(rid)
+        merged = {**base, **item, "id": rid}
+        if rid == ROLE_COS:
+            merged["enabled"] = True
+            merged["always"] = True
+        by_id[rid] = merged
+    roles_out = []
+    for rid in UI_ROLE_IDS:
+        roles_out.append(by_id.get(rid) or _default_ui_role(rid))
+    out = {"version": int(incoming.get("version") or current.get("version") or 1), "roles": roles_out}
+    path = role_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(out, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(path)
+    return out

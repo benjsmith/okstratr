@@ -15,8 +15,8 @@
 | Piece | Owns |
 |-------|------|
 | **okbay** | Knowledge graph, Atlas, Nautilus reveal, **work-coverage ingest**, reviews / commit land path |
-| **okstratr** | Kernel (hiring manager), desks, DAG, CoS, blackboard, schedule, Herdr pairing, bar/panel |
-| **Herdr** | Text input + live agent panes (runtime / multiplexer) |
+| **okstratr** | Desk query input + kernel, desks, workspace bind, DAG, CoS, blackboard, schedule, Herdr pairing, bar/panel |
+| **Herdr** | Normal live agent runtime / multiplexer; grouping lens later (not this slice) |
 
 Either half should remain useful alone; side-by-side is the composed desk.
 
@@ -45,7 +45,7 @@ Desks store `okbay_workspace_id` + `thread_id` and label Herdr with both.
 |------|---------|
 | **Kernel** | Hiring manager. Always uses the strongest available model (or an explicit user choice). Decides *how many* workers to buy per unit quality from the effort slider. |
 | **Desk** | A standing org for one objective: CoS + hired roles, a live DAG, blackboard claims, optional schedule. Bound to an okbay workspace / thread ids. |
-| **CoS** | Chief of staff — the **only** user interface into a desk. Humans talk to CoS (via Herdr); CoS requests firepower from the kernel. |
+| **CoS** | Chief of staff — sole agent contact inside a desk; okstratr Panel owns human objective entry, Herdr hosts the live CoS/runtime pane. |
 | **Role** | A worker slot (planner, investigator, …) with orthogonal permissions/precedents; pi-agent-plugin style. |
 | **Kind** | Desk type template (`curate`, `work`, `code`, `deck`, `auto`, …). Defaults, **not** a closed enum forever. |
 | **DAG** | Durable task graph for the desk. Short-lived workers **retire** from it (no unbounded growth). |
@@ -91,9 +91,13 @@ Kind-specific templates (kept):
 | `work` | General execution toward an objective |
 | `code` | Implementation / verify loops |
 | `deck` | Briefing / narrative synthesis |
-| `auto` | Kernel picks from objective text (heuristic today) |
+| `auto` | Neutral general-purpose kind when no explicit kind is supplied; no objective classifier in this slice |
 
-Kernel may invent new kinds later when none fit.
+All five default kinds — **`work`, `curate`, `code`, `deck`, `auto`** — are standing rows. Status/API always expose them; a kind with no live desk is `idle`. Dismissing a live desk archives it and reveals that kind’s idle row again.
+
+**Open design question — improvement #1 (explicitly deferred / not shipping):** classify objective text and suggest a desk kind. This slice never auto-suggests from the query. The Panel requires a selected standing kind, and omitted CLI/API kinds resolve to the neutral `auto` desk.
+
+Kernel may invent new kinds later when none fit, but no invention or classifier UI ships here.
 
 ## Default roles
 
@@ -175,8 +179,8 @@ Implemented in `okstratr.schedule_parse` with exhaustive tests.
 
 | Surface | Role |
 |---------|------|
-| **Herdr** | Text input + agent panes. Every agent **name/label includes `desk_id` + `thread_id`**. |
-| **okstratr UI** | Left-pane desk switch (Herdr-familiar), DAG + blackboard. **No free text input** (that’s Herdr). Sync focus with Herdr. Close warns / suspends kernel. |
+| **Herdr** | Normal agent runtime + panes. Every agent **name/label includes `desk_id` + `thread_id`**. Desk-grouping lens is later, not this slice. |
+| **okstratr UI** | Owns desk objective query input, workspace picker, standing desk lifecycle, role Config ⚙, **left pane** desk rail, DAG + blackboard; can Open in Herdr. |
 
 ### Labeling
 
@@ -184,12 +188,12 @@ Agent ids: `okstratr-{desk}-{role}-{node}` (filesystem-safe, capped at 64).
 
 Status JSON includes `herdr_labels` and `focus_desk_id`.
 
-### Input passthrough → kernel
+### Query input → kernel
 
-`kernel.route_herdr_input(text, desk_id=, thread_id=)`:
+Panel submits objective + explicit selected kind + `okbay_workspace_id` to `POST /api/desk/start`. `kernel.route_herdr_input(text, desk_id=, thread_id=)` remains a runtime routing helper:
 
 1. If targeted at an existing desk’s **CoS pane** (`desk_id` / `thread_id`) → that standing desk.
-2. If new chat / no desk → kernel spins up an appropriate desk (minimal for simple questions).
+2. If new chat / no desk → the runtime helper starts the neutral `auto` desk; objective-to-kind classification is not shipped.
 
 ### Focus + close
 
@@ -270,9 +274,9 @@ docs/DESK-KERNEL.md          this document
 src/okstratr/kernel.py       hire / ensure_cos / retire_worker / route_herdr_input / set_effort
 src/okstratr/bandit.py       effort→weights, arms, UCB1, rewards
 src/okstratr/web_egress.py   web gate: off|once|session
-src/okstratr/roles.py        role catalog + model hints + Switchbay plan roles
+src/okstratr/roles.py        role catalog + persisted Config ⚙ (`config/roles.json`)
 src/okstratr/desks.py        registry: start/stop/dismiss/status/schedule/hire/effort/retire/focus
-src/okstratr/okbay.py        work-coverage / reviews / split stubs (no ingest)
+src/okstratr/okbay.py        workspace list/select client + reviews/split stubs (no ingest)
 src/okstratr/cos.py          kind-aware planner templates
 src/okstratr/herdr.py        finite seats + okstratr-{desk}-{role}-{node} labels
 src/okstratr/schedule_parse.py  interval / named schedule parser
@@ -285,6 +289,7 @@ HTTP: /api/desk/* (incl. effort) /api/web (+ /api/seat alias)
 - Live Herdr focus sync (stub `focus_desk` only)
 - Real Grok/Herdr API calls from the kernel (finite dry-run remains)
 - Real network inside `web_egress` (gate only; callers search after approve)
-- Scheduling dialog UI / full left-pane desk switch UI
 - okbay ingest / work-coverage implementation (hooks only)
+- Improvement #1: classifying a query to suggest/choose a desk kind
+- Herdr desk-grouping lens
 - Inventing arbitrary new desk kinds at runtime (documented; may only pick defaults)

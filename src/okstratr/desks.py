@@ -22,7 +22,64 @@ from .paths import state_dir
 from .schedule_parse import ScheduleParseError, describe, parse_schedule_args
 
 VALID_DESK_STATES = frozenset({"working", "quiet", "dismissed"})
+# Placeholder / idle is UI-facing for default kinds with no live desk yet.
+VALID_STANDING_STATES = frozenset({"working", "quiet", "idle"})
 REGISTRY_NAME = "desks.json"
+PLACEHOLDER_ID_PREFIX = "kind:"
+
+
+def default_standing_rows(registry: "DeskRegistry | None" = None) -> list[dict[str, Any]]:
+    """Always expose default desk kinds (work/curate/code/deck/auto).
+
+    Prefer a live non-dismissed desk of that kind; otherwise a standing/idle
+    placeholder so CLI/HTTP/UI agree without QML-only fake rows.
+    """
+    reg = registry if registry is not None else default_registry()
+    by_kind: dict[str, list[Desk]] = {}
+    for d in reg.standing():
+        by_kind.setdefault(d.kind, []).append(d)
+
+    def _pick(kind: str) -> Desk | None:
+        cands = by_kind.get(kind) or []
+        if not cands:
+            return None
+        # Prefer working, then quiet; newest updated_at
+        cands = sorted(
+            cands,
+            key=lambda x: (0 if x.state == "working" else 1, -float(x.updated_at or 0)),
+        )
+        return cands[0]
+
+    rows: list[dict[str, Any]] = []
+    for kind in roles.DEFAULT_DESK_KINDS:
+        live = _pick(kind)
+        if live is not None:
+            row = live.to_dict()
+            row["placeholder"] = False
+            row["standing"] = True
+            rows.append(row)
+        else:
+            rows.append({
+                "id": f"{PLACEHOLDER_ID_PREFIX}{kind}",
+                "kind": kind,
+                "objective": "",
+                "state": "idle",
+                "roles": [],
+                "schedule": None,
+                "created_at": 0.0,
+                "updated_at": 0.0,
+                "thread_id": "",
+                "dag_relpath": "",
+                "hire": {},
+                "effort": None,
+                "org": {},
+                "okbay_workspace_id": "",
+                "commit_path": None,
+                "placeholder": True,
+                "standing": True,
+            })
+    return rows
+
 
 
 def _new_id() -> str:
@@ -191,30 +248,52 @@ class DeskRegistry:
         reset: bool = False,
         effort: float | None = None,
         run_cos: bool = True,
+        okbay_workspace_id: str | None = None,
+        workspace_id: str | None = None,
     ) -> dict[str, Any]:
         """
         Start (or resume) a desk. Kernel picks kind/roles; always hires CoS.
         Seeds a per-desk DAG and syncs to global dag.json.
+
+        Bind selected okbay workspace when okbay_workspace_id / workspace_id given
+        (also persists panel selection).
         """
         obj = (objective or "").strip()
+        wid = (okbay_workspace_id or workspace_id or "").strip()
+        if wid and wid not in ("local",):
+            okbay.set_selected_workspace(wid)
         plan = kernel.spin_up_desk_spec(obj, kind=kind, effort=effort)
         chosen_kind = plan["kind"]
         org = plan.get("org") or kernel.org_from_plan(plan)
         ws = okbay.active_workspace()
         now = time()
 
-        # Resume quiet desk with same objective+kind if present
+        # Resume quiet desk: same objective+kind, or same kind when focusing a quiet rail row
         resumed = None
-        if obj and not reset:
+        if not reset:
             for d in self.standing():
-                if d.objective == obj and d.kind == chosen_kind and d.state == "quiet":
+                if d.kind != chosen_kind or d.state != "quiet":
+                    continue
+                if obj and d.objective == obj:
                     resumed = d
                     break
+                if not obj and kind:
+                    # Start-from-rail without new query → resume quiet of that kind
+                    resumed = d
+                    break
+            if resumed is None and obj and kind and not reset:
+                # New query on existing quiet kind → continue that desk with new objective
+                for d in self.standing():
+                    if d.kind == chosen_kind and d.state == "quiet":
+                        resumed = d
+                        break
 
         if resumed is not None:
             desk = resumed
             desk.state = "working"
             desk.updated_at = now
+            if obj:
+                desk.objective = obj
             desk.roles = list(plan["roles"])
             desk.hire = plan
             desk.effort = plan.get("effort")
@@ -402,19 +481,24 @@ class DeskRegistry:
             web = web_egress.status()
         except Exception:  # noqa: BLE001
             web = {"mode": "off", "label": "Off", "chip": "Web: Off"}
+        defaults = default_standing_rows(self)
         return {
             "ok": True,
             "active_id": self.active_id,
             "focus_desk_id": self.focus_id or self.active_id,
             "active": active.to_dict() if active else None,
-            "standing": [d.to_dict() for d in self.standing()],
+            "standing": defaults,
+            "standing_live": [d.to_dict() for d in self.standing()],
+            "default_kinds": list(roles.DEFAULT_DESK_KINDS),
             "all": [d.to_dict() for d in self.desks.values()],
             "counts": {
                 "working": sum(1 for d in self.desks.values() if d.state == "working"),
                 "quiet": sum(1 for d in self.desks.values() if d.state == "quiet"),
                 "dismissed": sum(1 for d in self.desks.values() if d.state == "dismissed"),
+                "idle": sum(1 for r in defaults if r.get("state") == "idle"),
             },
             "roles_catalog": roles.catalog_summary(),
+            "roles_config": roles.load_role_config(),
             "effort": active.effort if active else None,
             "effort_slider": kernel.effort_slider(
                 active.effort if active else None,
@@ -422,6 +506,7 @@ class DeskRegistry:
             ),
             "web_egress": web,
             "okbay_workspace": okbay.active_workspace(),
+            "okbay_workspaces": okbay.list_workspaces(),
         }
 
     def hire(self, request: Any, *, desk_id: str | None = None) -> dict[str, Any]:
@@ -450,7 +535,10 @@ class DeskRegistry:
 
     def _resolve(self, desk_id: str | None) -> Desk | None:
         if desk_id:
-            return self.desks.get(desk_id)
+            did = str(desk_id)
+            if did.startswith(PLACEHOLDER_ID_PREFIX):
+                return None  # idle placeholder — no live desk
+            return self.desks.get(did)
         return self.active()
 
 

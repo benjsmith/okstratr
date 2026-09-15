@@ -184,7 +184,7 @@ def test_focus_desk_stub(state_dir: Path) -> None:
     assert "close_warning" in focused
     snap = status.write_status()
     assert snap["focus_desk_id"] == a["desk"]["id"]
-    assert snap["ui"]["text_input"] is False
+    assert snap["ui"]["text_input"] is True
     assert "kernel" in snap["ui"]["close_warning"].lower()
     # unused
     _ = b
@@ -228,4 +228,5 @@ def test_docs_lock_product_and_guards() -> None:
     assert "okstratr-{desk}-{role}-{node}" in blob
     assert "focus_desk_id" in blob
     assert "left-pane" in desk.lower() or "left pane" in desk.lower()
-    assert "no free text" in desk.lower() or "No free text" in desk
+    assert "query input" in desk.lower()
+    assert "no free text" not in desk.lower() or "herdr" in desk.lower()

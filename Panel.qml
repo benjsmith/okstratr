@@ -1,8 +1,8 @@
 // Okstratr panel: full-size FloatingWindow desk UI (native toplevel — not Overlay).
 // Real xdg-shell window so it does NOT paint over lock/screensaver (unlike WlrLayer.Overlay).
 // LEFT rail: standing desks from status.desk.standing / focus_desk_id (POST /api/desk/focus).
-// Main: objective, kind·state, DAG summary, blackboard head, Open in Herdr.
-// No free-text input (Herdr owns that). Keep open/close/toggle for shell summon.
+// Main: desk query input, workspace picker, config, DAG summary, blackboard, Herdr runtime.
+// okstratr owns desk objective input; Herdr remains the normal agent runtime.
 
 import QtQuick
 import QtQuick.Layouts
@@ -43,6 +43,16 @@ Item {
   readonly property string closeWarning: (status && status.ui && status.ui.close_warning) ? status.ui.close_warning : "Closing Okstratr will shut down the kernel. Standing desks will suspend (quiet) and the session returns to regular Herdr. Continue?"
   property string herdrLaunchMsg: ""
   readonly property var dagGraph: Model.dagGraph(status)
+  readonly property var workspaceRows: Model.workspaceRows(status)
+  readonly property bool workspaceReachable: Model.workspaceReachable(status)
+  property string selectedWorkspaceId: Model.selectedWorkspaceId(status)
+  property string selectedKind: "work"
+  property bool workspaceMenuOpen: false
+  property bool configOpen: false
+  property bool scheduleOpen: false
+  property string scheduleDeskId: ""
+  property string scheduleKind: ""
+  property string actionMsg: ""
 
   function persistPanelUi() {
     // Explicit close → panel_open false → stay closed after shell restart.
@@ -127,6 +137,90 @@ Item {
     Model.postJson(root.apiUrl + "/api/desk/focus", {desk_id: String(deskId)}, function (parsed) {
       if (parsed && parsed.ok === false)
         return
+      statusFile.reload()
+      root.refreshLive()
+    })
+  }
+
+  function afterDeskAction(parsed) {
+    if (parsed && parsed.ok === false) {
+      root.actionMsg = parsed.error || "Desk action failed"
+      return
+    }
+    root.actionMsg = (parsed && parsed.message) ? parsed.message : "Desk updated"
+    queryInput.text = ""
+    statusFile.reload()
+    root.refreshLive()
+  }
+
+  function startDesk(kind) {
+    var k = String(kind || root.selectedKind || "work")
+    root.selectedKind = k
+    var objective = String(queryInput.text || "").trim()
+    root.actionMsg = "Starting " + k + " desk…"
+    Model.postJson(root.apiUrl + "/api/desk/start", {
+      kind: k,
+      objective: objective,
+      workspace_id: root.selectedWorkspaceId
+    }, root.afterDeskAction)
+  }
+
+  function stopDesk(deskId) {
+    if (!deskId || String(deskId).indexOf("kind:") === 0) return
+    Model.postJson(root.apiUrl + "/api/desk/stop", {desk_id: String(deskId)}, root.afterDeskAction)
+  }
+
+  function dismissDesk(deskId) {
+    if (!deskId || String(deskId).indexOf("kind:") === 0) return
+    Model.postJson(root.apiUrl + "/api/desk/dismiss", {desk_id: String(deskId)}, root.afterDeskAction)
+  }
+
+  function chooseWorkspace(item) {
+    if (!item) return
+    root.selectedWorkspaceId = String(item.id || item.name || "local")
+    root.workspaceMenuOpen = false
+    Model.postJson(root.apiUrl + "/api/workspace/select", {
+      id: root.selectedWorkspaceId,
+      path: item.path || ""
+    }, function(parsed) {
+      root.actionMsg = "Workspace: " + root.selectedWorkspaceId
+      statusFile.reload()
+      root.refreshLive()
+    })
+  }
+
+  function openSchedule(deskId, kind) {
+    root.scheduleDeskId = String(deskId || "")
+    root.scheduleKind = String(kind || "desk")
+    scheduleInput.text = "daily"
+    root.scheduleOpen = true
+  }
+
+  function saveSchedule() {
+    var spec = String(scheduleInput.text || "").trim()
+    if (!spec) return
+    // Idle row: start the kind first, then attach schedule to returned desk id.
+    if (!root.scheduleDeskId || root.scheduleDeskId.indexOf("kind:") === 0) {
+      Model.postJson(root.apiUrl + "/api/desk/start", {
+        kind: root.scheduleKind,
+        objective: String(queryInput.text || "").trim(),
+        workspace_id: root.selectedWorkspaceId
+      }, function(started) {
+        var did = started && started.desk && started.desk.desk ? started.desk.desk.id : ""
+        if (!did && started && started.desk && started.desk.id) did = started.desk.id
+        Model.postJson(root.apiUrl + "/api/desk/schedule", {desk_id: did, spec: spec}, root.afterDeskAction)
+      })
+    } else {
+      Model.postJson(root.apiUrl + "/api/desk/schedule", {desk_id: root.scheduleDeskId, spec: spec}, root.afterDeskAction)
+    }
+    root.scheduleOpen = false
+  }
+
+  function saveRoleConfig() {
+    var rows = Model.roleConfigRows(root.status)
+    Model.postJson(root.apiUrl + "/api/config/roles", {roles: rows}, function(parsed) {
+      root.actionMsg = (parsed && parsed.ok) ? "Role config saved" : "Role config save failed"
+      root.configOpen = false
       statusFile.reload()
       root.refreshLive()
     })
@@ -258,7 +352,7 @@ Item {
             }
 
             Text {
-              text: "desk brain · pairs with Herdr · no text input"
+              text: "desk console · query here · Herdr runs agents"
               color: root.themeMuted
               font.pixelSize: 11
               Layout.fillWidth: true
@@ -282,6 +376,11 @@ Item {
             Chip {
               label: "Off"
               onClicked: root.setWeb("off")
+            }
+
+            Chip {
+              label: "⚙ Config"
+              onClicked: root.configOpen = true
             }
 
             Chip {
@@ -318,7 +417,7 @@ Item {
 
           // Left rail — standing desks
           Rectangle {
-            Layout.preferredWidth: 240
+            Layout.preferredWidth: 370
             Layout.fillHeight: true
             color: root.themeBg
 
@@ -353,48 +452,76 @@ Item {
                 model: root.standingDesks
 
                 delegate: Rectangle {
+                  id: deskRow
                   required property var modelData
                   width: deskList.width
-                  height: 56
+                  height: 94
                   radius: 8
+                  property bool isIdle: String(modelData.state || "") === "idle" || !!modelData.placeholder
                   color: (String(modelData.id) === String(root.focusDeskId)) ? "#3344aa88" : "#22000000"
-                  border.color: (String(modelData.id) === String(root.focusDeskId)) ? root.themeAccent : root.themeBorder
+                  border.color: (String(modelData.id) === String(root.focusDeskId) || String(modelData.kind) === root.selectedKind) ? root.themeAccent : root.themeBorder
                   border.width: 1
-
-                  Column {
-                    anchors.fill: parent
-                    anchors.margins: 8
-                    spacing: 2
-                    Text {
-                      text: (modelData.kind || "desk") + " · " + (modelData.state || "?")
-                      color: root.themeAccent
-                      font.pixelSize: 12
-                      font.bold: true
-                      width: parent.width
-                      elide: Text.ElideRight
-                    }
-                    Text {
-                      text: modelData.objective ? String(modelData.objective) : (modelData.id || "")
-                      color: root.themeFg
-                      font.pixelSize: 11
-                      width: parent.width
-                      elide: Text.ElideRight
-                    }
-                  }
 
                   MouseArea {
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: root.focusDesk(modelData.id)
+                    onClicked: {
+                      root.selectedKind = String(modelData.kind || "work")
+                      if (!deskRow.isIdle) root.focusDesk(modelData.id)
+                    }
                   }
-                }
 
-                Text {
-                  anchors.centerIn: parent
-                  visible: deskList.count === 0
-                  text: "No standing desks"
-                  color: root.themeMuted
-                  font.pixelSize: 12
+                  Column {
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    spacing: 7
+                    Row {
+                      width: parent.width
+                      spacing: 6
+                      Text {
+                        text: (modelData.kind || "desk") + " · " + (modelData.state || "idle")
+                        color: root.themeAccent
+                        font.pixelSize: 12
+                        font.bold: true
+                        width: Math.max(90, parent.width - deskObjective.width - 8)
+                        elide: Text.ElideRight
+                      }
+                      Text {
+                        id: deskObjective
+                        text: modelData.objective ? String(modelData.objective) : "standing"
+                        color: root.themeMuted
+                        font.pixelSize: 10
+                        width: Math.min(150, implicitWidth)
+                        elide: Text.ElideRight
+                      }
+                    }
+                    Row {
+                      spacing: 5
+                      Chip {
+                        label: deskRow.isIdle ? "Start" : "Continue"
+                        primary: root.selectedKind === String(modelData.kind)
+                        implicitWidth: 70
+                        onClicked: root.startDesk(modelData.kind)
+                      }
+                      Chip {
+                        label: "Stop"
+                        implicitWidth: 48
+                        opacity: deskRow.isIdle ? 0.35 : 1
+                        onClicked: root.stopDesk(modelData.id)
+                      }
+                      Chip {
+                        label: "Dismiss"
+                        implicitWidth: 62
+                        opacity: deskRow.isIdle ? 0.35 : 1
+                        onClicked: root.dismissDesk(modelData.id)
+                      }
+                      Chip {
+                        label: "Schedule…"
+                        implicitWidth: 76
+                        onClicked: root.openSchedule(modelData.id, modelData.kind)
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -417,6 +544,140 @@ Item {
                 id: mainCol
                 width: parent.width
                 spacing: 14
+
+                Text {
+                  text: "Desk objective"
+                  color: root.themeMuted
+                  font.pixelSize: 11
+                  font.bold: true
+                }
+
+                Row {
+                  width: parent.width
+                  spacing: 8
+
+                  Rectangle {
+                    width: Math.max(220, parent.width - workspacePicker.width - startQuery.width - 18)
+                    height: 42
+                    radius: 9
+                    color: root.themeBg
+                    border.width: queryInput.activeFocus ? 2 : 1
+                    border.color: queryInput.activeFocus ? root.themeAccent : root.themeBorder
+
+                    TextInput {
+                      id: queryInput
+                      anchors.fill: parent
+                      anchors.margins: 11
+                      color: root.themeFg
+                      selectionColor: root.themeAccent
+                      selectedTextColor: root.themeBg
+                      font.pixelSize: 14
+                      clip: true
+                      verticalAlignment: TextInput.AlignVCenter
+                      onAccepted: root.startDesk(root.selectedKind)
+                    }
+                    Text {
+                      anchors.fill: parent
+                      anchors.margins: 11
+                      visible: !queryInput.text && !queryInput.activeFocus
+                      text: "What should the " + root.selectedKind + " desk do?"
+                      color: root.themeMuted
+                      font.pixelSize: 14
+                      verticalAlignment: Text.AlignVCenter
+                    }
+                    MouseArea {
+                      anchors.fill: parent
+                      cursorShape: Qt.IBeamCursor
+                      onClicked: queryInput.forceActiveFocus()
+                      z: -1
+                    }
+                  }
+
+                  Rectangle {
+                    id: workspacePicker
+                    width: 150
+                    height: 42
+                    radius: 9
+                    color: root.themeBg
+                    border.width: 1
+                    border.color: root.workspaceMenuOpen ? root.themeAccent : root.themeBorder
+                    Text {
+                      anchors.centerIn: parent
+                      width: parent.width - 20
+                      horizontalAlignment: Text.AlignHCenter
+                      elide: Text.ElideRight
+                      text: (root.workspaceReachable ? "⌂ " : "") + root.selectedWorkspaceId + " ▾"
+                      color: root.themeFg
+                      font.pixelSize: 12
+                    }
+                    MouseArea {
+                      anchors.fill: parent
+                      cursorShape: Qt.PointingHandCursor
+                      onClicked: root.workspaceMenuOpen = !root.workspaceMenuOpen
+                    }
+                  }
+
+                  Chip {
+                    id: startQuery
+                    label: "Start " + root.selectedKind
+                    primary: true
+                    implicitHeight: 42
+                    implicitWidth: 110
+                    onClicked: root.startDesk(root.selectedKind)
+                  }
+                }
+
+                Rectangle {
+                  visible: root.workspaceMenuOpen
+                  width: 280
+                  height: Math.min(240, workspaceListCol.implicitHeight + 16)
+                  radius: 9
+                  color: root.themeBg
+                  border.width: 1
+                  border.color: root.themeBorder
+                  z: 20
+                  Column {
+                    id: workspaceListCol
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    spacing: 3
+                    Repeater {
+                      model: root.workspaceRows
+                      delegate: Rectangle {
+                        required property var modelData
+                        width: workspaceListCol.width
+                        height: 30
+                        radius: 6
+                        color: workspaceMa.containsMouse ? "#33ffffff" : "transparent"
+                        Text {
+                          anchors.fill: parent
+                          anchors.leftMargin: 8
+                          text: (modelData.name || modelData.id || "local") + (modelData.path ? "  ·  " + modelData.path : "")
+                          color: root.themeFg
+                          font.pixelSize: 11
+                          verticalAlignment: Text.AlignVCenter
+                          elide: Text.ElideRight
+                        }
+                        MouseArea {
+                          id: workspaceMa
+                          anchors.fill: parent
+                          hoverEnabled: true
+                          cursorShape: Qt.PointingHandCursor
+                          onClicked: root.chooseWorkspace(modelData)
+                        }
+                      }
+                    }
+                  }
+                }
+
+                Text {
+                  visible: root.actionMsg.length > 0
+                  text: root.actionMsg
+                  color: root.themeAccent
+                  font.pixelSize: 11
+                  width: parent.width
+                  elide: Text.ElideRight
+                }
 
                 Text {
                   text: {
@@ -684,13 +945,213 @@ Item {
                 }
 
                 Text {
-                  text: "Text input lives in Herdr. Workspace vision: Atlas | Nautilus | okstratr+Herdr"
+                  text: "Okstratr owns desk query input. Herdr remains the normal agent runtime. Auto-kind-from-objective is not shipping."
                   color: root.themeMuted
                   font.pixelSize: 10
                   wrapMode: Text.Wrap
                   width: parent.width
                 }
               }
+            }
+          }
+        }
+      }
+
+      // Lightweight modal host: real schedule + role-config persistence APIs.
+      Rectangle {
+        anchors.fill: parent
+        visible: root.configOpen || root.scheduleOpen
+        color: "#99000000"
+        z: 100
+
+        MouseArea {
+          anchors.fill: parent
+          onClicked: {
+            root.configOpen = false
+            root.scheduleOpen = false
+          }
+        }
+
+        Rectangle {
+          visible: root.scheduleOpen
+          anchors.centerIn: parent
+          width: 460
+          height: 190
+          radius: 12
+          color: root.themePanel
+          border.width: 1
+          border.color: root.themeBorder
+
+          MouseArea { anchors.fill: parent; onClicked: function(mouse) { mouse.accepted = true } }
+          Column {
+            anchors.fill: parent
+            anchors.margins: 18
+            spacing: 12
+            Text {
+              text: "Schedule " + root.scheduleKind + " desk"
+              color: root.themeFg
+              font.pixelSize: 16
+              font.bold: true
+            }
+            Text {
+              text: "Cadence: daily, hourly, weekly, 90m, 1h30m…"
+              color: root.themeMuted
+              font.pixelSize: 11
+            }
+            Rectangle {
+              width: parent.width
+              height: 40
+              radius: 8
+              color: root.themeBg
+              border.width: 1
+              border.color: scheduleInput.activeFocus ? root.themeAccent : root.themeBorder
+              TextInput {
+                id: scheduleInput
+                anchors.fill: parent
+                anchors.margins: 10
+                color: root.themeFg
+                font.pixelSize: 13
+                verticalAlignment: TextInput.AlignVCenter
+                onAccepted: root.saveSchedule()
+              }
+            }
+            Row {
+              spacing: 8
+              Chip { label: "Save schedule"; primary: true; onClicked: root.saveSchedule() }
+              Chip { label: "Cancel"; onClicked: root.scheduleOpen = false }
+            }
+          }
+        }
+
+        Rectangle {
+          visible: root.configOpen
+          anchors.centerIn: parent
+          width: Math.min(parent.width - 60, 900)
+          height: Math.min(parent.height - 60, 610)
+          radius: 12
+          color: root.themePanel
+          border.width: 1
+          border.color: root.themeBorder
+
+          MouseArea { anchors.fill: parent; onClicked: function(mouse) { mouse.accepted = true } }
+          Column {
+            anchors.fill: parent
+            anchors.margins: 18
+            spacing: 10
+            Text {
+              text: "⚙ Default roles"
+              color: root.themeFg
+              font.pixelSize: 18
+              font.bold: true
+            }
+            Text {
+              text: "Persisted in OKSTRATR_STATE_DIR/config/roles.json · CoS is always enabled"
+              color: root.themeMuted
+              font.pixelSize: 11
+            }
+
+            Row {
+              width: parent.width
+              spacing: 8
+              Text { text: "Enabled"; width: 60; color: root.themeMuted; font.pixelSize: 10 }
+              Text { text: "Role"; width: 110; color: root.themeMuted; font.pixelSize: 10 }
+              Text { text: "Hire cap"; width: 70; color: root.themeMuted; font.pixelSize: 10 }
+              Text { text: "Model hint"; width: 180; color: root.themeMuted; font.pixelSize: 10 }
+              Text { text: "Notes"; color: root.themeMuted; font.pixelSize: 10 }
+            }
+
+            Column {
+              id: rolesColumn
+              width: parent.width
+              spacing: 6
+              Repeater {
+                model: Model.roleConfigRows(root.status)
+                delegate: Rectangle {
+                  id: roleRow
+                  required property var modelData
+                  property bool rowEnabled: !!modelData.enabled
+                  width: rolesColumn.width
+                  height: 52
+                  radius: 7
+                  color: root.themeBg
+                  border.width: 1
+                  border.color: root.themeDivider
+                  Row {
+                    anchors.fill: parent
+                    anchors.margins: 7
+                    spacing: 8
+                    Rectangle {
+                      width: 60
+                      height: 32
+                      radius: 8
+                      color: roleRow.rowEnabled ? "#3344aa88" : "transparent"
+                      border.width: 1
+                      border.color: roleRow.rowEnabled ? root.themeAccent : root.themeBorder
+                      Text {
+                        anchors.centerIn: parent
+                        text: roleRow.rowEnabled ? "ON" : "OFF"
+                        color: roleRow.rowEnabled ? root.themeAccent : root.themeMuted
+                        font.pixelSize: 11
+                        font.bold: true
+                      }
+                      MouseArea {
+                        anchors.fill: parent
+                        enabled: !modelData.always
+                        cursorShape: modelData.always ? Qt.ArrowCursor : Qt.PointingHandCursor
+                        onClicked: {
+                          roleRow.rowEnabled = !roleRow.rowEnabled
+                          modelData.enabled = roleRow.rowEnabled
+                        }
+                      }
+                    }
+                    Text {
+                      text: modelData.title || modelData.id
+                      width: 110
+                      height: 32
+                      verticalAlignment: Text.AlignVCenter
+                      color: root.themeFg
+                      font.pixelSize: 12
+                      font.bold: !!modelData.always
+                      elide: Text.ElideRight
+                    }
+                    Rectangle {
+                      width: 70; height: 32; radius: 6; color: root.themePanel
+                      TextInput {
+                        anchors.fill: parent; anchors.margins: 7
+                        text: (modelData.hire_cap === null || modelData.hire_cap === undefined) ? "" : String(modelData.hire_cap)
+                        color: root.themeFg; font.pixelSize: 11; verticalAlignment: TextInput.AlignVCenter
+                        validator: IntValidator { bottom: 0; top: 99 }
+                        onEditingFinished: modelData.hire_cap = text ? Number(text) : null
+                      }
+                    }
+                    Rectangle {
+                      width: 180; height: 32; radius: 6; color: root.themePanel
+                      TextInput {
+                        anchors.fill: parent; anchors.margins: 7
+                        text: modelData.model_hint || ""
+                        color: root.themeFg; font.pixelSize: 11; verticalAlignment: TextInput.AlignVCenter
+                        onEditingFinished: modelData.model_hint = text
+                      }
+                    }
+                    Rectangle {
+                      width: Math.max(100, roleRow.width - 60 - 110 - 70 - 180 - 64)
+                      height: 32; radius: 6; color: root.themePanel
+                      TextInput {
+                        anchors.fill: parent; anchors.margins: 7
+                        text: modelData.notes || ""
+                        color: root.themeFg; font.pixelSize: 11; verticalAlignment: TextInput.AlignVCenter
+                        onEditingFinished: modelData.notes = text
+                      }
+                    }
+                  }
+                }
+              }
+            }
+
+            Row {
+              spacing: 8
+              Chip { label: "Save roles"; primary: true; onClicked: root.saveRoleConfig() }
+              Chip { label: "Cancel"; onClicked: root.configOpen = false }
             }
           }
         }

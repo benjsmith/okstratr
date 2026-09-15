@@ -16,8 +16,8 @@ HTTP: **127.0.0.1:8767** (okbay keeps **8766**)
 | Piece | Role |
 |-------|------|
 | **okbay** (`benjsmith.okbay`) | Knowledge graph + Atlas + Nautilus reveal + work-coverage ingest |
-| **okstratr** (this repo) | Orchestrator / desk brain — kernel, desks, durable DAG, CoS, schedule, blackboard, bar/panel |
-| **Herdr** (native Omarchy) | Agent **runtime / multiplexer** — panes, workspaces, agent lifecycle, socket API |
+| **okstratr** (this repo) | Desk console + orchestrator — **query input**, workspace bind, kernel, desks, durable DAG, CoS, schedule, blackboard, bar/panel |
+| **Herdr** (native Omarchy) | Normal agent **runtime / multiplexer** — panes, workspaces, agent lifecycle, socket API (no desk-kind grouping in this slice) |
 
 Work-coverage default lives in **okbay** (magical all-`~/Work`). **Biocure** is the current demo workspace in use (not an opt-in). Optional = create more focused workspaces via okbay split (subset of Work folders → new wiki; those folders leave default coverage). okstratr desks bind the active okbay workspace / thread ids — they do not ingest.
 
@@ -25,7 +25,7 @@ Work-coverage default lives in **okbay** (magical all-`~/Work`). **Biocure** is 
 
 **No.** Herdr does **runtime** orchestration (who is running, prompt them, wait for blocked/idle; agents can fan out in terminals). It does **not** own the desk-brain: durable product DAG across desks, CoS prioritization, human blackboard of claims/decisions tied to okbay knowledge, schedule/attention windows, or Omarchy bar/panel desk UI.
 
-**okstratr** owns the **plan + memory of the desk**; **Herdr** owns **live agent terminals**. Flow: desk start → kernel hires CoS + roles → CoS expand DAG → for ready nodes `herdr run-ready` (start/prompt/wait/**stop**) → post outcomes to blackboard → advance DAG.
+**okstratr** owns the **query input + plan + memory of the desk**; **Herdr** owns **live agent terminals**. Flow: desk start → kernel hires CoS + roles → CoS expand DAG → for ready nodes `herdr run-ready` (start/prompt/wait/**stop**) → post outcomes to blackboard → advance DAG.
 
 **Finite-job rule:** never leave Grok/Herdr agents running after a node — always stop/release.
 
@@ -44,7 +44,8 @@ Either plugin can be useful alone. They share a future multi-workspace layout, n
 ## What works today
 
 - Omarchy kinds: `service`, `bar-widget`, `panel` (no Atlas overlay)
-- **Desk lifecycle**: `desk start|stop|dismiss|status|schedule` (states `working|quiet|dismissed`)
+- **Five default standing desks** always exposed by status/API/UI: `work`, `curate`, `code`, `deck`, `auto` (`idle|working|quiet`; dismiss returns the kind to idle)
+- **Desk lifecycle**: `desk start|stop|dismiss|status|schedule` (live states `working|quiet|dismissed`)
 - **Kernel**: live **effort-bandit** hire / ensure_cos / retire_worker; persist org + effort + model hints (no real LLM)
 - **Web egress gate**: default off; `web on --once|--session`; status chip Web: Off|Once|Session
 - **Schedule parse**: named cadences + intervals (`90`, `1h30m`, `2 wks`, …)
@@ -53,10 +54,10 @@ Either plugin can be useful alone. They share a future multi-workspace layout, n
 - **Planner** kind-aware templates: work/auto → investigator/synthesizer/verifier
 - **Herdr** `herdr run-ready`: finite jobs, labels `okstratr-{desk}-{role}-{node}`, dry-run via `OKSTRATR_HERDR_DRY_RUN` / `--dry-run`
 - CLI: `status | desk (start|stop|dismiss|status|schedule|hire|effort|retire|focus) | web | seat(deprecated) | cos | herdr | dag | bb | serve`
-- HTTP: `/health`, `/api/status`, `/api/desk/*` (incl. hire/effort/retire/focus), `/api/web`, `/api/seat` (alias), `/api/cos/break`, `/api/herdr/launch`, `/api/herdr/run-ready`, `/api/dag`, `/api/blackboard`
-- Bar chip shows desk kind · state + DAG count + **Web:** chip; **panel is a fullscreen desk UI** (FloatingWindow toplevel — not Overlay; stays under lock/screensaver) with standing-desk rail, **AGENT SPACE** visual DAG (CoS + Blackboard idle defaults), blackboard, Omarchy chip actions (Open in Herdr via POST `/api/herdr/launch` (uwsm-app + terminal + systemd user env) / Refresh / web), no text input
+- HTTP: `/health`, `/api/status`, `/api/desk/*`, `/api/workspaces`, `/api/workspace/select`, `/api/config/roles`, `/api/web`, `/api/seat` (alias), `/api/cos/break`, `/api/herdr/*`, `/api/dag`, `/api/blackboard`
+- Bar chip shows desk kind · state + DAG count + **Web:** chip; **panel is a fullscreen desk console** with objective query input, okbay workspace picker (local fallback), five standing desk rows with Start/Stop/Dismiss/Schedule, persisted role Config ⚙, **AGENT SPACE**, blackboard, and Open in Herdr
 
-State dir: `~/.local/state/okstratr/` (`status.json`, `ui.json`, desks/DAG/blackboard; tests: `OKSTRATR_STATE_DIR`).
+State dir: `~/.local/state/okstratr/` (`status.json`, `ui.json`, `selected_workspace.json`, `config/roles.json`, desks/DAG/blackboard; tests: `OKSTRATR_STATE_DIR`).
 
 ## Non-goals (near-term)
 
@@ -74,7 +75,7 @@ State dir: `~/.local/state/okstratr/` (`status.json`, `ui.json`, desks/DAG/black
 ```
 manifest.json          Omarchy plugin contract (id benjsmith.okstratr)
 BarWidget.qml          bar pulse — desk objective
-Panel.qml              fullscreen FloatingWindow desk UI + Herdr launch
+Panel.qml              fullscreen desk console: input/workspace/config + Herdr launch
 Service.qml            headless keep-alive
 Model.js               status helpers
 src/okstratr/          kernel, desks, roles, schedule_parse, DAG, CoS, …
@@ -89,7 +90,11 @@ tests/                 schedule parse, desk lifecycle, DAG, CoS, Herdr dry-run
 
 **Bar chip:** left-click opens/focuses the panel (same as Super+Shift+O); right-click is a **no-op** for now (reserved). Omarchy menu entry: `contrib/okstratr-menu.jsonc` → Panel.
 
-The Omarchy **panel** (`Panel.qml`) is a **fullscreen desk UI**: a Quickshell `FloatingWindow` toplevel (native window chrome / maximize), not a tiny corner Overlay layershell. Super+Shift+O (see `contrib/hypr-bindings.lua`) or the bar chip summons it. Left rail lists standing desks; main shows objective, an **AGENT SPACE** DAG canvas (always CoS + Blackboard), blackboard head, and Open in Herdr (uwsm-app + xdg-terminal-exec/foot with `--dir $HOME` + systemd user env; objective via env only). Free-text input stays in Herdr.
+The Omarchy **panel** (`Panel.qml`) is a **fullscreen desk console**: a Quickshell `FloatingWindow` toplevel (native window chrome / maximize), not a tiny corner Overlay layershell. Super+Shift+O (see `contrib/hypr-bindings.lua`) or the bar chip summons it. The left rail always shows `work`, `curate`, `code`, `deck`, and `auto`, each with state plus Start/Stop/Dismiss/Schedule. The main pane owns the **desk objective query input**, okbay workspace selection (`GET :8766/api/workspace/list`, or `local` if unavailable), **AGENT SPACE**, blackboard, Config ⚙, and Open in Herdr.
+
+**Ownership:** okstratr owns desk query input and durable orchestration. Herdr stays the normal agent runtime; a future grouping lens belongs there, but is not part of this slice. Workspace and role config selections persist under `OKSTRATR_STATE_DIR` and are included in status.
+
+**Open design question — improvement #1 (not shipping):** should okstratr classify an objective and suggest a desk kind? This build does **not** classify/suggest. The user chooses a standing kind; omitted CLI/API kinds use the neutral `auto` desk.
 
 Panel open/close is persisted in `~/.local/state/okstratr/ui.json` (`panel_open`). After an omarchy-shell restart, if the desk was open it is re-summoned automatically; an explicit close stays closed. Theme colors come from `qs.Commons` `Color` (Omarchy `colors.toml`) with Tokyo Night fallbacks.
 

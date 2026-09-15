@@ -1,6 +1,6 @@
 """Kernel: hiring manager (no real LLM calls).
 
-Chooses a default desk kind from a light objective heuristic, always ensures
+Uses an explicit desk kind (or the neutral ``auto`` default), always ensures
 a CoS, grants roles under an effort-bandit utility + hard cap, and retires
 short-lived DAG workers. Live Auto bandit / effort-slider utility is in
 okstratr.bandit and documented in docs/DESK-KERNEL.md.
@@ -42,25 +42,17 @@ EFFORT_HIGH = 0.70
 
 
 def choose_kind(objective: str, kind: str | None = None) -> str:
+    """Use the explicit kind, otherwise the neutral ``auto`` desk.
+
+    Classifying objective text and suggesting/selecting a desk kind is product
+    improvement #1 and is deliberately not shipped in this slice.
+    Unknown explicit kinds remain allowed (kinds are not a forever-closed enum).
     """
-    Pick a desk kind. Explicit kind wins if recognized; else heuristic on objective.
-    Unknown explicit kinds are allowed (kernel may invent) but logged as custom.
-    """
+    del objective  # intentionally not classified
     if kind:
         k = kind.strip().lower()
         if k:
             return k
-    obj = (objective or "").strip()
-    if not obj:
-        return "auto"
-    if _CURATE_RE.search(obj):
-        return "curate"
-    if _DECK_RE.search(obj):
-        return "deck"
-    if _CODE_RE.search(obj):
-        return "code"
-    if _WORK_RE.search(obj):
-        return "work"
     return "auto"
 
 
