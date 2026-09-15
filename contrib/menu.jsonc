@@ -1,0 +1,7 @@
+{
+  "okstratr": { "label": "Okstratr", "icon": "󰒓" },
+  "okstratr.panel": {
+    "label": "Okstratr panel",
+    "command": ["omarchy-shell", "shell", "summon", "benjsmith.okstratr", "{\"surface\":\"panel\"}"]
+  }
+}

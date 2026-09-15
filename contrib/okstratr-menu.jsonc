@@ -1,0 +1,5 @@
+{
+  "Okstratr": [
+    { "label": "Panel", "action": "omarchy-shell shell summon benjsmith.okstratr '{\"surface\":\"panel\"}'" }
+  ]
+}
