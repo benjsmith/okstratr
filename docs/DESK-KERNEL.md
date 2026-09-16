@@ -93,7 +93,7 @@ Kind-specific templates (kept):
 | `deck` | Briefing / narrative synthesis |
 | `auto` | Neutral general-purpose kind when no explicit kind is supplied; no objective classifier in this slice |
 
-All five default kinds — **`work`, `curate`, `code`, `deck`, `auto`** — are standing rows. Status/API always expose them; a kind with no live desk is `idle`. Dismissing a live desk archives it and reveals that kind’s idle row again.
+All five default kinds — **`work`, `curate`, `code`, `deck`, `auto`** — are standing rows. Status/API always expose them. Prefer live **working**, then **quiet**; if none, show the most recent **dismissed** desk for that kind (deletable). Only when no desks of that kind exist at all is there an empty startable row — **without** an Idle label.
 
 **Query kind resolution (locked):** the query box starts the neutral **`auto`** desk. A leading slash overrides — `/work`, `/curate`, `/code`, `/deck`, `/auto` — and is stripped from the stored objective. Free-text classification / suggestion chips are **not** shipping (former improvement #1). Standing-rail **Start** uses that row’s kind unless the query contains a slash (slash wins).
 
@@ -129,7 +129,8 @@ desk start [kind] [objective…]   → hire CoS + defaults; seed DAG; land **qui
                                    after CoS unless `drive_herdr` (active seat run)
 desk stop / auto-quiet           → state=quiet; keep last live DAG; CoS ready
                                    (auto when every node is done|failed)
-desk dismiss                     → state=dismissed; tear down standing org; archive/clear DAG
+desk dismiss                     → state=dismissed; tear down standing org; archive DAG
+desk delete <desk_id>            → purge dismissed desk from desks.json (+ optional dir)
 desk status                      → active + registry snapshot (bandit + web chip)
 desk schedule …                  → parse + attach schedule (dialog UI later)
 desk hire <role>                 → kernel.hire (bandit + cap + curate guards)
@@ -139,14 +140,22 @@ desk focus [desk_id]             → stub bidirectional Herdr sync
 okstratr web status|on|off       → web egress gate (default off)
 ```
 
-States: **`working` | `quiet` | `dismissed`**.
+States (persisted): **`working` | `quiet` | `dismissed`**.
+UI display labels (`Model.deskStateLabel`): **working → Running**, **quiet → Idle**,
+**dismissed → dismissed**. Empty never-started placeholders show **kind only** (no Idle).
+
 `working` means an **active Herdr run**; CoS-only start lands `quiet` (planned /
 waiting). When the desk DAG is fully terminal (`done`|`failed` only),
-`desks.maybe_quiet_if_finished` auto-stops → `quiet`. UI idle placeholders appear
-only when no live desk of that kind exists (`default_standing_rows`).
+`desks.maybe_quiet_if_finished` auto-stops → `quiet`. Standing rows
+(`default_standing_rows`) prefer working → quiet → most recent dismissed; empty
+startable rows only when that kind has no desks at all.
 
 - **stop**: do not wipe the DAG; CoS remains the contact surface for further input.
-- **dismiss**: archive the desk’s DAG under the state dir, remove it from the standing registry (or mark dismissed and drop active), clear standing org so tokens are not burned on a dead desk.
+- **dismiss**: archive the desk’s DAG, mark dismissed (still visible in the rail as
+  **dismissed** with Delete); clear standing org so tokens are not burned on a dead desk.
+- **delete / purge**: permanently remove a dismissed desk from `desks.json` (HTTP
+  `POST /api/desk/delete` `{desk_id}`); optional cleanup of `desks/<id>/`. After
+  delete, that kind can show the empty Start row again.
 
 `seat` remains a **thin deprecated alias** for one release: warns, then `desk start auto …`.
 

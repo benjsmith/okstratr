@@ -1,6 +1,7 @@
 // Shared status helpers for Okstratr QML surfaces.
 // The daemon publishes ~/.local/state/okstratr/status.json.
-// Bind desk.kind + desk.state (working|quiet), not "seated".
+// Bind desk.kind + desk.state (working|quiet|dismissed), not "seated".
+// Display labels: working→Running, quiet→Idle, dismissed→dismissed; empty has no Idle suffix.
 
 .pragma library
 
@@ -51,6 +52,19 @@ function deskState(status) {
     return ""
 }
 
+/** UI label for internal desk state. Empty / placeholder / legacy idle → "". */
+function deskStateLabel(state) {
+    var s = String(state || "")
+    if (s === "working")
+        return "Running"
+    if (s === "quiet")
+        return "Idle"
+    if (s === "dismissed")
+        return "dismissed"
+    // never-started placeholder, legacy "idle", or unknown — no Idle suffix
+    return ""
+}
+
 function isReady(status) {
     if (!status)
         return false
@@ -73,7 +87,8 @@ function label(status, stale) {
     var st = deskState(status)
     var n = status.dag_nodes || (status.dag && status.dag.nodes) || 0
     if (kind && (st === "working" || st === "quiet")) {
-        var t = kind + "·" + st
+        var lab = deskStateLabel(st)
+        var t = lab ? (kind + "·" + lab) : kind
         if (n)
             t = t + " " + n
         if (t.length > 18)
