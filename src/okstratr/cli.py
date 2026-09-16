@@ -68,6 +68,14 @@ def _cmd_desk(args) -> int:
     if cmd == "dismiss":
         return _print(desks.dismiss())
 
+    if cmd == "delete":
+        return _print(
+            desks.delete(
+                getattr(args, "desk_id", None),
+                force=bool(getattr(args, "force", False)),
+            )
+        )
+
     if cmd == "status":
         snap = desks.status_snapshot()
         # also refresh status.json
@@ -99,7 +107,7 @@ def main(argv=None) -> int:
     sub.add_parser("status", help="Print and publish status.json")
 
     # --- desk (primary) ---
-    desk_p = sub.add_parser("desk", help="Desk lifecycle: start|stop|dismiss|status|schedule|hire|effort|retire|focus")
+    desk_p = sub.add_parser("desk", help="Desk lifecycle: start|stop|dismiss|delete|status|schedule|hire|effort|retire|focus")
     desk_sub = desk_p.add_subparsers(dest="desk_cmd", required=True)
 
     desk_start = desk_sub.add_parser("start", help="Start a desk (hire CoS + roles)")
@@ -140,6 +148,9 @@ def main(argv=None) -> int:
 
     desk_sub.add_parser("stop", help="Quiet desk; keep last live DAG; CoS ready")
     desk_sub.add_parser("dismiss", help="Disband desk; archive/clear standing org")
+    desk_del = desk_sub.add_parser("delete", help="Purge dismissed desk from registry")
+    desk_del.add_argument("desk_id", nargs="?", default=None, help="Desk id to purge")
+    desk_del.add_argument("--force", action="store_true", help="Allow purge of non-dismissed desk")
     desk_sub.add_parser("status", help="Show active desk + registry")
 
     desk_sched = desk_sub.add_parser(

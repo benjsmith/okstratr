@@ -147,8 +147,10 @@ def test_default_desks_present_in_status(state_dir: Path) -> None:
     assert [row["kind"] for row in desk_status["standing"]] == [
         "work", "curate", "code", "deck", "auto"
     ]
-    assert all(row["state"] == "idle" for row in desk_status["standing"])
+    # Empty never-started rows: placeholder, no Idle/"idle" state label
     assert all(row["placeholder"] is True for row in desk_status["standing"])
+    assert all(not row.get("state") for row in desk_status["standing"])
+    assert all(row["state"] != "idle" for row in desk_status["standing"])
 
     full_status = status.snapshot()
     assert [row["kind"] for row in full_status["desk"]["standing"]] == [
@@ -323,3 +325,88 @@ def test_dag_is_fully_terminal_helper(state_dir: Path) -> None:
     assert desks.dag_is_fully_terminal(g) is False
     g.mark_failed("child", notes="nope", save=True)
     assert desks.dag_is_fully_terminal(g) is True
+
+
+def test_standing_prefers_dismissed_over_empty(state_dir: Path) -> None:
+    """After dismiss, standing row keeps dismissed desk (not empty Idle placeholder)."""
+    from okstratr import desks
+
+    start = desks.start("Keep me visible", kind="work")
+    desk_id = start["desk"]["id"]
+    desks.dismiss(desk_id)
+
+    rows = desks.status_snapshot()["standing"]
+    work = next(row for row in rows if row["kind"] == "work")
+    assert work["id"] == desk_id
+    assert work["state"] == "dismissed"
+    assert work["placeholder"] is False
+    assert work["objective"] == "Keep me visible"
+
+    # Other kinds still empty (no Idle state)
+    curate = next(row for row in rows if row["kind"] == "curate")
+    assert curate["placeholder"] is True
+    assert not curate.get("state")
+
+
+def test_standing_prefers_quiet_over_dismissed(state_dir: Path) -> None:
+    from okstratr import desks
+
+    first = desks.start("Old work", kind="code")
+    desks.dismiss(first["desk"]["id"])
+    second = desks.start("Live quiet", kind="code")
+    assert second["desk"]["state"] == "quiet"
+
+    rows = desks.status_snapshot()["standing"]
+    code = next(row for row in rows if row["kind"] == "code")
+    assert code["id"] == second["desk"]["id"]
+    assert code["state"] == "quiet"
+    assert code["placeholder"] is False
+
+
+def test_desk_delete_purge(state_dir: Path) -> None:
+    from okstratr import desks
+    from okstratr.paths import state_dir as sd
+
+    start = desks.start("Purge me", kind="deck")
+    desk_id = start["desk"]["id"]
+    desk_dir = sd() / "desks" / desk_id
+    assert desk_dir.is_dir()
+
+    # Cannot delete while quiet/working
+    blocked = desks.delete(desk_id)
+    assert blocked["ok"] is False
+    assert "dismiss" in blocked["error"].lower() or "force" in blocked["error"].lower()
+
+    desks.dismiss(desk_id)
+    # Still visible as dismissed
+    deck = next(r for r in desks.status_snapshot()["standing"] if r["kind"] == "deck")
+    assert deck["state"] == "dismissed"
+
+    purged = desks.delete(desk_id)
+    assert purged["ok"] is True
+    assert purged["action"] == "delete"
+    assert purged["desk_id"] == desk_id
+    assert purged.get("cleaned_dir") is True
+
+    reg = desks.default_registry(force_reload=True)
+    assert desk_id not in reg.desks
+    assert not desk_dir.exists()
+
+    # Kind row is empty startable again (no Idle label)
+    deck2 = next(r for r in desks.status_snapshot()["standing"] if r["kind"] == "deck")
+    assert deck2["placeholder"] is True
+    assert not deck2.get("state")
+
+
+def test_desk_delete_force_and_cli(state_dir: Path, capsys: pytest.CaptureFixture) -> None:
+    from okstratr.cli import main
+    from okstratr import desks
+
+    start = desks.start("Force purge", kind="auto")
+    desk_id = start["desk"]["id"]
+    # force allows purge without dismiss
+    assert main(["desk", "delete", desk_id, "--force"]) == 0
+    out = capsys.readouterr().out
+    assert desk_id in out
+    reg = desks.default_registry(force_reload=True)
+    assert desk_id not in reg.desks

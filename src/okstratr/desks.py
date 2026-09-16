@@ -1,9 +1,13 @@
-"""Desk registry: start / stop / dismiss / status / schedule.
+"""Desk registry: start / stop / dismiss / delete / status / schedule.
 
 States: working | quiet | dismissed.
 - stop  → quiet; keep last live DAG visible; CoS remains ready
-- dismiss → disband standing org; archive/clear DAG
+- dismiss → disband standing org; archive/clear DAG (kept in registry, deletable)
+- delete/purge → permanently remove a dismissed desk from desks.json
 Persists under OKSTRATR_STATE_DIR / desks.json (+ per-desk DAG files).
+
+UI display labels (not persisted): working→Running, quiet→Idle, dismissed→dismissed.
+Empty never-started placeholders have no Idle label.
 """
 
 from __future__ import annotations
@@ -22,8 +26,8 @@ from .paths import state_dir
 from .schedule_parse import ScheduleParseError, describe, parse_schedule_args
 
 VALID_DESK_STATES = frozenset({"working", "quiet", "dismissed"})
-# Placeholder / idle is UI-facing for default kinds with no live desk yet.
-VALID_STANDING_STATES = frozenset({"working", "quiet", "idle"})
+# Standing row states exposed to UI (empty string = never-started placeholder).
+VALID_STANDING_STATES = frozenset({"working", "quiet", "dismissed", ""})
 # Node states that mean work is still in flight / queued (not finished).
 ACTIVE_NODE_STATES = frozenset({"pending", "ready", "running", "blocked"})
 TERMINAL_NODE_STATES = frozenset({"done", "failed"})
@@ -34,16 +38,21 @@ PLACEHOLDER_ID_PREFIX = "kind:"
 def default_standing_rows(registry: "DeskRegistry | None" = None) -> list[dict[str, Any]]:
     """Always expose default desk kinds (work/curate/code/deck/auto).
 
-    Prefer a live non-dismissed desk of that kind; otherwise a standing/idle
-    placeholder so CLI/HTTP/UI agree without QML-only fake rows.
+    Prefer live working, then quiet; if none, most recent dismissed desk for
+    that kind (still deletable). Only when no desks of that kind exist at all
+    do we emit an empty startable placeholder — without labeling it Idle.
     """
     reg = registry if registry is not None else default_registry()
-    by_kind: dict[str, list[Desk]] = {}
+    by_kind_live: dict[str, list[Desk]] = {}
     for d in reg.standing():
-        by_kind.setdefault(d.kind, []).append(d)
+        by_kind_live.setdefault(d.kind, []).append(d)
+    by_kind_dismissed: dict[str, list[Desk]] = {}
+    for d in reg.desks.values():
+        if d.state == "dismissed":
+            by_kind_dismissed.setdefault(d.kind, []).append(d)
 
-    def _pick(kind: str) -> Desk | None:
-        cands = by_kind.get(kind) or []
+    def _pick_live(kind: str) -> Desk | None:
+        cands = by_kind_live.get(kind) or []
         if not cands:
             return None
         # Prefer working, then quiet; newest updated_at
@@ -53,34 +62,48 @@ def default_standing_rows(registry: "DeskRegistry | None" = None) -> list[dict[s
         )
         return cands[0]
 
+    def _pick_dismissed(kind: str) -> Desk | None:
+        cands = by_kind_dismissed.get(kind) or []
+        if not cands:
+            return None
+        cands = sorted(cands, key=lambda x: -float(x.updated_at or 0))
+        return cands[0]
+
     rows: list[dict[str, Any]] = []
     for kind in roles.DEFAULT_DESK_KINDS:
-        live = _pick(kind)
+        live = _pick_live(kind)
         if live is not None:
             row = live.to_dict()
             row["placeholder"] = False
             row["standing"] = True
             rows.append(row)
-        else:
-            rows.append({
-                "id": f"{PLACEHOLDER_ID_PREFIX}{kind}",
-                "kind": kind,
-                "objective": "",
-                "state": "idle",
-                "roles": [],
-                "schedule": None,
-                "created_at": 0.0,
-                "updated_at": 0.0,
-                "thread_id": "",
-                "dag_relpath": "",
-                "hire": {},
-                "effort": None,
-                "org": {},
-                "okbay_workspace_id": "",
-                "commit_path": None,
-                "placeholder": True,
-                "standing": True,
-            })
+            continue
+        dismissed = _pick_dismissed(kind)
+        if dismissed is not None:
+            row = dismissed.to_dict()
+            row["placeholder"] = False
+            row["standing"] = True
+            rows.append(row)
+            continue
+        rows.append({
+            "id": f"{PLACEHOLDER_ID_PREFIX}{kind}",
+            "kind": kind,
+            "objective": "",
+            "state": "",
+            "roles": [],
+            "schedule": None,
+            "created_at": 0.0,
+            "updated_at": 0.0,
+            "thread_id": "",
+            "dag_relpath": "",
+            "hire": {},
+            "effort": None,
+            "org": {},
+            "okbay_workspace_id": "",
+            "commit_path": None,
+            "placeholder": True,
+            "standing": True,
+        })
     return rows
 
 
@@ -485,6 +508,70 @@ class DeskRegistry:
             "message": "Desk disbanded; standing org torn down; DAG archived",
         }
 
+    def delete(
+        self,
+        desk_id: str | None = None,
+        *,
+        force: bool = False,
+        cleanup: bool = True,
+    ) -> dict[str, Any]:
+        """Permanently remove a desk from the registry (purge).
+
+        Only dismissed desks may be deleted unless ``force`` is True.
+        Optionally removes leftover per-desk directory under state/desks/.
+        """
+        return self.purge(desk_id, force=force, cleanup=cleanup)
+
+    def purge(
+        self,
+        desk_id: str | None = None,
+        *,
+        force: bool = False,
+        cleanup: bool = True,
+    ) -> dict[str, Any]:
+        """Alias for delete — purge desk from desks.json (+ optional dir cleanup)."""
+        desk = self._resolve(desk_id)
+        if desk is None and desk_id:
+            did = str(desk_id)
+            if not did.startswith(PLACEHOLDER_ID_PREFIX):
+                desk = self.desks.get(did)
+        if desk is None:
+            return {"ok": False, "error": "no desk to delete"}
+        if desk.state != "dismissed" and not force:
+            return {
+                "ok": False,
+                "error": f"desk {desk.id} is {desk.state}; dismiss first (or pass force)",
+                "desk_id": desk.id,
+                "state": desk.state,
+            }
+        removed_id = desk.id
+        removed_kind = desk.kind
+        removed_state = desk.state
+        desk_dir = self.desks_root() / removed_id
+        cleaned = False
+        if cleanup and desk_dir.is_dir():
+            try:
+                shutil.rmtree(desk_dir)
+                cleaned = True
+            except OSError:
+                cleaned = False
+        if self.active_id == removed_id:
+            self.active_id = None
+        if self.focus_id == removed_id:
+            self.focus_id = self.active_id
+        del self.desks[removed_id]
+        self.save()
+        status.write_status()
+        return {
+            "ok": True,
+            "action": "delete",
+            "desk_id": removed_id,
+            "kind": removed_kind,
+            "was_state": removed_state,
+            "cleaned_dir": cleaned,
+            "message": f"Desk {removed_id} purged from registry",
+        }
+
     def schedule(
         self,
         args: list[str] | str,
@@ -535,7 +622,7 @@ class DeskRegistry:
                 "working": sum(1 for d in self.desks.values() if d.state == "working"),
                 "quiet": sum(1 for d in self.desks.values() if d.state == "quiet"),
                 "dismissed": sum(1 for d in self.desks.values() if d.state == "dismissed"),
-                "idle": sum(1 for r in defaults if r.get("state") == "idle"),
+                "empty": sum(1 for r in defaults if r.get("placeholder")),
             },
             "roles_catalog": roles.catalog_summary(),
             "roles_config": roles.load_role_config(),
@@ -624,7 +711,7 @@ class DeskRegistry:
         if desk_id:
             did = str(desk_id)
             if did.startswith(PLACEHOLDER_ID_PREFIX):
-                return None  # idle placeholder — no live desk
+                return None  # empty kind placeholder — no live desk
             return self.desks.get(did)
         return self.active()
 
@@ -652,6 +739,24 @@ def stop(desk_id: str | None = None) -> dict[str, Any]:
 
 def dismiss(desk_id: str | None = None) -> dict[str, Any]:
     return default_registry().dismiss(desk_id)
+
+
+def delete(
+    desk_id: str | None = None,
+    *,
+    force: bool = False,
+    cleanup: bool = True,
+) -> dict[str, Any]:
+    return default_registry().delete(desk_id, force=force, cleanup=cleanup)
+
+
+def purge(
+    desk_id: str | None = None,
+    *,
+    force: bool = False,
+    cleanup: bool = True,
+) -> dict[str, Any]:
+    return default_registry().purge(desk_id, force=force, cleanup=cleanup)
 
 
 def schedule(args: list[str] | str, **kwargs: Any) -> dict[str, Any]:

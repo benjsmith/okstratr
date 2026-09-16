@@ -173,6 +173,19 @@ class Handler(BaseHTTPRequestHandler):
             code, body, ct = _json_bytes(desks.dismiss(str(desk_id) if desk_id else None))
             return self._send(code, body, ct)
 
+        if path == "/api/desk/delete":
+            desk_id = payload.get("desk_id") or payload.get("id")
+            force = bool(payload.get("force", False))
+            cleanup = True if payload.get("cleanup") is None else bool(payload.get("cleanup"))
+            code, body, ct = _json_bytes(
+                desks.delete(
+                    str(desk_id) if desk_id else None,
+                    force=force,
+                    cleanup=cleanup,
+                )
+            )
+            return self._send(code, body, ct)
+
         if path == "/api/desk/schedule":
             desk_id = payload.get("desk_id") or payload.get("id")
             spec = payload.get("spec") or payload.get("schedule") or payload.get("args")

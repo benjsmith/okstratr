@@ -191,6 +191,11 @@ Item {
     Model.postJson(root.apiUrl + "/api/desk/dismiss", {desk_id: String(deskId)}, root.afterDeskAction)
   }
 
+  function deleteDesk(deskId) {
+    if (!deskId || String(deskId).indexOf("kind:") === 0) return
+    Model.postJson(root.apiUrl + "/api/desk/delete", {desk_id: String(deskId)}, root.afterDeskAction)
+  }
+
   function chooseWorkspace(item) {
     if (!item) return
     root.selectedWorkspaceId = String(item.id || item.name || "local")
@@ -215,7 +220,7 @@ Item {
   function saveSchedule() {
     var spec = String(scheduleInput.text || "").trim()
     if (!spec) return
-    // Idle row: start the kind first, then attach schedule to returned desk id.
+    // Empty kind row: start the kind first, then attach schedule to returned desk id.
     if (!root.scheduleDeskId || root.scheduleDeskId.indexOf("kind:") === 0) {
       Model.postJson(root.apiUrl + "/api/desk/start", {
         kind: root.scheduleKind,
@@ -473,10 +478,13 @@ Item {
                   width: deskList.width
                   height: 94
                   radius: 8
-                  property bool isIdle: String(modelData.state || "") === "idle" || !!modelData.placeholder
-                  // quiet = finished-kept (not idle placeholder); working = active run
+                  // empty placeholder (never started) — not dismissed, not quiet Idle
+                  property bool isEmpty: !!modelData.placeholder || (!String(modelData.state || "") && String(modelData.id || "").indexOf("kind:") === 0)
+                  property bool isDismissed: String(modelData.state || "") === "dismissed"
+                  // quiet = finished-kept (display Idle); working = active run (display Running)
                   property bool isQuiet: String(modelData.state || "") === "quiet"
                   property bool isBusy: String(modelData.state || "") === "working"
+                  property string stateLabel: Model.deskStateLabel(modelData.state)
                   color: (String(modelData.id) === String(root.focusDeskId)) ? "#3344aa88" : "#22000000"
                   border.color: (String(modelData.id) === String(root.focusDeskId) || String(modelData.kind) === root.selectedKind) ? root.themeAccent : root.themeBorder
                   border.width: 1
@@ -486,7 +494,7 @@ Item {
                     cursorShape: Qt.PointingHandCursor
                     onClicked: {
                       root.selectedKind = String(modelData.kind || "work")
-                      if (!deskRow.isIdle) root.focusDesk(modelData.id)
+                      if (!deskRow.isEmpty) root.focusDesk(modelData.id)
                     }
                   }
 
@@ -498,7 +506,9 @@ Item {
                       width: parent.width
                       spacing: 6
                       Text {
-                        text: (modelData.kind || "desk") + " · " + (modelData.state || "idle")
+                        text: deskRow.stateLabel
+                              ? ((modelData.kind || "desk") + " · " + deskRow.stateLabel)
+                              : (modelData.kind || "desk")
                         color: root.themeAccent
                         font.pixelSize: 12
                         font.bold: true
@@ -507,7 +517,7 @@ Item {
                       }
                       Text {
                         id: deskObjective
-                        text: modelData.objective ? String(modelData.objective) : "standing"
+                        text: modelData.objective ? String(modelData.objective) : (deskRow.isEmpty ? "standing" : (deskRow.isDismissed ? "dismissed" : "standing"))
                         color: root.themeMuted
                         font.pixelSize: 10
                         width: Math.min(150, implicitWidth)
@@ -517,7 +527,8 @@ Item {
                     Row {
                       spacing: 5
                       Chip {
-                        label: deskRow.isIdle ? "Start" : "Continue"
+                        // empty / dismissed → Start (new run); quiet Idle / working Running → Continue
+                        label: (deskRow.isEmpty || deskRow.isDismissed) ? "Start" : "Continue"
                         primary: root.selectedKind === String(modelData.kind)
                         implicitWidth: 70
                         onClicked: root.startDesk(modelData.kind)
@@ -525,15 +536,23 @@ Item {
                       Chip {
                         label: "Stop"
                         implicitWidth: 48
-                        // Dim when idle or already quiet (no active run); keep Dismiss full.
-                        opacity: (deskRow.isIdle || deskRow.isQuiet) ? 0.35 : 1
+                        // Dim unless actively Running
+                        opacity: deskRow.isBusy ? 1 : 0.35
                         onClicked: root.stopDesk(modelData.id)
                       }
                       Chip {
+                        // dismissed: Delete (purge); empty: dim Dismiss; live: Dismiss
+                        visible: !deskRow.isDismissed
                         label: "Dismiss"
                         implicitWidth: 62
-                        opacity: deskRow.isIdle ? 0.35 : 1
+                        opacity: deskRow.isEmpty ? 0.35 : 1
                         onClicked: root.dismissDesk(modelData.id)
+                      }
+                      Chip {
+                        visible: deskRow.isDismissed
+                        label: "Delete"
+                        implicitWidth: 58
+                        onClicked: root.deleteDesk(modelData.id)
                       }
                       Chip {
                         label: "Schedule…"
