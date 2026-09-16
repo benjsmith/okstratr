@@ -300,6 +300,32 @@ class DeskRegistry:
                 if self.active_id == d.id:
                     self.active_id = winner.id
         if dismissed_ids:
+            # Loop already moves active/focus off dismissed twins onto the winner.
+            # If they still point at a dismissed desk, re-point to a kept live desk,
+            # then always sync objective + DAG (guest bug: status stayed kind-only /
+            # "Neutral only" after the old active twin was dismissed).
+            def _pick_kept() -> str | None:
+                if kind and kind in kept:
+                    return kept[kind]
+                if kept:
+                    return next(iter(kept.values()))
+                return None
+
+            ad = self.desks.get(self.active_id) if self.active_id else None
+            if self.active_id and (ad is None or ad.state == "dismissed"):
+                self.active_id = _pick_kept()
+            fd = self.desks.get(self.focus_id) if self.focus_id else None
+            if self.focus_id and (fd is None or fd.state == "dismissed"):
+                self.focus_id = self.active_id
+            active = self.active()
+            if active is not None:
+                status.set_objective(str(active.objective or "").strip())
+                try:
+                    self._sync_global_dag_from_desk(active)
+                except Exception:  # noqa: BLE001
+                    pass
+            elif self.active_id is None:
+                status.set_objective("")
             self.save()
             status.write_status()
             status_msg = (
@@ -313,6 +339,8 @@ class DeskRegistry:
             "kept": kept,
             "dismissed": dismissed_ids,
             "message": status_msg,
+            "active_id": self.active_id,
+            "focus_id": self.focus_id,
         }
 
     def quiet_standing(self) -> dict[str, Any]:

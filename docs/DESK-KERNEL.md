@@ -128,9 +128,11 @@ See `okstratr.roles` for constants, model hints, and independence notes.
 desk start [kind] [objective…]   → hire CoS + defaults; seed DAG; land **quiet**
                                    after CoS unless `drive_herdr` (active seat run).
                                    **UI Start** with a non-empty objective sends
-                                   `drive_herdr: true` and server runs `herdr.run_ready`
-                                   (bounded); desk shows **Running** while seats run,
-                                   then **Idle** when the DAG is finished.
+                                   `drive_herdr: true` and server **kicks a background
+                                   thread** running bounded `herdr.run_ready` (HTTP
+                                   returns immediately with `herdr_job`); desk shows
+                                   **Running** while the job runs, then **Idle** when
+                                   the DAG is finished (or on all-seat failure).
 desk stop / auto-quiet           → state=quiet; keep last live DAG; CoS ready
                                    (auto when every node is done|failed)
 desk dismiss                     → state=dismissed; tear down standing org; archive DAG
@@ -160,7 +162,9 @@ The registry may historically hold multiple quiet desks of the same kind; the st
 picker only shows the preferred one (working → quiet, newest) → objective/DAG drift.
 On `start` (when not `reset`), always **resume** `preferred_live_desk(kind)` and update
 the objective — do not spawn a second quiet twin. `desks.dedupe_kind(kind)` (also run
-at end of start) dismisses older quiet twins. HTTP: `POST /api/desk/dedupe_kind`.
+at end of start) dismisses older quiet twins, **re-points `active_id`/`focus_id` to the
+kept desk**, and `set_objective` + syncs the global DAG so status does not stay blank /
+kind-only after the old active twin is dismissed. HTTP: `POST /api/desk/dedupe_kind`.
 
 
 - **stop**: do not wipe the DAG; CoS remains the contact surface for further input.
@@ -349,12 +353,26 @@ HTTP: /api/desk/* (incl. effort) /api/web (+ /api/seat alias)
 - Inventing arbitrary new desk kinds at runtime (documented; may only pick defaults)
 
 
+## Async Start → Herdr drive
+
+When `POST /api/desk/start` includes `drive_herdr: true` and a non-empty effective
+objective, the handler still runs `desks.start` (CoS + working state) on the request
+thread, then **kicks a daemon thread** that calls `herdr.run_ready(limit=…)`. The HTTP
+response returns immediately with `{ok, desk, herdr_job: {id, state:"running"}, message}`
+so the Panel XHR does not block for N seats × wait. Job state lives in memory (and
+optionally `~/.local/state/okstratr/herdr_jobs.json`); `/api/status` and
+`GET /api/herdr/job` expose the active snapshot. On completion the worker auto-quiets
+if the DAG is terminal, sets `herdr_error` (and quiets the desk) if every seat failed,
+and calls `write_status()`. Only one drive job runs at a time globally — a second Start
+while a job is `running` is rejected with a clear error. The Panel polls
+`refreshLive` every 2s while the desk is working or a job is running, and surfaces
+`herdr_error` into `actionMsg`.
+
 ## Follow-ups (robustness batch)
 
-Out of scope for the focus/dedupe/stub PR — track next:
+Out of scope for earlier robustness PRs — track next:
 
 - Full DeskSession rewrite
-- Async background `run_ready` after Start
 - Splitting Panel.qml into modules
 - Replacing FileView + HTTP dual bind
 - Live Herdr pane focus sync (beyond recording focus_desk_id)

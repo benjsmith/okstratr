@@ -9,7 +9,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from . import PORT
-from . import blackboard, cos, dag, desks, herdr, okbay, roles, status, web_egress
+from . import blackboard, cos, dag, desks, herdr, herdr_jobs, okbay, roles, status, web_egress
 
 _NODE_STATE_RE = re.compile(r"^/api/dag/nodes/([^/]+)/state$")
 
@@ -91,6 +91,13 @@ class Handler(BaseHTTPRequestHandler):
 
         if path in ("/api/config/roles", "/api/roles/config"):
             code, body, ct = _json_bytes(roles.load_role_config())
+            return self._send(code, body, ct)
+
+        if path in ("/api/herdr/job", "/api/herdr/jobs"):
+            qs_id = (qs.get("id") or [None])[0]
+            job = herdr_jobs.get_job(str(qs_id) if qs_id else None)
+            payload = {"ok": True, "herdr_job": job, "last_error": herdr_jobs.last_error()}
+            code, body, ct = _json_bytes(payload)
             return self._send(code, body, ct)
 
         code, body, ct = _json_bytes({"error": "not found", "path": path}, 404)
@@ -177,61 +184,54 @@ class Handler(BaseHTTPRequestHandler):
             if drive_herdr and effective_objective:
                 dry = payload.get("dry_run")
                 dry_run = None if dry is None else bool(dry)
-                herdr_run: dict[str, Any] | None = None
-                herdr_err: str | None = None
-                try:
-                    herdr_run = herdr.run_ready(limit=herdr_limit, dry_run=dry_run)
-                except Exception as e:  # noqa: BLE001 — surface missing/broken herdr clearly
-                    herdr_err = str(e)
-                    herdr_run = {"ok": False, "error": f"herdr.run_ready failed: {e}"}
-                snap["herdr_run"] = herdr_run
-                # Detect missing Herdr / hard failure / all seats failed (don't leave Running forever).
-                results = (herdr_run or {}).get("results") or []
-                missing = any(
-                    "Herdr not on PATH" in str(r.get("error") or "")
-                    or "not on PATH" in str(r.get("error") or "")
-                    or "missing required --pane" in str(r.get("error") or "")
-                    or "pane split failed" in str(r.get("error") or "")
-                    for r in results
-                    if isinstance(r, dict)
-                )
-                all_failed = bool(results) and all(
-                    isinstance(r, dict) and r.get("ok") is False for r in results
-                )
-                hard_fail = herdr_run.get("ok") is False and not results
-                if herdr_err or missing or hard_fail or all_failed:
-                    if not herdr_err:
-                        herdr_err = (
-                            (results[0].get("error") if results else None)
-                            or herdr_run.get("error")
-                            or "herdr.run_ready failed"
-                        )
-                    snap["herdr_error"] = herdr_err
-                    snap["message"] = (
-                        f"Start drove Herdr but seats failed: {herdr_err}. Desk Idle (quiet)."
-                    )
-                    try:
-                        desk_id = (result.get("desk") or {}).get("id")
-                        desks.stop(str(desk_id) if desk_id else None)
-                    except Exception as stop_e:  # noqa: BLE001
-                        snap["herdr_error_stop"] = str(stop_e)
-                # Refresh start-result desk state (working while seats run, or quiet if done/failed).
                 desk_id = (result.get("desk") or {}).get("id")
-                try:
-                    reg = desks.default_registry(force_reload=True)
-                    updated = dict(result)
-                    if desk_id and desk_id in reg.desks:
-                        updated["desk"] = reg.desks[desk_id].to_dict()
-                    if herdr_run and herdr_run.get("desk_quieted"):
-                        updated["desk_quieted"] = herdr_run["desk_quieted"]
-                    snap["desk"] = updated
-                except Exception:  # noqa: BLE001
-                    snap["desk"] = result
-                # Refresh top-level status fields without dropping desk / herdr_run.
+                # Non-blocking: kick background thread; HTTP returns immediately.
+                kicked = herdr_jobs.kick_run_ready(
+                    desk_id=str(desk_id) if desk_id else None,
+                    limit=herdr_limit,
+                    dry_run=dry_run,
+                )
+                snap["herdr_job"] = kicked.get("herdr_job")
+                if not kicked.get("ok"):
+                    snap["ok"] = False
+                    snap["error"] = kicked.get("error") or "Herdr drive already running"
+                    snap["message"] = kicked.get("message") or snap["error"]
+                    # Desk was already started/resumed; leave it — caller can Stop.
+                else:
+                    snap["message"] = kicked.get("message") or (
+                        "Desk started; Herdr drive running in background."
+                    )
+                    # Keep desk working while job runs (start already set working when drive_herdr).
+                    try:
+                        reg = desks.default_registry(force_reload=True)
+                        updated = dict(result)
+                        if desk_id and desk_id in reg.desks:
+                            updated["desk"] = reg.desks[desk_id].to_dict()
+                        snap["desk"] = updated
+                    except Exception:  # noqa: BLE001
+                        snap["desk"] = result
+                # Refresh status without dropping desk / herdr_job / message.
                 fresh = status.write_status()
                 for key, val in fresh.items():
-                    if key not in ("desk", "herdr_run", "herdr_error", "message", "cos", "cos_break"):
+                    if key not in (
+                        "desk",
+                        "herdr_run",
+                        "herdr_job",
+                        "herdr_error",
+                        "message",
+                        "cos",
+                        "cos_break",
+                        "ok",
+                        "error",
+                    ):
                         snap[key] = val
+                # Surface active job + any prior error from jobs module.
+                job_snap = herdr_jobs.snapshot_for_status()
+                if job_snap:
+                    snap["herdr_job"] = snap.get("herdr_job") or job_snap
+                err = herdr_jobs.last_error()
+                if err and not snap.get("herdr_error"):
+                    snap["herdr_error"] = err
             if launch and objective:
                 snap["herdr_launch"] = herdr.launch(objective)
             code, body, ct = _json_bytes(snap)
