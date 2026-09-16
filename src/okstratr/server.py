@@ -166,8 +166,15 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/seat":
                 snap["deprecated"] = "seat"
                 snap["warning"] = "Use POST /api/desk/start; /api/seat aliases desk start auto"
-            # Drive seats after CoS when requested (UI Start with non-empty objective).
-            if drive_herdr and objective:
+            # Drive seats after CoS when requested (UI Start with effective objective).
+            # Empty query may resume a quiet desk — use that desk's standing objective.
+            desk_obj = str((result.get("desk") or {}).get("objective") or "").strip()
+            effective_objective = objective or desk_obj
+            if drive_herdr and not objective and desk_obj:
+                # Resumed quiet desk with empty query: keep objective (already on desk).
+                objective = desk_obj
+                snap["objective"] = desk_obj
+            if drive_herdr and effective_objective:
                 dry = payload.get("dry_run")
                 dry_run = None if dry is None else bool(dry)
                 herdr_run: dict[str, Any] | None = None
@@ -178,15 +185,21 @@ class Handler(BaseHTTPRequestHandler):
                     herdr_err = str(e)
                     herdr_run = {"ok": False, "error": f"herdr.run_ready failed: {e}"}
                 snap["herdr_run"] = herdr_run
-                # Detect missing Herdr / hard failure (run_ready usually returns ok:False, no raise).
+                # Detect missing Herdr / hard failure / all seats failed (don't leave Running forever).
                 results = (herdr_run or {}).get("results") or []
                 missing = any(
                     "Herdr not on PATH" in str(r.get("error") or "")
                     or "not on PATH" in str(r.get("error") or "")
+                    or "missing required --pane" in str(r.get("error") or "")
+                    or "pane split failed" in str(r.get("error") or "")
                     for r in results
                     if isinstance(r, dict)
                 )
-                if herdr_err or missing or herdr_run.get("ok") is False and not results:
+                all_failed = bool(results) and all(
+                    isinstance(r, dict) and r.get("ok") is False for r in results
+                )
+                hard_fail = herdr_run.get("ok") is False and not results
+                if herdr_err or missing or hard_fail or all_failed:
                     if not herdr_err:
                         herdr_err = (
                             (results[0].get("error") if results else None)

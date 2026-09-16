@@ -152,23 +152,27 @@ def test_herdr_agent_id_format(state_dir: Path) -> None:
     g = dag.default_dag(force_reload=True)
     node = g.nodes["investigator"]
     aid = herdr.make_agent_id(desk_id, "investigator", node.id)
-    assert aid.startswith("okstratr-")
-    assert "investigator" in aid
-    assert len(aid) <= herdr.AGENT_ID_MAX
+    assert aid.startswith("o")
+    assert len(aid) <= herdr.AGENT_ID_MAX <= 32
+    assert herdr.HERDR_NAME_RE.match(aid)
     labels = herdr.labels_for_node(node)
     assert labels["desk_id"] == desk_id
     assert labels["thread_id"]
-    assert labels["format"] == "okstratr-{desk}-{role}-{node}"
+    assert labels["format"] == "o{desk8}{role6}{node6}"
     assert labels["agent_id"] == aid
+    # Long desk/role/node must still fit Herdr 32-char grammar
+    long_id = herdr.make_agent_id("d" * 80, "investigator-role-name", "node-" + ("x" * 40))
+    assert len(long_id) <= 32
+    assert herdr.HERDR_NAME_RE.match(long_id)
 
     out = herdr.run_ready(limit=1, dry_run=True)
     assert out["dry_run"] is True
     assert out["ran"] == ["investigator"]
     assert out["results"][0]["herdr_labels"]["desk_id"] == desk_id
     agent = out["results"][0]["agent_id"]
-    assert agent.startswith("okstratr-")
-    parts = agent.split("-")
-    assert parts[0] == "okstratr"
+    assert agent.startswith("o")
+    assert len(agent) <= 32
+    assert "--pane" in " ".join(" ".join(c) for c in out["results"][0]["would_exec"])
 
 
 def test_focus_desk_stub(state_dir: Path) -> None:
@@ -225,7 +229,9 @@ def test_docs_lock_product_and_guards() -> None:
     assert "opt-in" in desk.lower()  # the "not an opt-in" correction
     assert "retire_worker" in desk
     assert "curator_worker" in desk
-    assert "okstratr-{desk}-{role}-{node}" in blob
+    assert "o{desk8}{role6}{node6}" in blob
+    assert "pane split" in desk.lower()
+    assert "reuses" in desk.lower() or "empty" in desk.lower()
     assert "focus_desk_id" in blob
     assert "left-pane" in desk.lower() or "left pane" in desk.lower()
     assert "query input" in desk.lower()

@@ -395,7 +395,12 @@ class DeskRegistry:
                 cos.break_down(obj, kind=chosen_kind)
             self._persist_desk_dag(desk)
 
-        status.set_objective(obj)
+        # Keep existing desk/status objective when resuming quiet with empty query.
+        if obj:
+            status.set_objective(obj)
+        elif resumed is not None and (desk.objective or "").strip():
+            status.set_objective(str(desk.objective).strip())
+        # else: leave seated objective alone (don't blank on empty Start/Continue)
         # working == active Herdr run. CoS-only / planned desks land quiet.
         landed_quiet = False
         if not drive_herdr and desk.state == "working":
@@ -415,7 +420,7 @@ class DeskRegistry:
                 "desk_id": desk.id,
                 "thread_id": desk.thread_id,
                 "focus_desk_id": self.focus_id or desk.id,
-                "format": "okstratr-{desk}-{role}-{node}",
+                "format": "o{desk8}{role6}{node6}",
             },
             "focus_desk_id": self.focus_id or desk.id,
             "effort": desk.effort,

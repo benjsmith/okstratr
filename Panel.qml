@@ -132,8 +132,43 @@ Item {
     })
   }
 
+  function standingObjectiveForKind(kind) {
+    // Prefer standing desk of that kind, then focused desk, then status.objective.
+    var rows = Model.standingDesks(root.status) || []
+    var k = String(kind || "")
+    var i
+    for (i = 0; i < rows.length; i++) {
+      var row = rows[i]
+      if (!row || row.empty) continue
+      if (k && String(row.kind) === k && row.objective)
+        return String(row.objective)
+    }
+    var fid = String(root.focusDeskId || "")
+    if (fid) {
+      for (i = 0; i < rows.length; i++) {
+        if (rows[i] && String(rows[i].id) === fid && rows[i].objective)
+          return String(rows[i].objective)
+      }
+    }
+    if (root.status && root.status.objective)
+      return String(root.status.objective)
+    return ""
+  }
+
   function focusDesk(deskId) {
     if (!deskId) return
+    // Refill query with this desk's objective so Continue/Start can edit & rerun.
+    var rows = Model.standingDesks(root.status) || []
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i]
+      if (row && String(row.id) === String(deskId)) {
+        if (row.kind)
+          root.selectedKind = String(row.kind)
+        if (row.objective)
+          queryInput.text = String(row.objective)
+        break
+      }
+    }
     Model.postJson(root.apiUrl + "/api/desk/focus", {desk_id: String(deskId)}, function (parsed) {
       if (parsed && parsed.ok === false)
         return
@@ -144,11 +179,27 @@ Item {
 
   function afterDeskAction(parsed) {
     if (parsed && parsed.ok === false) {
-      root.actionMsg = parsed.error || "Desk action failed"
+      root.actionMsg = parsed.herdr_error || parsed.error || "Desk action failed"
+      statusFile.reload()
+      root.refreshLive()
       return
     }
-    root.actionMsg = (parsed && parsed.message) ? parsed.message : "Desk updated"
-    queryInput.text = ""
+    if (parsed && parsed.herdr_error)
+      root.actionMsg = parsed.message || ("Herdr: " + parsed.herdr_error)
+    else
+      root.actionMsg = (parsed && parsed.message) ? parsed.message : "Desk updated"
+    // Do not clear queryInput on stop — keep objective for Continue/rerun.
+    // If query empty and start returned a desk objective, refill it.
+    var nested = parsed && parsed.desk
+    var deskObj = ""
+    if (nested) {
+      if (nested.desk && nested.desk.objective)
+        deskObj = String(nested.desk.objective)
+      else if (nested.objective)
+        deskObj = String(nested.objective)
+    }
+    if (deskObj && !String(queryInput.text || "").trim())
+      queryInput.text = deskObj
     statusFile.reload()
     root.refreshLive()
   }
@@ -168,8 +219,11 @@ Item {
     var k = parsed.slash ? parsed.kind : String(kind || root.selectedKind || "auto")
     root.selectedKind = k
     var objective = parsed.objective
+    // Empty query (Continue/Start after Stop) → reuse standing desk objective.
+    if (!String(objective || "").trim())
+      objective = root.standingObjectiveForKind(k)
     root.actionMsg = "Starting " + k + " desk…"
-    // Non-empty objective → drive Herdr (run_ready) so Start doesn't park Idle.
+    // Non-empty effective objective → drive Herdr (run_ready) so Start doesn't park Idle.
     var payload = {
       kind: k,
       objective: objective,
