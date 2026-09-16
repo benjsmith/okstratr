@@ -17,6 +17,7 @@ def state_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     import okstratr.blackboard as bb
     import okstratr.dag as dag
     import okstratr.desks as desks
+    import okstratr.herdr_jobs as herdr_jobs
     import okstratr.status as status
 
     bb._DEFAULT = None
@@ -25,6 +26,7 @@ def state_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     dag._DEFAULT_PATH = None
     desks._DEFAULT = None
     desks._DEFAULT_PATH = None
+    herdr_jobs.reset_for_tests()
     status._loaded = False
     status._loaded_from = None
     status._seated_objective = ""
@@ -413,11 +415,13 @@ def test_desk_delete_force_and_cli(state_dir: Path, capsys: pytest.CaptureFixtur
 
 
 def test_http_start_drive_herdr_runs_ready(state_dir: Path) -> None:
-    """POST /api/desk/start with drive_herdr=True runs herdr.run_ready (dry-run)."""
+    """POST /api/desk/start with drive_herdr=True kicks async herdr.run_ready (dry-run)."""
     from okstratr.server import Handler
     from http.server import ThreadingHTTPServer
     import threading
+    import time
     import urllib.request
+    from okstratr import herdr_jobs
 
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     port = httpd.server_address[1]
@@ -441,17 +445,26 @@ def test_http_start_drive_herdr_runs_ready(state_dir: Path) -> None:
         )
         with urllib.request.urlopen(req) as r:
             body = json.loads(r.read().decode())
-        assert "herdr_run" in body
-        hr = body["herdr_run"]
-        assert hr.get("dry_run") is True
-        assert hr.get("ran"), "expected at least one ready seat to run"
+        assert "herdr_job" in body
+        job = body["herdr_job"]
+        assert job.get("id")
+        assert job.get("state") in ("running", "done")  # dry-run may finish instantly
         desk = body.get("desk") or {}
-        # Start result shape preserved (desk.desk.id)
         assert (desk.get("desk") or {}).get("id")
         assert desk.get("drive_herdr") is True
-        # After bounded dry-run of the full Switchbay chain, DAG is often terminal → Idle
-        state = (desk.get("desk") or {}).get("state")
-        assert state in ("quiet", "working")
+        # Wait for background job to finish
+        deadline = time.time() + 10
+        final = None
+        while time.time() < deadline:
+            final = herdr_jobs.get_job(job["id"])
+            if final and final.get("state") in ("done", "failed"):
+                break
+            time.sleep(0.05)
+        assert final is not None
+        assert final.get("state") in ("done", "failed")
+        hr = final.get("herdr_run") or {}
+        assert hr.get("dry_run") is True
+        assert hr.get("ran"), "expected at least one ready seat to run"
     finally:
         httpd.shutdown()
 
@@ -515,13 +528,13 @@ def test_start_empty_objective_keeps_quiet_desk_objective(state_dir: Path) -> No
 
 
 def test_http_start_all_seats_failed_quiets_and_surfaces_error(state_dir: Path, monkeypatch) -> None:
-    """When every Herdr seat fails, desk must Idle and response includes herdr_error."""
+    """When every Herdr seat fails, background job quiets desk and sets herdr_error."""
     from okstratr.server import Handler
     from http.server import ThreadingHTTPServer
-    import json
     import threading
+    import time
     import urllib.request
-    from okstratr import herdr, desks
+    from okstratr import herdr, desks, herdr_jobs, status
 
     def boom(**kwargs):
         return {
@@ -552,11 +565,22 @@ def test_http_start_all_seats_failed_quiets_and_surfaces_error(state_dir: Path, 
         )
         with urllib.request.urlopen(req) as r:
             body = json.loads(r.read().decode())
-        assert body.get("herdr_error")
-        assert "missing required --pane" in body["herdr_error"]
-        assert "Idle" in (body.get("message") or "") or "quiet" in (body.get("message") or "").lower()
-        desk = (body.get("desk") or {}).get("desk") or body.get("desk") or {}
-        # After stop, state should be quiet
+        assert body.get("herdr_job", {}).get("id")
+        job_id = body["herdr_job"]["id"]
+        deadline = time.time() + 5
+        final = None
+        while time.time() < deadline:
+            final = herdr_jobs.get_job(job_id)
+            if final and final.get("state") in ("done", "failed"):
+                break
+            time.sleep(0.05)
+        assert final is not None
+        assert final.get("state") == "failed"
+        assert "missing required --pane" in (final.get("error") or "")
+        assert herdr_jobs.last_error()
+        snap = status.write_status()
+        assert snap.get("herdr_error")
+        assert "missing required --pane" in snap["herdr_error"]
         reg = desks.default_registry(force_reload=True)
         active = reg.active()
         assert active is not None
@@ -642,3 +666,123 @@ def test_start_resumes_preferred_live_not_twin(state_dir: Path) -> None:
     assert r2["desk"]["objective"] == "Second work"
     reg = desks.default_registry(force_reload=True)
     assert len([d for d in reg.standing() if d.kind == "work"]) == 1
+
+
+def test_http_start_drive_herdr_returns_before_completion(state_dir: Path, monkeypatch) -> None:
+    """Start HTTP returns while mocked run_ready is still sleeping; job finishes later."""
+    from okstratr.server import Handler
+    from http.server import ThreadingHTTPServer
+    import threading
+    import time
+    import urllib.request
+    from okstratr import herdr, herdr_jobs
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_ready(**kwargs):
+        started.set()
+        release.wait(timeout=5)
+        return {
+            "ok": True,
+            "dry_run": True,
+            "results": [{"ok": True, "node_id": "investigator", "state": "done"}],
+            "ran": ["investigator"],
+        }
+
+    monkeypatch.setattr(herdr, "run_ready", slow_ready)
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    port = httpd.server_address[1]
+    t = threading.Thread(target=httpd.serve_forever, daemon=True)
+    t.start()
+    try:
+        t0 = time.time()
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/desk/start",
+            data=json.dumps({
+                "objective": "Async please",
+                "kind": "auto",
+                "drive_herdr": True,
+                "herdr_limit": 1,
+            }).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5) as r:
+            body = json.loads(r.read().decode())
+        elapsed = time.time() - t0
+        assert elapsed < 1.0, f"Start blocked too long ({elapsed:.2f}s)"
+        assert body.get("herdr_job", {}).get("state") == "running"
+        job_id = body["herdr_job"]["id"]
+        assert started.wait(timeout=2), "worker never entered run_ready"
+        # Still running until we release
+        assert herdr_jobs.get_job(job_id)["state"] == "running"
+        # Second Start while running must reject
+        req2 = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/desk/start",
+            data=json.dumps({
+                "objective": "Second start",
+                "kind": "work",
+                "drive_herdr": True,
+            }).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req2, timeout=5) as r:
+            body2 = json.loads(r.read().decode())
+        assert body2.get("ok") is False
+        assert "already running" in (body2.get("error") or "").lower() or "already running" in (
+            body2.get("message") or ""
+        ).lower()
+        release.set()
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            j = herdr_jobs.get_job(job_id)
+            if j and j.get("state") == "done":
+                break
+            time.sleep(0.05)
+        assert herdr_jobs.get_job(job_id)["state"] == "done"
+        # Job endpoint
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/herdr/job?id={job_id}") as r:
+            job_body = json.loads(r.read().decode())
+        assert job_body.get("herdr_job", {}).get("id") == job_id
+        assert job_body["herdr_job"]["state"] == "done"
+    finally:
+        release.set()
+        httpd.shutdown()
+
+
+def test_dedupe_kind_repoints_active_and_objective(state_dir: Path) -> None:
+    """After dedupe dismisses the active twin, active/focus + status objective follow the kept desk."""
+    from okstratr import desks, status
+
+    desks.start("Keep me objective", kind="auto", reset=True)
+    desks.stop()
+    reg = desks.default_registry(force_reload=True)
+    first = next(d for d in reg.desks.values() if d.kind == "auto" and d.state == "quiet")
+    # Make the twin the *active* one (older quiet that somehow held active_id)
+    twin = desks.Desk(
+        id="desk-twin-active",
+        kind="auto",
+        objective="Neutral only twin",
+        state="quiet",
+        roles=list(first.roles),
+        created_at=first.created_at - 10,
+        updated_at=first.updated_at - 10,
+        thread_id="thread-desk-twin-active",
+        dag_relpath="desks/desk-twin-active/dag.json",
+    )
+    reg.desks[twin.id] = twin
+    reg.active_id = twin.id
+    reg.focus_id = twin.id
+    reg.save()
+    status.set_objective(twin.objective)
+
+    out = desks.dedupe_kind("auto")
+    assert out["ok"] is True
+    assert twin.id in out["dismissed"]
+    reg = desks.default_registry(force_reload=True)
+    assert reg.active_id == first.id
+    assert reg.focus_id == first.id
+    assert status.get_objective() == "Keep me objective"

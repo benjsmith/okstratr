@@ -108,7 +108,20 @@ Item {
 
   function refreshLive() {
     Model.getJson(root.apiUrl + "/api/status", function (parsed) {
-      if (parsed) root.status = parsed
+      if (!parsed) return
+      root.status = parsed
+      // Surface async Herdr job errors after Start returns (non-blocking).
+      if (parsed.herdr_error) {
+        var errMsg = parsed.message || ("Herdr: " + parsed.herdr_error)
+        if (root.actionMsg !== errMsg)
+          root.actionMsg = errMsg
+      } else if (parsed.herdr_job && parsed.herdr_job.state === "running") {
+        var jid = parsed.herdr_job.id || "?"
+        var runMsg = "Herdr running (job " + jid + ")"
+        // Keep Start message if it already mentions the job; else show Running.
+        if (!root.actionMsg || root.actionMsg.indexOf("Herdr") < 0)
+          root.actionMsg = runMsg
+      }
     })
   }
 
@@ -205,6 +218,8 @@ Item {
     }
     if (parsed && parsed.herdr_error)
       root.actionMsg = parsed.message || ("Herdr: " + parsed.herdr_error)
+    else if (parsed && parsed.herdr_job && parsed.herdr_job.state === "running")
+      root.actionMsg = parsed.message || ("Herdr running (job " + parsed.herdr_job.id + ")")
     else
       root.actionMsg = (parsed && parsed.message) ? parsed.message : "Desk updated"
     // Do not clear queryInput on stop — keep objective for Continue/rerun.
@@ -356,6 +371,18 @@ Item {
   }
 
   Component.onCompleted: uiFile.reload()
+
+  // Poll status while desk is working or a Herdr drive job is running (async Start).
+  Timer {
+    id: livePollTimer
+    interval: 2000
+    repeat: true
+    running: root.opened && (
+      String(root.deskState || "") === "working"
+      || (root.status && root.status.herdr_job && String(root.status.herdr_job.state || "") === "running")
+    )
+    onTriggered: root.refreshLive()
+  }
 
 
   // Omarchy-native chip control (mint accent) — replaces Qt Quick Controls Button

@@ -192,6 +192,29 @@ def snapshot() -> dict[str, Any]:
         web_egress = dict(web_egress)
         web_egress.setdefault("message", deny_msg)
 
+    herdr_job = None
+    herdr_error = None
+    try:
+        from . import herdr_jobs
+
+        herdr_job = herdr_jobs.snapshot_for_status()
+        herdr_error = herdr_jobs.last_error()
+        if herdr_job and herdr_job.get("state") == "running":
+            jid = herdr_job.get("id")
+            prog = herdr_job.get("progress") or {}
+            ran_n = prog.get("ran")
+            lim = prog.get("limit") or herdr_job.get("limit")
+            extra = f"Herdr job {jid} running"
+            if ran_n is not None and lim is not None:
+                extra = f"Herdr job {jid} running ({ran_n}/{lim})"
+            msg = f"{msg} · {extra}" if msg else extra
+        elif herdr_error:
+            msg = f"{msg} · Herdr error: {herdr_error}" if msg else f"Herdr error: {herdr_error}"
+    except Exception:  # noqa: BLE001
+        _log.warning("status.snapshot: herdr_jobs failed", exc_info=True)
+        herdr_job = None
+        herdr_error = None
+
     return {
         "ts": time(),
         "state": display_state,
@@ -214,6 +237,8 @@ def snapshot() -> dict[str, Any]:
         "okbay": okbay.active_workspace(),
         "okbay_workspaces": workspaces,
         "roles_config": roles_config,
+        "herdr_job": herdr_job,
+        "herdr_error": herdr_error,
         "ui": {
             "left_pane": "desk_switch",
             "show_dag": True,
