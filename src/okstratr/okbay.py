@@ -246,21 +246,42 @@ def split_workspace(folders: list[str] | None = None, *, name: str | None = None
 
 def reviews_commit_path() -> dict[str, Any]:
     """
-    Hook stub to okbay reviews — the land/commit path for curate desks.
+    Hook to okbay reviews — the land/commit path for curate desks.
 
     Configured when OKSTRATR_OKBAY_REVIEWS or OKSTRATR_CURATE_COMMIT is truthy,
-    or OKSTRATR_OKBAY_COMMIT_PATH is a non-empty path. No ingest here.
+    or OKSTRATR_OKBAY_COMMIT_PATH points at an existing writable path (file or
+    directory). Still a hook (no ingest / no commit execution here).
     """
     path = (os.environ.get("OKSTRATR_OKBAY_COMMIT_PATH") or "").strip()
-    configured = bool(path) or _truthy("OKSTRATR_OKBAY_REVIEWS") or _truthy(
-        "OKSTRATR_CURATE_COMMIT"
-    )
+    path_ok = False
+    path_writable = False
+    if path:
+        p = Path(path).expanduser()
+        try:
+            if p.exists():
+                path_ok = True
+                if p.is_dir():
+                    path_writable = os.access(p, os.W_OK)
+                else:
+                    path_writable = os.access(p, os.W_OK)
+            else:
+                # Parent writable → treat as configurable land target
+                parent = p.parent
+                path_writable = parent.is_dir() and os.access(parent, os.W_OK)
+                path_ok = path_writable
+        except OSError:
+            path_ok = False
+            path_writable = False
+    flag = _truthy("OKSTRATR_OKBAY_REVIEWS") or _truthy("OKSTRATR_CURATE_COMMIT")
+    configured = bool(flag) or (bool(path) and path_ok and path_writable)
     return {
         "configured": configured,
         "path": path or None,
+        "path_exists": path_ok,
+        "path_writable": path_writable,
         "owner": "okbay",
         "hook": "reviews",
-        "stub": True,
+        "stub": not configured,
         "notes": (
             "Curate desks must not spawn curator_worker unless this land path "
             "is configured (Switchbay bug: token burn without commit)."
@@ -269,9 +290,70 @@ def reviews_commit_path() -> dict[str, Any]:
 
 
 def thread_ids_for_desk(desk_id: str | None = None) -> list[str]:
-    """okbay thread ids the desk should label Herdr panes with (stub)."""
+    """okbay thread ids the desk should label Herdr panes with.
+
+    Prefers OKSTRATR_OKBAY_THREAD_IDS, then persisted remember_desk_thread map,
+    then ``thread-{desk_id}``.
+    """
     ws = active_workspace()
     ids = list(ws.get("thread_ids") or [])
-    if desk_id and not ids:
-        ids = [f"thread-{desk_id}"]
+    if desk_id:
+        remembered = list_remembered_threads().get("threads") or {}
+        tid = remembered.get(str(desk_id))
+        if tid and tid not in ids:
+            ids = [tid] + ids
+        if not ids:
+            ids = [f"thread-{desk_id}"]
     return ids
+
+
+_THREAD_LIST_NAME = "okbay_threads.json"
+
+
+def _thread_list_path() -> Path:
+    from .paths import state_dir
+
+    return state_dir() / _THREAD_LIST_NAME
+
+
+def remember_desk_thread(desk_id: str, thread_id: str) -> dict[str, Any]:
+    """Persist desk→thread_id mapping for Herdr labels (okbay workspace stub)."""
+    did = (desk_id or "").strip()
+    tid = (thread_id or "").strip()
+    if not did or not tid:
+        return {"ok": False, "error": "desk_id and thread_id required"}
+    path = _thread_list_path()
+    data: dict[str, Any] = {"threads": {}, "order": []}
+    if path.is_file():
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                data["threads"] = dict(raw.get("threads") or {})
+                data["order"] = list(raw.get("order") or [])
+        except (OSError, json.JSONDecodeError):
+            pass
+    data["threads"][did] = tid
+    if did in data["order"]:
+        data["order"] = [x for x in data["order"] if x != did]
+    data["order"].append(did)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return {"ok": True, "desk_id": did, "thread_id": tid, "count": len(data["threads"])}
+
+
+def list_remembered_threads() -> dict[str, Any]:
+    """Return persisted desk thread ids (stub list for status / Herdr labels)."""
+    path = _thread_list_path()
+    if not path.is_file():
+        return {"ok": True, "threads": {}, "order": []}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"ok": True, "threads": {}, "order": []}
+    if not isinstance(raw, dict):
+        return {"ok": True, "threads": {}, "order": []}
+    return {
+        "ok": True,
+        "threads": dict(raw.get("threads") or {}),
+        "order": list(raw.get("order") or []),
+    }

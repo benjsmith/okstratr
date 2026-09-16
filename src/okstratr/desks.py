@@ -253,6 +253,89 @@ class DeskRegistry:
     def standing(self) -> list[Desk]:
         return [d for d in self.desks.values() if d.state != "dismissed"]
 
+    def preferred_live_desk(self, kind: str) -> Desk | None:
+        """Newest working desk of kind, else newest quiet (standing picker order)."""
+        live = [d for d in self.standing() if d.kind == kind]
+        if not live:
+            return None
+        live.sort(
+            key=lambda d: (0 if d.state == "working" else 1, -float(d.updated_at or 0)),
+        )
+        return live[0]
+
+    def dedupe_kind(self, kind: str | None = None) -> dict[str, Any]:
+        """Keep one live desk per kind; dismiss older quiet twins.
+
+        Preferred survivor: newest working, else newest quiet. Older quiet
+        duplicates become dismissed. Working duplicates of the same kind are
+        rare; we quiet then dismiss the older ones so only one live remains.
+        """
+        kinds = [kind] if kind else list({d.kind for d in self.desks.values()})
+        dismissed_ids: list[str] = []
+        kept: dict[str, str] = {}
+        for k in kinds:
+            if not k:
+                continue
+            live = [d for d in self.standing() if d.kind == k]
+            if len(live) <= 1:
+                if live:
+                    kept[k] = live[0].id
+                continue
+            live.sort(
+                key=lambda d: (0 if d.state == "working" else 1, -float(d.updated_at or 0)),
+            )
+            winner = live[0]
+            kept[k] = winner.id
+            for d in live[1:]:
+                if d.state == "working":
+                    # Stop first so DAG is persisted, then dismiss as twin clutter.
+                    self.stop(d.id)
+                    d = self.desks.get(d.id) or d
+                d.state = "dismissed"
+                d.updated_at = time()
+                d.roles = []
+                dismissed_ids.append(d.id)
+                if self.focus_id == d.id:
+                    self.focus_id = winner.id
+                if self.active_id == d.id:
+                    self.active_id = winner.id
+        if dismissed_ids:
+            self.save()
+            status.write_status()
+            status_msg = (
+                f"Deduped desk kinds: dismissed {len(dismissed_ids)} older twin(s)"
+            )
+        else:
+            status_msg = "No desk twins to dedupe"
+        return {
+            "ok": True,
+            "action": "dedupe_kind",
+            "kept": kept,
+            "dismissed": dismissed_ids,
+            "message": status_msg,
+        }
+
+    def quiet_standing(self) -> dict[str, Any]:
+        """Stop/quiet every working standing desk (panel close confirm)."""
+        stopped: list[str] = []
+        errors: list[dict[str, Any]] = []
+        for d in list(self.standing()):
+            if d.state != "working":
+                continue
+            out = self.stop(d.id)
+            if out.get("ok"):
+                stopped.append(d.id)
+            else:
+                errors.append({"desk_id": d.id, "error": out.get("error")})
+        return {
+            "ok": not errors,
+            "action": "quiet_standing",
+            "stopped": stopped,
+            "errors": errors,
+            "message": f"Quieted {len(stopped)} working desk(s)",
+        }
+
+
     def active(self) -> Desk | None:
         if not self.active_id:
             return None
@@ -323,25 +406,11 @@ class DeskRegistry:
         ws = okbay.active_workspace()
         now = time()
 
-        # Resume quiet desk: same objective+kind, or same kind when focusing a quiet rail row
+        # One live desk per kind: resume preferred live (working then quiet, newest)
+        # unless reset. Update objective when provided; never spawn a quiet twin.
         resumed = None
         if not reset:
-            for d in self.standing():
-                if d.kind != chosen_kind or d.state != "quiet":
-                    continue
-                if obj and d.objective == obj:
-                    resumed = d
-                    break
-                if not obj and kind:
-                    # Start-from-rail without new query → resume quiet of that kind
-                    resumed = d
-                    break
-            if resumed is None and obj and kind and not reset:
-                # New query on existing quiet kind → continue that desk with new objective
-                for d in self.standing():
-                    if d.kind == chosen_kind and d.state == "quiet":
-                        resumed = d
-                        break
+            resumed = self.preferred_live_desk(chosen_kind)
 
         if resumed is not None:
             desk = resumed
@@ -407,6 +476,8 @@ class DeskRegistry:
             desk.state = "quiet"
             desk.updated_at = time()
             landed_quiet = True
+        # Collapse quiet twins for this kind after start/resume.
+        self.dedupe_kind(chosen_kind)
         self.save()
         status.write_status()
 
@@ -593,6 +664,7 @@ class DeskRegistry:
             return {"ok": False, "error": str(e)}
         payload = parsed.to_dict()
         payload["describe"] = describe(parsed)
+        payload["attached_at"] = time()
         desk.schedule = payload
         desk.updated_at = time()
         self.save()
@@ -791,6 +863,15 @@ def set_effort(value: float, *, desk_id: str | None = None) -> dict[str, Any]:
 
 def focus(desk_id: str | None = None) -> dict[str, Any]:
     return default_registry().focus(desk_id)
+
+
+def dedupe_kind(kind: str | None = None) -> dict[str, Any]:
+    return default_registry().dedupe_kind(kind)
+
+
+def quiet_standing() -> dict[str, Any]:
+    return default_registry().quiet_standing()
+
 
 
 _QUIETING = False

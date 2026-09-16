@@ -236,3 +236,36 @@ def test_docs_lock_product_and_guards() -> None:
     assert "left-pane" in desk.lower() or "left pane" in desk.lower()
     assert "query input" in desk.lower()
     assert "no free text" not in desk.lower() or "herdr" in desk.lower()
+
+
+def test_status_write_failure_is_logged(state_dir: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """Nested status.write_status failures must log, not silent-pass."""
+    import logging
+
+    from okstratr import desks, kernel
+
+    started = desks.start("Log me", kind="work")
+    import okstratr.status as status_mod
+
+    def boom(*_a, **_k):
+        raise RuntimeError("status boom")
+
+    monkeypatch.setattr(status_mod, "write_status", boom)
+    with caplog.at_level(logging.WARNING, logger="okstratr.kernel"):
+        # set_effort calls write_status inside a guarded except
+        out = kernel.set_effort(started["desk"], 0.5)
+    assert out.get("ok") is True
+    assert any("write_status" in r.message or "status" in r.message for r in caplog.records)
+
+
+def test_okbay_reviews_path_writable(state_dir: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from okstratr import okbay
+
+    land = tmp_path / "land"
+    land.mkdir()
+    monkeypatch.setenv("OKSTRATR_OKBAY_COMMIT_PATH", str(land))
+    monkeypatch.delenv("OKSTRATR_OKBAY_REVIEWS", raising=False)
+    monkeypatch.delenv("OKSTRATR_CURATE_COMMIT", raising=False)
+    info = okbay.reviews_commit_path()
+    assert info["configured"] is True
+    assert info["path_writable"] is True

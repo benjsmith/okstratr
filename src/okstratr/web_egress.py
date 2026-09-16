@@ -85,18 +85,29 @@ def status() -> dict[str, Any]:
     data = _load()
     mode = data.get("mode") or "off"
     label = {"off": "Off", "once": "Once", "session": "Session"}.get(mode, "Off")
+    pending = bool(data.get("pending_approval"))
+    message = None
+    if pending:
+        q = data.get("pending_query")
+        message = (
+            f"Web egress denied — needs approval"
+            + (f": {q}" if q else "")
+        )
+    elif mode == "off":
+        message = "Web egress off — approve with okstratr web on --once|--session"
     return {
         "mode": mode,
         "label": label,
         "chip": f"Web: {label}",
         "allowed": mode in ("once", "session"),
-        "pending_approval": bool(data.get("pending_approval")),
+        "pending_approval": pending,
         "pending_query": data.get("pending_query"),
         "searches_allowed": int(data.get("searches_allowed") or 0),
         "updated_at": data.get("updated_at"),
         "last_authorize": data.get("last_authorize"),
         "last_deny": data.get("last_deny"),
         "gate": True,
+        "message": message,
         "note": "All web egress goes through web_egress.authorize / request_web",
     }
 

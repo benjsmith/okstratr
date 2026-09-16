@@ -242,6 +242,17 @@ class Handler(BaseHTTPRequestHandler):
             code, body, ct = _json_bytes(desks.stop(str(desk_id) if desk_id else None))
             return self._send(code, body, ct)
 
+        if path in ("/api/desk/quiet_standing", "/api/desk/quiet-all"):
+            code, body, ct = _json_bytes(desks.quiet_standing())
+            return self._send(code, body, ct)
+
+        if path == "/api/desk/dedupe_kind":
+            kind = payload.get("kind")
+            code, body, ct = _json_bytes(
+                desks.dedupe_kind(str(kind) if kind else None)
+            )
+            return self._send(code, body, ct)
+
         if path == "/api/desk/dismiss":
             desk_id = payload.get("desk_id") or payload.get("id")
             code, body, ct = _json_bytes(desks.dismiss(str(desk_id) if desk_id else None))

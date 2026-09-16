@@ -87,3 +87,29 @@ def test_errors():
 
 def test_hourly_case_insensitive():
     assert parse_schedule_args("HOURLY").name == "hourly"
+
+
+def test_schedule_module_summary_next_fire(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OKSTRATR_STATE_DIR", str(tmp_path / "st"))
+    monkeypatch.setenv("OKSTRATR_HERDR_DRY_RUN", "1")
+    import okstratr.desks as desks
+    import okstratr.status as status
+    import okstratr.dag as dag
+    import okstratr.blackboard as bb
+
+    desks._DEFAULT = None
+    desks._DEFAULT_PATH = None
+    status._loaded = False
+    status._seated_objective = ""
+    dag._DEFAULT = None
+    bb._DEFAULT = None
+
+    from okstratr import schedule
+
+    desks.start("Scheduled", kind="work")
+    desks.schedule("1h")
+    summary = schedule.summary()
+    assert summary["desk_schedules"] >= 1
+    assert summary["next_fire"] is not None
+    assert summary["next_fire"]["every_seconds"] == 3600.0
+    assert summary["attention_window_next"] is True

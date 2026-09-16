@@ -53,6 +53,7 @@ Item {
   property string scheduleDeskId: ""
   property string scheduleKind: ""
   property string actionMsg: ""
+  property bool closeDialogVisible: false
 
   function persistPanelUi() {
     // Explicit close → panel_open false → stay closed after shell restart.
@@ -66,9 +67,24 @@ Item {
     refreshLive()
   }
   function close() {
-    // TODO QML dialog: root.closeWarning — then suspend kernel / quiet desks
-    opened = false
-    persistPanelUi()
+    // Confirm via close dialog (bind root.closeWarning); cancel keeps panel open.
+    closeDialogVisible = true
+  }
+
+  function cancelClose() {
+    closeDialogVisible = false
+  }
+
+  function confirmClose() {
+    closeDialogVisible = false
+    // Quiet working standing desks, then close panel.
+    Model.postJson(root.apiUrl + "/api/desk/quiet_standing", {}, function (parsed) {
+      if (parsed && parsed.ok === false)
+        root.actionMsg = parsed.error || parsed.message || "Quiet standing failed"
+      opened = false
+      persistPanelUi()
+      statusFile.reload()
+    })
   }
   function toggle(payloadJson) { opened ? close() : open(payloadJson) }
 
@@ -172,6 +188,9 @@ Item {
     Model.postJson(root.apiUrl + "/api/desk/focus", {desk_id: String(deskId)}, function (parsed) {
       if (parsed && parsed.ok === false)
         return
+      // Focus API path: ensure queryInput tracks status objective (quiet desks too).
+      if (parsed && parsed.objective)
+        queryInput.text = String(parsed.objective)
       statusFile.reload()
       root.refreshLive()
     })
@@ -1378,4 +1397,97 @@ Item {
       }
     }
   }
+
+  // Close-warning dialog (status.ui.close_warning / root.closeWarning)
+  Rectangle {
+    id: closeDialogOverlay
+    anchors.fill: parent
+    visible: root.closeDialogVisible && root.opened
+    z: 9999
+    color: "#99000000"
+
+    MouseArea {
+      anchors.fill: parent
+      onClicked: root.cancelClose()
+    }
+
+    Rectangle {
+      anchors.centerIn: parent
+      width: Math.min(520, parent.width - 48)
+      height: closeDialogCol.height + 36
+      radius: 12
+      color: root.themePanel
+      border.color: root.themeBorder
+      border.width: 1
+
+      MouseArea { anchors.fill: parent } // swallow clicks
+
+      Column {
+        id: closeDialogCol
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.margins: 18
+        spacing: 14
+
+        Text {
+          text: "Close Okstratr?"
+          color: root.themeFg
+          font.pixelSize: 16
+          font.bold: true
+        }
+        Text {
+          width: parent.width
+          text: root.closeWarning
+          color: root.themeMuted
+          font.pixelSize: 13
+          wrapMode: Text.Wrap
+        }
+        Row {
+          spacing: 10
+          anchors.right: parent.right
+
+          Rectangle {
+            width: cancelCloseTxt.width + 24
+            height: 34
+            radius: 8
+            color: "#22000000"
+            border.color: root.themeBorder
+            Text {
+              id: cancelCloseTxt
+              anchors.centerIn: parent
+              text: "Cancel"
+              color: root.themeFg
+              font.pixelSize: 13
+            }
+            MouseArea {
+              anchors.fill: parent
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.cancelClose()
+            }
+          }
+          Rectangle {
+            width: confirmCloseTxt.width + 24
+            height: 34
+            radius: 8
+            color: root.themeAccent
+            Text {
+              id: confirmCloseTxt
+              anchors.centerIn: parent
+              text: "Close & quiet desks"
+              color: "#ffffff"
+              font.pixelSize: 13
+              font.bold: true
+            }
+            MouseArea {
+              anchors.fill: parent
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.confirmClose()
+            }
+          }
+        }
+      }
+    }
+  }
+
 }
