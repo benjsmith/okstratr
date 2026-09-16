@@ -737,8 +737,10 @@ Item {
                   text: {
                     var kind = root.deskKind
                     var st = root.deskState
-                    if (kind && st)
-                      return kind + " · " + st
+                    if (kind && st) {
+                      var lab = Model.deskStateLabel(st)
+                      return lab ? (kind + " · " + lab) : kind
+                    }
                     if (root.status && root.status.state)
                       return String(root.status.state)
                     return "no desk"
