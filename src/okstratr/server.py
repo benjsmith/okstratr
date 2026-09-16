@@ -111,6 +111,8 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/api/desk/start", "/api/seat"):
             objective = str(payload.get("objective") or "").strip()
             launch = bool(payload.get("herdr", False))
+            # Panel Start with objective sets drive_herdr; API/CLI default False (plan-only quiet).
+            drive_herdr = bool(payload.get("drive_herdr", False))
             reset = bool(payload.get("reset", False))
             kind = payload.get("kind")
             kind = str(kind).strip() if kind else None
@@ -127,6 +129,11 @@ class Handler(BaseHTTPRequestHandler):
                 or payload.get("workspace")
             )
             ws_id = str(ws_id).strip() if ws_id else None
+            herdr_limit = payload.get("herdr_limit", payload.get("limit", 4))
+            try:
+                herdr_limit = max(0, int(herdr_limit))
+            except (TypeError, ValueError):
+                herdr_limit = 4
             # /api/seat is deprecated alias → desk start auto
             if path == "/api/seat" and not kind:
                 kind = "auto"
@@ -137,6 +144,7 @@ class Handler(BaseHTTPRequestHandler):
                 effort=effort_f,
                 run_cos=run_cos and bool(objective),
                 okbay_workspace_id=ws_id,
+                drive_herdr=drive_herdr,
             )
             snap = status.write_status()
             snap = dict(snap)
@@ -158,6 +166,59 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/seat":
                 snap["deprecated"] = "seat"
                 snap["warning"] = "Use POST /api/desk/start; /api/seat aliases desk start auto"
+            # Drive seats after CoS when requested (UI Start with non-empty objective).
+            if drive_herdr and objective:
+                dry = payload.get("dry_run")
+                dry_run = None if dry is None else bool(dry)
+                herdr_run: dict[str, Any] | None = None
+                herdr_err: str | None = None
+                try:
+                    herdr_run = herdr.run_ready(limit=herdr_limit, dry_run=dry_run)
+                except Exception as e:  # noqa: BLE001 — surface missing/broken herdr clearly
+                    herdr_err = str(e)
+                    herdr_run = {"ok": False, "error": f"herdr.run_ready failed: {e}"}
+                snap["herdr_run"] = herdr_run
+                # Detect missing Herdr / hard failure (run_ready usually returns ok:False, no raise).
+                results = (herdr_run or {}).get("results") or []
+                missing = any(
+                    "Herdr not on PATH" in str(r.get("error") or "")
+                    or "not on PATH" in str(r.get("error") or "")
+                    for r in results
+                    if isinstance(r, dict)
+                )
+                if herdr_err or missing or herdr_run.get("ok") is False and not results:
+                    if not herdr_err:
+                        herdr_err = (
+                            (results[0].get("error") if results else None)
+                            or herdr_run.get("error")
+                            or "herdr.run_ready failed"
+                        )
+                    snap["herdr_error"] = herdr_err
+                    snap["message"] = (
+                        f"Start drove Herdr but seats failed: {herdr_err}. Desk Idle (quiet)."
+                    )
+                    try:
+                        desk_id = (result.get("desk") or {}).get("id")
+                        desks.stop(str(desk_id) if desk_id else None)
+                    except Exception as stop_e:  # noqa: BLE001
+                        snap["herdr_error_stop"] = str(stop_e)
+                # Refresh start-result desk state (working while seats run, or quiet if done/failed).
+                desk_id = (result.get("desk") or {}).get("id")
+                try:
+                    reg = desks.default_registry(force_reload=True)
+                    updated = dict(result)
+                    if desk_id and desk_id in reg.desks:
+                        updated["desk"] = reg.desks[desk_id].to_dict()
+                    if herdr_run and herdr_run.get("desk_quieted"):
+                        updated["desk_quieted"] = herdr_run["desk_quieted"]
+                    snap["desk"] = updated
+                except Exception:  # noqa: BLE001
+                    snap["desk"] = result
+                # Refresh top-level status fields without dropping desk / herdr_run.
+                fresh = status.write_status()
+                for key, val in fresh.items():
+                    if key not in ("desk", "herdr_run", "herdr_error", "message", "cos", "cos_break"):
+                        snap[key] = val
             if launch and objective:
                 snap["herdr_launch"] = herdr.launch(objective)
             code, body, ct = _json_bytes(snap)

@@ -410,3 +410,84 @@ def test_desk_delete_force_and_cli(state_dir: Path, capsys: pytest.CaptureFixtur
     assert desk_id in out
     reg = desks.default_registry(force_reload=True)
     assert desk_id not in reg.desks
+
+
+def test_http_start_drive_herdr_runs_ready(state_dir: Path) -> None:
+    """POST /api/desk/start with drive_herdr=True runs herdr.run_ready (dry-run)."""
+    from okstratr.server import Handler
+    from http.server import ThreadingHTTPServer
+    import threading
+    import urllib.request
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    port = httpd.server_address[1]
+    t = threading.Thread(target=httpd.serve_forever, daemon=True)
+    t.start()
+    try:
+        base = f"http://127.0.0.1:{port}"
+        req = urllib.request.Request(
+            base + "/api/desk/start",
+            data=json.dumps(
+                {
+                    "objective": "Drive from HTTP start",
+                    "kind": "auto",
+                    "drive_herdr": True,
+                    "herdr_limit": 6,
+                    "dry_run": True,
+                }
+            ).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req) as r:
+            body = json.loads(r.read().decode())
+        assert "herdr_run" in body
+        hr = body["herdr_run"]
+        assert hr.get("dry_run") is True
+        assert hr.get("ran"), "expected at least one ready seat to run"
+        desk = body.get("desk") or {}
+        # Start result shape preserved (desk.desk.id)
+        assert (desk.get("desk") or {}).get("id")
+        assert desk.get("drive_herdr") is True
+        # After bounded dry-run of the full Switchbay chain, DAG is often terminal → Idle
+        state = (desk.get("desk") or {}).get("state")
+        assert state in ("quiet", "working")
+    finally:
+        httpd.shutdown()
+
+
+def test_http_start_without_drive_herdr_lands_quiet(state_dir: Path) -> None:
+    """API default (no drive_herdr) still lands quiet after CoS — plan-only."""
+    from okstratr.server import Handler
+    from http.server import ThreadingHTTPServer
+    import threading
+    import urllib.request
+    from okstratr import desks, dag
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    port = httpd.server_address[1]
+    t = threading.Thread(target=httpd.serve_forever, daemon=True)
+    t.start()
+    try:
+        base = f"http://127.0.0.1:{port}"
+        req = urllib.request.Request(
+            base + "/api/desk/start",
+            data=json.dumps(
+                {"objective": "Plan only please", "kind": "work"}
+            ).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req) as r:
+            body = json.loads(r.read().decode())
+        assert "herdr_run" not in body
+        desk = body.get("desk") or {}
+        assert desk.get("drive_herdr") is False
+        assert desk.get("landed_quiet") is True
+        assert (desk.get("desk") or {}).get("state") == "quiet"
+        g = dag.default_dag(force_reload=True)
+        assert any(n.state in ("ready", "pending") for n in g.nodes.values())
+        reg = desks.default_registry(force_reload=True)
+        assert reg.active().state == "quiet"
+    finally:
+        httpd.shutdown()
