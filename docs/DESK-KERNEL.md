@@ -125,8 +125,10 @@ See `okstratr.roles` for constants, model hints, and independence notes.
 ## Desk lifecycle (CLI / HTTP)
 
 ```
-desk start [kind] [objective…]   → state=working; hire CoS + defaults; seed DAG
-desk stop                        → state=quiet; keep last live DAG; CoS ready
+desk start [kind] [objective…]   → hire CoS + defaults; seed DAG; land **quiet**
+                                   after CoS unless `drive_herdr` (active seat run)
+desk stop / auto-quiet           → state=quiet; keep last live DAG; CoS ready
+                                   (auto when every node is done|failed)
 desk dismiss                     → state=dismissed; tear down standing org; archive/clear DAG
 desk status                      → active + registry snapshot (bandit + web chip)
 desk schedule …                  → parse + attach schedule (dialog UI later)
@@ -138,6 +140,10 @@ okstratr web status|on|off       → web egress gate (default off)
 ```
 
 States: **`working` | `quiet` | `dismissed`**.
+`working` means an **active Herdr run**; CoS-only start lands `quiet` (planned /
+waiting). When the desk DAG is fully terminal (`done`|`failed` only),
+`desks.maybe_quiet_if_finished` auto-stops → `quiet`. UI idle placeholders appear
+only when no live desk of that kind exists (`default_standing_rows`).
 
 - **stop**: do not wipe the DAG; CoS remains the contact surface for further input.
 - **dismiss**: archive the desk’s DAG under the state dir, remove it from the standing registry (or mark dismissed and drop active), clear standing org so tokens are not burned on a dead desk.

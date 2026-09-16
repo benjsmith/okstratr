@@ -55,9 +55,9 @@ def test_desk_org_persists_model_hints_and_effort(state_dir: Path) -> None:
     assert snap["herdr_labels"]["desk_id"] == desk["id"]
     assert snap["herdr_labels"]["thread_id"] == desk["thread_id"]
     assert snap["focus_desk_id"] == desk["id"]
-    assert snap["state"] == "working"
+    assert snap["state"] == "quiet"  # CoS-only start lands quiet
     assert snap["desk"]["kind"] == "work"
-    assert snap["desk"]["state"] == "working"
+    assert snap["desk"]["state"] == "quiet"
 
 
 def test_work_auto_breakdown_uses_switchbay_roles(state_dir: Path) -> None:

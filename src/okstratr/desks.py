@@ -24,6 +24,9 @@ from .schedule_parse import ScheduleParseError, describe, parse_schedule_args
 VALID_DESK_STATES = frozenset({"working", "quiet", "dismissed"})
 # Placeholder / idle is UI-facing for default kinds with no live desk yet.
 VALID_STANDING_STATES = frozenset({"working", "quiet", "idle"})
+# Node states that mean work is still in flight / queued (not finished).
+ACTIVE_NODE_STATES = frozenset({"pending", "ready", "running", "blocked"})
+TERMINAL_NODE_STATES = frozenset({"done", "failed"})
 REGISTRY_NAME = "desks.json"
 PLACEHOLDER_ID_PREFIX = "kind:"
 
@@ -142,6 +145,24 @@ class Desk:
         )
 
 
+
+def dag_is_fully_terminal(g: Any) -> bool:
+    """True when every node is done|failed (no pending/ready/running/blocked left).
+
+    Empty DAGs count as terminal. Root is not special: if children are still
+    pending/ready after CoS marks root done, the desk is *not* finished.
+    """
+    nodes = getattr(g, "nodes", None) or {}
+    if not nodes:
+        return True
+    for n in nodes.values():
+        st = getattr(n, "state", None) or ""
+        if st not in TERMINAL_NODE_STATES:
+            return False
+    return True
+
+
+
 class DeskRegistry:
     def __init__(self, path: Path | None = None) -> None:
         self.path = Path(path) if path else state_dir() / REGISTRY_NAME
@@ -250,6 +271,7 @@ class DeskRegistry:
         run_cos: bool = True,
         okbay_workspace_id: str | None = None,
         workspace_id: str | None = None,
+        drive_herdr: bool = False,
     ) -> dict[str, Any]:
         """
         Start (or resume) a desk. Kernel picks kind/roles; always hires CoS.
@@ -257,6 +279,12 @@ class DeskRegistry:
 
         Bind selected okbay workspace when okbay_workspace_id / workspace_id given
         (also persists panel selection).
+
+        ``working`` means an active Herdr run. After CoS breakdown, if we are not
+        immediately driving Herdr seats (``drive_herdr=False``, the default), the
+        desk lands ``quiet`` (planned / waiting). Pass ``drive_herdr=True`` when
+        the caller will run ``herdr.run_ready`` / ``run_one`` next — then the desk
+        stays ``working`` until that loop ends and ``maybe_quiet_if_finished``.
         """
         raw = (objective or "").strip()
         # Slash override: "/curate …" wins over an explicit kind and is stripped
@@ -345,6 +373,12 @@ class DeskRegistry:
             self._persist_desk_dag(desk)
 
         status.set_objective(obj)
+        # working == active Herdr run. CoS-only / planned desks land quiet.
+        landed_quiet = False
+        if not drive_herdr and desk.state == "working":
+            desk.state = "quiet"
+            desk.updated_at = time()
+            landed_quiet = True
         self.save()
         status.write_status()
 
@@ -364,6 +398,8 @@ class DeskRegistry:
             "effort": desk.effort,
             "org": desk.org,
             "okbay_workspace": ws,
+            "drive_herdr": bool(drive_herdr),
+            "landed_quiet": landed_quiet,
         }
 
     def stop(self, desk_id: str | None = None) -> dict[str, Any]:
@@ -537,6 +573,53 @@ class DeskRegistry:
 
         return herdr_mod.focus_desk(desk_id)
 
+
+    def maybe_quiet_if_finished(self, desk_id: str | None = None) -> dict[str, Any]:
+        """If a working desk's DAG is fully terminal, stop → quiet (keep DAG).
+
+        Terminal = every node ``done`` or ``failed`` (no pending/ready/running/blocked).
+        No-ops when the desk is not working or work remains. Safe to call from
+        herdr.run_one / run_ready and status reconcile.
+        """
+        desk = self._resolve(desk_id)
+        if desk is None:
+            return {"ok": True, "action": "noop", "reason": "no_desk"}
+        if desk.state != "working":
+            return {
+                "ok": True,
+                "action": "noop",
+                "reason": f"desk_{desk.state}",
+                "desk_id": desk.id,
+            }
+        g = self._dag_for_desk(desk)
+        g.refresh_ready(save=False)
+        if not dag_is_fully_terminal(g):
+            active = sorted(
+                {
+                    f"{n.id}:{n.state}"
+                    for n in g.nodes.values()
+                    if n.state in ACTIVE_NODE_STATES
+                }
+            )
+            return {
+                "ok": True,
+                "action": "noop",
+                "reason": "dag_not_terminal",
+                "desk_id": desk.id,
+                "active_nodes": active,
+            }
+        stopped = self.stop(desk.id)
+        stopped["action"] = "auto_quiet"
+        stopped["reason"] = "dag_fully_terminal"
+        return stopped
+
+    def _dag_for_desk(self, desk: Desk) -> Any:
+        """Prefer the live global DAG when this desk is active; else desk file."""
+        if self.active_id == desk.id:
+            return dag_mod.default_dag(force_reload=True)
+        path = self.dag_path_for(desk)
+        return dag_mod.Dag(path=path).load()
+
     def _resolve(self, desk_id: str | None) -> Desk | None:
         if desk_id:
             did = str(desk_id)
@@ -598,3 +681,18 @@ def set_effort(value: float, *, desk_id: str | None = None) -> dict[str, Any]:
 
 def focus(desk_id: str | None = None) -> dict[str, Any]:
     return default_registry().focus(desk_id)
+
+
+_QUIETING = False
+
+
+def maybe_quiet_if_finished(desk_id: str | None = None) -> dict[str, Any]:
+    """Module entry with reentrancy guard (stop → write_status → reconcile)."""
+    global _QUIETING
+    if _QUIETING:
+        return {"ok": True, "action": "noop", "reason": "reentrant"}
+    _QUIETING = True
+    try:
+        return default_registry().maybe_quiet_if_finished(desk_id)
+    finally:
+        _QUIETING = False
