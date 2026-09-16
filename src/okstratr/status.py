@@ -215,6 +215,21 @@ def snapshot() -> dict[str, Any]:
 
 
 def write_status(data: dict[str, Any] | None = None) -> dict[str, Any]:
+    # Cheap reconcile: auto-quiet working desks whose DAG is fully terminal.
+    if data is None:
+        try:
+            from . import desks as desks_mod
+
+            quieted = desks_mod.maybe_quiet_if_finished()
+            if quieted.get("action") == "auto_quiet":
+                # stop() already wrote status; rebuild snapshot
+                snap = snapshot()
+                path = status_path()
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps(snap, indent=2) + "\n", encoding="utf-8")
+                return snap
+        except Exception:  # noqa: BLE001
+            pass
     snap = data or snapshot()
     path = status_path()
     path.parent.mkdir(parents=True, exist_ok=True)

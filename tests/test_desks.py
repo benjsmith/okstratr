@@ -38,7 +38,8 @@ def test_desk_start_hires_cos(state_dir: Path) -> None:
     r = desks.start("Ship the desk brain", kind="work")
     assert r["ok"] is True
     desk = r["desk"]
-    assert desk["state"] == "working"
+    assert desk["state"] == "quiet"  # CoS-only start lands quiet (not active herdr run)
+    assert r.get("landed_quiet") is True
     assert desk["roles"][0] == "cos"
     assert "cos" in desk["roles"]
     g = dag.default_dag(force_reload=True)
@@ -164,12 +165,12 @@ def test_start_from_query(state_dir: Path) -> None:
     assert result["ok"] is True
     assert result["desk"]["objective"] == query
     assert result["desk"]["kind"] == "work"
-    assert result["desk"]["state"] == "working"
+    assert result["desk"]["state"] == "quiet"
 
     rows = desks.status_snapshot()["standing"]
     work = next(row for row in rows if row["kind"] == "work")
     assert work["objective"] == query
-    assert work["state"] == "working"
+    assert work["state"] == "quiet"
     assert work["placeholder"] is False
 
 
@@ -229,3 +230,96 @@ def test_slash_override_and_auto_default(tmp_path, monkeypatch):
     result2 = desks.start("Neutral objective only")  # no kind → auto
     assert result2["desk"]["kind"] == "auto"
     assert result2["desk"]["objective"] == "Neutral objective only"
+
+
+def test_start_cos_only_lands_quiet(state_dir: Path) -> None:
+    from okstratr import desks, dag
+
+    r = desks.start("Make slides", kind="deck")
+    assert r["ok"] is True
+    assert r["desk"]["state"] == "quiet"
+    assert r.get("landed_quiet") is True
+    g = dag.default_dag(force_reload=True)
+    # Plan exists with ready/pending work — still quiet until herdr drives seats
+    assert any(n.state in ("ready", "pending") for n in g.nodes.values())
+
+
+def test_start_drive_herdr_stays_working_until_finished(state_dir: Path) -> None:
+    from okstratr import desks, dag, herdr
+
+    r = desks.start("Drive seats", kind="work", drive_herdr=True)
+    assert r["desk"]["state"] == "working"
+    assert r.get("landed_quiet") is False
+    assert r.get("drive_herdr") is True
+
+    # While ready nodes remain, maybe_quiet must not quiet
+    noop = desks.maybe_quiet_if_finished()
+    assert noop["action"] == "noop"
+    assert desks.default_registry(force_reload=True).active().state == "working"
+
+    # Finish all non-root seats via dry-run herdr; last run_one (or run_ready)
+    # auto-quiets when the DAG is fully terminal.
+    out = herdr.run_ready(limit=20, dry_run=True)
+    reg = desks.default_registry(force_reload=True)
+    desk = reg.desks[r["desk"]["id"]]
+    assert desk.state == "quiet"
+    # Last seat's run_one may quiet before run_ready's end-hook (noop desk_quiet).
+    q = out.get("desk_quieted") or {}
+    assert q.get("action") in ("auto_quiet", "noop")
+    g = dag.default_dag(force_reload=True)
+    assert desks.dag_is_fully_terminal(g)
+
+
+def test_maybe_quiet_when_all_nodes_terminal(state_dir: Path) -> None:
+    from okstratr import desks, dag
+
+    r = desks.start("Finish me", kind="auto", drive_herdr=True)
+    desk_id = r["desk"]["id"]
+    assert r["desk"]["state"] == "working"
+
+    g = dag.default_dag(force_reload=True)
+    for nid in list(g.nodes):
+        g.mark_done(nid, notes="forced terminal", save=False)
+    g.save()
+
+    quieted = desks.maybe_quiet_if_finished(desk_id)
+    assert quieted["action"] == "auto_quiet"
+    assert quieted["desk"]["state"] == "quiet"
+    assert quieted.get("dag_kept") is True
+
+    # Idempotent: already quiet → noop
+    again = desks.maybe_quiet_if_finished(desk_id)
+    assert again["action"] == "noop"
+
+
+def test_maybe_quiet_noop_while_ready_or_running(state_dir: Path) -> None:
+    from okstratr import desks, dag
+
+    r = desks.start("Still work left", kind="work", drive_herdr=True)
+    desk_id = r["desk"]["id"]
+    g = dag.default_dag(force_reload=True)
+    # Ensure at least one ready/pending child remains (CoS leaves ready investigator)
+    assert any(n.state in ("ready", "pending", "running") for n in g.nodes.values() if n.id != "root")
+
+    noop = desks.maybe_quiet_if_finished(desk_id)
+    assert noop["action"] == "noop"
+    assert noop["reason"] == "dag_not_terminal"
+    assert desks.default_registry(force_reload=True).desks[desk_id].state == "working"
+
+
+def test_dag_is_fully_terminal_helper(state_dir: Path) -> None:
+    from okstratr import desks, dag
+
+    g = dag.default_dag(force_reload=True)
+    assert desks.dag_is_fully_terminal(g) is True  # empty
+
+    g.seat_root("x", reset=True, save=True)
+    assert desks.dag_is_fully_terminal(g) is False  # root pending/ready
+
+    g.mark_done("root", notes="done", save=True)
+    assert desks.dag_is_fully_terminal(g) is True
+
+    g.add("child", "Child", depends_on=["root"], state="ready", save=True)
+    assert desks.dag_is_fully_terminal(g) is False
+    g.mark_failed("child", notes="nope", save=True)
+    assert desks.dag_is_fully_terminal(g) is True

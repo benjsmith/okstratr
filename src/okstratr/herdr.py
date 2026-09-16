@@ -674,6 +674,14 @@ def run_one(
         result["state"] = "failed"
 
     status.write_status()
+    try:
+        from . import desks as desks_mod
+
+        quieted = desks_mod.maybe_quiet_if_finished()
+        if quieted.get("action") == "auto_quiet":
+            result["desk_quieted"] = quieted
+    except Exception:  # noqa: BLE001
+        pass
     return result
 
 
@@ -718,8 +726,16 @@ def run_ready(
     g.refresh_ready(save=True)
     status.write_status()
 
+    desk_quieted = None
+    try:
+        from . import desks as desks_mod
+
+        desk_quieted = desks_mod.maybe_quiet_if_finished()
+    except Exception:  # noqa: BLE001
+        desk_quieted = None
+
     ctx = _active_desk_ctx()
-    return {
+    out = {
         "ok": all(r.get("ok") for r in results) if results else True,
         "dry_run": use_dry,
         "limit": lim,
@@ -736,3 +752,6 @@ def run_ready(
         "focus_desk_id": ctx["desk_id"],
         "agent_id_format": AGENT_ID_FORMAT,
     }
+    if desk_quieted is not None:
+        out["desk_quieted"] = desk_quieted
+    return out

@@ -474,6 +474,9 @@ Item {
                   height: 94
                   radius: 8
                   property bool isIdle: String(modelData.state || "") === "idle" || !!modelData.placeholder
+                  // quiet = finished-kept (not idle placeholder); working = active run
+                  property bool isQuiet: String(modelData.state || "") === "quiet"
+                  property bool isBusy: String(modelData.state || "") === "working"
                   color: (String(modelData.id) === String(root.focusDeskId)) ? "#3344aa88" : "#22000000"
                   border.color: (String(modelData.id) === String(root.focusDeskId) || String(modelData.kind) === root.selectedKind) ? root.themeAccent : root.themeBorder
                   border.width: 1
@@ -522,7 +525,8 @@ Item {
                       Chip {
                         label: "Stop"
                         implicitWidth: 48
-                        opacity: deskRow.isIdle ? 0.35 : 1
+                        // Dim when idle or already quiet (no active run); keep Dismiss full.
+                        opacity: (deskRow.isIdle || deskRow.isQuiet) ? 0.35 : 1
                         onClicked: root.stopDesk(modelData.id)
                       }
                       Chip {
