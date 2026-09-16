@@ -288,14 +288,38 @@ def break_down(
         + "\n".join(f"- {line}" for line in plan_lines)
         + f"\n(created={len(created)}, updated={len(updated)})"
     )
-    note = blackboard.post(
-        summary_text,
-        author="cos",
-        kind="decision",
-        tags=["cos", "breakdown", resolved or "default"],
-        provenance="okstratr.cos.break_down",
-        node_id="root",
-    )
+    tags = ["cos", "breakdown", resolved or "default"]
+
+    def _plan_core(t: str) -> str:
+        # Ignore trailing (created=N, updated=M) counters when matching twins.
+        lines = [ln.rstrip() for ln in str(t).splitlines() if not ln.startswith("(created=")]
+        return "\n".join(lines).strip()
+
+    # Soft dedupe across recent history (not only the last line) so interleaved
+    # desk plans do not re-post identical CoS decisions.
+    note: dict[str, Any] | None = None
+    deduped = False
+    core = _plan_core(summary_text)
+    for prev in reversed(blackboard.head(24)):
+        if str(prev.get("provenance") or "") != "okstratr.cos.break_down":
+            continue
+        if str(prev.get("kind") or "") != "decision":
+            continue
+        if str(prev.get("author") or "") != "cos":
+            continue
+        if _plan_core(str(prev.get("text") or "")) == core:
+            note = prev
+            deduped = True
+            break
+    if note is None:
+        note = blackboard.post(
+            summary_text,
+            author="cos",
+            kind="decision",
+            tags=tags,
+            provenance="okstratr.cos.break_down",
+            node_id="root",
+        )
 
     ready_ids = [n.id for n in g.ready()]
     node_ids = [nid for nid, *_ in steps]
@@ -309,6 +333,7 @@ def break_down(
         "ready": ready_ids,
         "plan": advise(obj, kind=resolved),
         "blackboard_note_id": note.get("id"),
+        "blackboard_deduped": deduped,
         "idempotent": not created and bool(updated),
     }
 

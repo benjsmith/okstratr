@@ -196,17 +196,232 @@ function dagSummaryText(status) {
     return line
 }
 
+function _bbFirstLine(text) {
+    var raw = String(text || "")
+    var nl = raw.indexOf("\n")
+    return (nl >= 0 ? raw.slice(0, nl) : raw).trim()
+}
+
+function _bbNormalizeKey(s) {
+    return String(s || "").replace(/\s+/g, " ").trim().toLowerCase()
+}
+
+function _bbParseCosPlan(firstLine) {
+    var m = String(firstLine || "").match(/^CoS plan for:\s*(.+?)\s*\(kind=([^)]*)\)\s*$/i)
+    if (m)
+        return { objective: m[1].trim(), deskTag: String(m[2] || "").trim() }
+    if (/^CoS plan for:/i.test(firstLine))
+        return { objective: String(firstLine).replace(/^CoS plan for:\s*/i, "").trim(), deskTag: "" }
+    return null
+}
+
+function _bbParseSteps(text) {
+    var lines = String(text || "").split("\n")
+    var steps = []
+    for (var i = 0; i < lines.length; i++) {
+        var line = lines[i].replace(/^\s+/, "")
+        var m = line.match(/^-\s+([\w.-]+)\s*:/)
+        if (m)
+            steps.push(String(m[1]).trim())
+    }
+    return steps
+}
+
+function _bbParseCreatedUpdated(text) {
+    var m = String(text || "").match(/\(created=(\d+),\s*updated=(\d+)\)/)
+    if (!m)
+        return { created: null, updated: null }
+    return { created: Number(m[1]), updated: Number(m[2]) }
+}
+
+function _bbFormatAge(ts) {
+    var n = Number(ts || 0)
+    if (!n)
+        return ""
+    var ms = n > 1e12 ? n : n * 1000
+    var sec = Math.max(0, Math.floor((Date.now() - ms) / 1000))
+    if (sec < 60)
+        return sec + "s"
+    if (sec < 3600)
+        return Math.floor(sec / 60) + "m"
+    if (sec < 86400)
+        return Math.floor(sec / 3600) + "h"
+    return Math.floor(sec / 86400) + "d"
+}
+
+function _bbEnrichEntry(raw) {
+    var e = raw || {}
+    var text = String(e.text || "")
+    var first = _bbFirstLine(text)
+    var cos = _bbParseCosPlan(first)
+    var steps = _bbParseSteps(text)
+    var cu = _bbParseCreatedUpdated(text)
+    var deskTag = cos ? cos.deskTag : ""
+    if (!deskTag && Array.isArray(e.tags)) {
+        for (var t = 0; t < e.tags.length; t++) {
+            var tag = String(e.tags[t] || "")
+            if (tag && tag !== "cos" && tag !== "breakdown" && tag !== "default"
+                && tag !== "retire" && tag !== "worker" && tag !== "herdr" && tag !== "seat" && tag !== "start") {
+                deskTag = tag
+                break
+            }
+        }
+    }
+    var isPlan = !!(cos || String(e.provenance || "") === "okstratr.cos.break_down"
+        || (Array.isArray(e.tags) && e.tags.indexOf("breakdown") >= 0))
+    var title = cos ? cos.objective : (first || "(empty)")
+    if (title.length > 72)
+        title = title.slice(0, 70) + "…"
+    var summary = ""
+    if (isPlan && steps.length)
+        summary = steps.length + " step" + (steps.length === 1 ? "" : "s") + " · " + steps.join(", ")
+    else if (isPlan)
+        summary = "plan"
+    else if (text.indexOf("\n") >= 0) {
+        var rest = text.slice(first.length).replace(/^\s+/, "").replace(/\s+/g, " ").trim()
+        if (rest.length > 96)
+            rest = rest.slice(0, 94) + "…"
+        summary = rest
+    }
+    var metaBits = []
+    if (cu.created !== null)
+        metaBits.push("+" + cu.created + "/~" + cu.updated)
+    var age = _bbFormatAge(e.ts)
+    if (age)
+        metaBits.push(age)
+    return {
+        id: e.id || "",
+        ts: e.ts || 0,
+        author: e.author || "",
+        kind: e.kind || "note",
+        text: text,
+        tags: e.tags || [],
+        provenance: e.provenance || "",
+        node_id: e.node_id || "",
+        title: title,
+        summary: summary,
+        steps: steps,
+        deskTag: deskTag,
+        isPlan: isPlan,
+        metaLine: metaBits.join(" · "),
+        age: age,
+        dupCount: 1,
+        updatedTs: e.ts || 0
+    }
+}
+
+function _bbDedupeKey(e) {
+    // Decision/plan threads: desk + objective title. Others: kind/author/title.
+    if (e.isPlan)
+        return ["plan", _bbNormalizeKey(e.deskTag), _bbNormalizeKey(e.title)].join("|")
+    return [
+        _bbNormalizeKey(e.kind),
+        _bbNormalizeKey(e.author),
+        _bbNormalizeKey(e.provenance),
+        _bbNormalizeKey(e.node_id),
+        _bbNormalizeKey(e.title || _bbFirstLine(e.text))
+    ].join("|")
+}
+
+function _bbDeskSortKey(tag) {
+    var t = String(tag || "").toLowerCase()
+    if (!t)
+        return "zzz"
+    return t
+}
+
 function blackboardHead(status) {
+    // Flat newest-first list with global near-duplicate collapse.
+    var groups = blackboardGroups(status)
+    var out = []
+    for (var i = 0; i < groups.length; i++) {
+        var ents = groups[i].entries || []
+        for (var j = 0; j < ents.length; j++)
+            out.push(ents[j])
+    }
+    return out
+}
+
+function blackboardGroups(status) {
+    // Group by desk/decision thread; collapse duplicate/near-duplicate posts.
     if (!status)
         return []
     var bb = status.blackboard
     if (!bb)
         return []
+    var raw = []
     if (Array.isArray(bb.head))
-        return bb.head
-    if (Array.isArray(bb))
-        return bb
-    return []
+        raw = bb.head
+    else if (Array.isArray(bb))
+        raw = bb
+    else
+        return []
+
+    // Newest-first enrich
+    var items = []
+    for (var i = raw.length - 1; i >= 0; i--)
+        items.push(_bbEnrichEntry(raw[i]))
+
+    // Global collapse by thread key (keep newest)
+    var collapsed = []
+    var idxByKey = {}
+    for (var j = 0; j < items.length; j++) {
+        var cur = items[j]
+        var key = _bbDedupeKey(cur)
+        if (idxByKey[key] !== undefined) {
+            var keep = collapsed[idxByKey[key]]
+            keep.dupCount = (keep.dupCount || 1) + 1
+            if (Number(cur.ts || 0) > Number(keep.updatedTs || 0))
+                keep.updatedTs = cur.ts
+            // Prefer richer summary from any copy
+            if ((!keep.summary || keep.summary.length < (cur.summary || "").length) && cur.summary)
+                keep.summary = cur.summary
+            continue
+        }
+        idxByKey[key] = collapsed.length
+        collapsed.push(cur)
+    }
+
+    // Bucket by desk tag (empty → "general")
+    var buckets = {}
+    var order = []
+    for (var k = 0; k < collapsed.length; k++) {
+        var e = collapsed[k]
+        var desk = e.deskTag ? String(e.deskTag) : "general"
+        if (!buckets[desk]) {
+            buckets[desk] = []
+            order.push(desk)
+        }
+        buckets[desk].push(e)
+    }
+    // Newest desk activity first (not alphabetical).
+    order.sort(function (a, b) {
+        function newestTs(desk) {
+            var ents = buckets[desk] || []
+            var best = 0
+            for (var i = 0; i < ents.length; i++) {
+                var t = Number(ents[i].updatedTs || ents[i].ts || 0)
+                if (t > best) best = t
+            }
+            return best
+        }
+        var tb = newestTs(b)
+        var ta = newestTs(a)
+        if (tb !== ta)
+            return tb - ta
+        return _bbDeskSortKey(a).localeCompare(_bbDeskSortKey(b))
+    })
+
+    var groups = []
+    for (var o = 0; o < order.length; o++) {
+        var d = order[o]
+        groups.push({
+            deskTag: d,
+            label: d === "general" ? "general" : d,
+            entries: buckets[d]
+        })
+    }
+    return groups
 }
 
 function dagGraph(status) {

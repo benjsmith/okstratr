@@ -161,7 +161,7 @@ class Blackboard:
         return {
             "count": len(entries),
             "by_kind": by_kind,
-            "head": self.head(5),
+            "head": self.head(24),
         }
 
     def texts(self, n: int = 10) -> list[str]:

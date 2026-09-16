@@ -914,27 +914,145 @@ Item {
                 }
                 Column {
                   width: parent.width
-                  spacing: 6
+                  spacing: 8
                   Repeater {
-                    model: Model.blackboardHead(root.status)
-                    delegate: Text {
+                    model: Model.blackboardGroups(root.status)
+                    delegate: Column {
+                      id: bbGroup
                       required property var modelData
+                      readonly property var group: modelData
                       width: parent.width
-                      text: {
-                        var kind = modelData.kind ? ("[" + modelData.kind + "] ") : ""
-                        var author = modelData.author ? (modelData.author + ": ") : ""
-                        var body = modelData.text ? String(modelData.text) : ""
-                        if (body.length > 220)
-                          body = body.slice(0, 218) + "…"
-                        return kind + author + body
+                      spacing: 4
+
+                      Row {
+                        spacing: 6
+                        Text {
+                          text: String(bbGroup.group.label || bbGroup.group.deskTag || "general")
+                          color: root.themeAccent
+                          font.pixelSize: 10
+                          font.bold: true
+                        }
+                        Text {
+                          text: {
+                            var ents = bbGroup.group.entries || []
+                            var n = ents.length
+                            return n + (n === 1 ? " thread" : " threads")
+                          }
+                          color: root.themeMuted
+                          font.pixelSize: 10
+                          anchors.verticalCenter: parent.verticalCenter
+                        }
                       }
-                      color: root.themeFg
-                      font.pixelSize: 12
-                      wrapMode: Text.Wrap
+
+                      Repeater {
+                        model: bbGroup.group.entries || []
+                        delegate: Rectangle {
+                          id: bbCard
+                          required property var modelData
+                          property bool expanded: false
+                          width: parent.width
+                          radius: 8
+                          color: bbMa.containsMouse ? "#22ffffff" : "transparent"
+                          border.width: 1
+                          border.color: root.themeDivider
+                          implicitHeight: bbCol.implicitHeight + 10
+
+                          MouseArea {
+                            id: bbMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: bbCard.expanded = !bbCard.expanded
+                          }
+
+                          Column {
+                            id: bbCol
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            anchors.margins: 6
+                            spacing: 2
+
+                            Row {
+                              spacing: 6
+                              width: parent.width
+
+                              Rectangle {
+                                id: kindChip
+                                radius: 6
+                                implicitWidth: kindChipLabel.implicitWidth + 10
+                                implicitHeight: 16
+                                color: Qt.rgba(root.themeAccent.r, root.themeAccent.g, root.themeAccent.b, 0.18)
+                                border.width: 1
+                                border.color: root.themeAccent
+                                Text {
+                                  id: kindChipLabel
+                                  anchors.centerIn: parent
+                                  text: String(modelData.kind || "note")
+                                  color: root.themeAccent
+                                  font.pixelSize: 9
+                                  font.bold: true
+                                }
+                              }
+
+                              Text {
+                                text: String(modelData.author || "")
+                                color: root.themeMuted
+                                font.pixelSize: 10
+                                anchors.verticalCenter: parent.verticalCenter
+                              }
+
+                              Text {
+                                text: String(modelData.title || "")
+                                color: root.themeFg
+                                font.pixelSize: 12
+                                font.bold: true
+                                elide: Text.ElideRight
+                                width: Math.max(48, parent.width - kindChip.implicitWidth - 150)
+                                anchors.verticalCenter: parent.verticalCenter
+                              }
+
+                              Text {
+                                visible: Number(modelData.dupCount || 1) > 1
+                                text: "×" + String(modelData.dupCount)
+                                color: root.themeMuted
+                                font.pixelSize: 10
+                                anchors.verticalCenter: parent.verticalCenter
+                              }
+
+                              Text {
+                                visible: String(modelData.metaLine || "").length > 0
+                                text: String(modelData.metaLine || "")
+                                color: root.themeMuted
+                                font.pixelSize: 9
+                                anchors.verticalCenter: parent.verticalCenter
+                              }
+                            }
+
+                            Text {
+                              visible: !bbCard.expanded && String(modelData.summary || "").length > 0
+                              width: parent.width
+                              text: String(modelData.summary || "")
+                              color: root.themeMuted
+                              font.pixelSize: 11
+                              elide: Text.ElideRight
+                            }
+
+                            Text {
+                              visible: bbCard.expanded
+                              width: parent.width
+                              text: String(modelData.text || "")
+                              color: root.themeFg
+                              font.pixelSize: 11
+                              wrapMode: Text.Wrap
+                            }
+                          }
+                        }
+                      }
                     }
                   }
                   Text {
-                    visible: Model.blackboardHead(root.status).length === 0
+                    visible: Model.blackboardGroups(root.status).length === 0
                     text: root.status ? "blackboard empty" : "daemon not publishing status"
                     color: root.themeMuted
                     font.pixelSize: 12

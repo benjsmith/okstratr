@@ -494,3 +494,33 @@ def test_dag_graph_view_idle_and_switchbay(state_dir: Path) -> None:
     assert "graph" in summary
     assert summary["graph"]["nodes"]
 
+
+
+def test_cos_breakdown_blackboard_soft_dedupe(state_dir: Path) -> None:
+    from okstratr import blackboard, cos, dag
+
+    dag.seat_root("Neutral only")
+    r1 = cos.break_down("Neutral only", kind="auto")
+    assert r1["ok"] is True
+    assert r1.get("blackboard_deduped") is False
+    id1 = r1["blackboard_note_id"]
+    count1 = blackboard.summary()["count"]
+
+    r2 = cos.break_down("Neutral only", kind="auto")
+    assert r2["ok"] is True
+    assert r2.get("blackboard_deduped") is True
+    assert r2["blackboard_note_id"] == id1
+    assert blackboard.summary()["count"] == count1
+
+    # Different objective still posts.
+    r3 = cos.break_down("Make slides", kind="deck")
+    assert r3.get("blackboard_deduped") is False
+    assert blackboard.summary()["count"] == count1 + 1
+    hits = blackboard.search("CoS plan")
+    assert len(hits) == 2
+
+    # Interleaved desks: re-plan of the first objective still soft-dedupes.
+    r4 = cos.break_down("Neutral only", kind="auto")
+    assert r4.get("blackboard_deduped") is True
+    assert r4["blackboard_note_id"] == id1
+    assert blackboard.summary()["count"] == count1 + 1
