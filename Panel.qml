@@ -169,11 +169,15 @@ Item {
     root.selectedKind = k
     var objective = parsed.objective
     root.actionMsg = "Starting " + k + " desk…"
-    Model.postJson(root.apiUrl + "/api/desk/start", {
+    // Non-empty objective → drive Herdr (run_ready) so Start doesn't park Idle.
+    var payload = {
       kind: k,
       objective: objective,
       workspace_id: root.selectedWorkspaceId
-    }, root.afterDeskAction)
+    }
+    if (String(objective || "").trim())
+      payload.drive_herdr = true
+    Model.postJson(root.apiUrl + "/api/desk/start", payload, root.afterDeskAction)
   }
 
   function startFromQuery() {

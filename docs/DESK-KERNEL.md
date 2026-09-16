@@ -126,7 +126,11 @@ See `okstratr.roles` for constants, model hints, and independence notes.
 
 ```
 desk start [kind] [objective…]   → hire CoS + defaults; seed DAG; land **quiet**
-                                   after CoS unless `drive_herdr` (active seat run)
+                                   after CoS unless `drive_herdr` (active seat run).
+                                   **UI Start** with a non-empty objective sends
+                                   `drive_herdr: true` and server runs `herdr.run_ready`
+                                   (bounded); desk shows **Running** while seats run,
+                                   then **Idle** when the DAG is finished.
 desk stop / auto-quiet           → state=quiet; keep last live DAG; CoS ready
                                    (auto when every node is done|failed)
 desk dismiss                     → state=dismissed; tear down standing org; archive DAG
@@ -205,7 +209,7 @@ Status JSON includes `herdr_labels` and `focus_desk_id`.
 
 ### Query input → kernel
 
-Panel submits objective + explicit selected kind + `okbay_workspace_id` to `POST /api/desk/start`. `kernel.route_herdr_input(text, desk_id=, thread_id=)` remains a runtime routing helper:
+Panel submits objective + explicit selected kind + `okbay_workspace_id` to `POST /api/desk/start`, and sets `drive_herdr: true` when the objective is non-empty so Start actually drives Herdr seats (lands Running, then Idle when finished). `kernel.route_herdr_input(text, desk_id=, thread_id=)` remains a runtime routing helper:
 
 1. If targeted at an existing desk’s **CoS pane** (`desk_id` / `thread_id`) → that standing desk.
 2. If new chat / no desk → the runtime helper starts the neutral `auto` desk; objective-to-kind classification is not shipped.

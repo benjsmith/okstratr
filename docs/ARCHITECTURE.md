@@ -126,7 +126,7 @@ State directory: `~/.local/state/okstratr/` (override with `OKSTRATR_STATE_DIR` 
 
 - `GET /health` — liveness
 - `GET /api/status` — objective + desk brief + effort + herdr_labels + dag + blackboard
-- `POST /api/desk/start` — `{objective, kind?, reset?, cos?, effort?, herdr?}`
+- `POST /api/desk/start` — `{objective, kind?, reset?, cos?, effort?, herdr?, drive_herdr?, herdr_limit?}` — UI Start with objective sets `drive_herdr` and runs bounded `herdr.run_ready` (response includes `herdr_run`)
 - `POST /api/desk/stop` — `{desk_id?}`
 - `POST /api/desk/dismiss` — `{desk_id?}`
 - `GET|POST /api/desk/status`
