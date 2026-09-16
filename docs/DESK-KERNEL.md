@@ -203,13 +203,37 @@ Implemented in `okstratr.schedule_parse` with exhaustive tests.
 
 ### Labeling
 
-Agent ids: `okstratr-{desk}-{role}-{node}` (filesystem-safe, capped at 64).
+Agent ids must match Herdr’s name grammar `[a-z][a-z0-9_-]{0,31}` (max **32**).
+Compact form: `o{desk8}{role6}{node6}` (hash clip if needed). Full `desk_id` +
+`thread_id` stay in **labels metadata**, not the agent name.
 
 Status JSON includes `herdr_labels` and `focus_desk_id`.
 
+### Herdr seat (finite job)
+
+A live node seat is **not** `agent start … -- prompt` alone. Herdr requires an
+**existing shell pane**:
+
+1. `herdr pane list` → pick focused shell pane (else first pane)
+2. `herdr pane split <base> --direction right|down --cwd PATH --no-focus` → seat `pane_id`
+3. Brief wait (~0.5s) for an interactive shell, then
+   `herdr agent start NAME --kind grok --pane <pane_id> [--timeout MS]`
+4. `herdr agent prompt NAME TEXT` → `agent wait` (bounded) → always `agent stop`
+5. `herdr pane close` the **seat** pane only (do not close the user’s original pane)
+
+Dry-run `would_exec` shows the split + `start --pane` sequence. Seat failures mark
+the node failed; if every seat fails on Start, the desk is quieted and
+`herdr_error` is surfaced in the Panel status message.
+
 ### Query input → kernel
 
-Panel submits objective + explicit selected kind + `okbay_workspace_id` to `POST /api/desk/start`, and sets `drive_herdr: true` when the objective is non-empty so Start actually drives Herdr seats (lands Running, then Idle when finished). `kernel.route_herdr_input(text, desk_id=, thread_id=)` remains a runtime routing helper:
+Panel submits objective + explicit selected kind + `okbay_workspace_id` to `POST /api/desk/start`.
+When the query box is **empty**, Start/Continue **reuses** the standing desk’s
+objective for that kind (and still sets `drive_herdr: true` when the effective
+objective is non-empty). Focusing a desk row refills the query box with that
+desk’s objective; Stop does **not** clear the query. Server `desks.start` likewise
+keeps the existing objective when resuming a quiet desk with an empty objective.
+`kernel.route_herdr_input(text, desk_id=, thread_id=)` remains a runtime routing helper:
 
 1. If targeted at an existing desk’s **CoS pane** (`desk_id` / `thread_id`) → that standing desk.
 2. If new chat / no desk → the runtime helper starts the neutral `auto` desk; objective-to-kind classification is not shipped.
@@ -224,7 +248,7 @@ Panel submits objective + explicit selected kind + `okbay_workspace_id` to `POST
 
 > Closing Okstratr will shut down the kernel. Standing desks will suspend (quiet) and the session returns to regular Herdr. Continue?
 
-Finite-job rule unchanged: never leave Grok/Herdr agents running after a node — always stop/release. Dry-run via `OKSTRATR_HERDR_DRY_RUN` / `--dry-run`. Tests default dry-run.
+Finite-job rule unchanged: never leave Grok/Herdr agents (or their seat panes) running after a node — always stop/release + close the seat pane. Dry-run via `OKSTRATR_HERDR_DRY_RUN` / `--dry-run`. Tests default dry-run.
 
 ## Effort slider → utility (live bandit)
 
@@ -297,7 +321,7 @@ src/okstratr/roles.py        role catalog + persisted Config ⚙ (`config/roles.
 src/okstratr/desks.py        registry: start/stop/dismiss/status/schedule/hire/effort/retire/focus
 src/okstratr/okbay.py        workspace list/select client + reviews/split stubs (no ingest)
 src/okstratr/cos.py          kind-aware planner templates
-src/okstratr/herdr.py        finite seats + okstratr-{desk}-{role}-{node} labels
+src/okstratr/herdr.py        finite seats (pane split→start --pane) + o{desk8}… labels
 src/okstratr/schedule_parse.py  interval / named schedule parser
 CLI: desk … ; web … ; seat → deprecated alias
 HTTP: /api/desk/* (incl. effort) /api/web (+ /api/seat alias)

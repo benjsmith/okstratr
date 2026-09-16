@@ -140,23 +140,29 @@ def test_herdr_run_ready_respects_env_dry_run(state_dir: Path, monkeypatch: pyte
 
 
 def test_herdr_always_stops_in_live_path(state_dir: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Live path must invoke stop even when wait fails (finite-job rule)."""
+    """Live path must invoke stop + pane close even when wait fails (finite-job)."""
     from okstratr import cos, dag, herdr
 
     monkeypatch.delenv("OKSTRATR_HERDR_DRY_RUN", raising=False)
     monkeypatch.setenv("OKSTRATR_HERDR_TIMEOUT", "5")
+    monkeypatch.setattr(herdr, "PANE_SHELL_WAIT_SEC", 0)
 
     fake = tmp_path / "herdr"
     log = tmp_path / "herdr-log.txt"
-    fake.write_text(
-        "#!/bin/sh\n"
-        f'echo "$@" >> "{log}"\n'
-        'case "$*" in\n'
-        '  *wait*) exit 1 ;;\n'
-        "  *) exit 0 ;;\n"
-        "esac\n",
-        encoding="utf-8",
-    )
+    script = f"""#!/bin/sh
+echo "$@" >> "{log}"
+case "$*" in
+  "pane list"*)
+    echo '{{"ok":true,"result":{{"panes":[{{"pane_id":"base1","focused":true,"kind":"shell"}}]}}}}'
+    exit 0 ;;
+  "pane split"*)
+    echo '{{"ok":true,"result":{{"pane":{{"pane_id":"seat9"}}}}}}'
+    exit 0 ;;
+  *wait*) exit 1 ;;
+  *) exit 0 ;;
+esac
+"""
+    fake.write_text(script, encoding="utf-8")
     fake.chmod(0o755)
     monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ.get('PATH', '')}")
 
@@ -164,12 +170,79 @@ def test_herdr_always_stops_in_live_path(state_dir: Path, monkeypatch: pytest.Mo
     cos.break_down("Live stop")
     out = herdr.run_ready(limit=1, dry_run=False)
     assert out["ran"] == ["cos-clarify"]
-    # wait failed → node failed, but stop must appear in log
     log_text = log.read_text(encoding="utf-8")
+    assert "pane split" in log_text
     assert "agent start" in log_text
+    assert "--pane" in log_text
+    assert "seat9" in log_text
     assert "agent stop" in log_text or "agent kill" in log_text
+    assert "pane close" in log_text
     g = dag.default_dag(force_reload=True)
     assert g.nodes["cos-clarify"].state == "failed"
+
+
+def test_herdr_live_split_start_pane_success(
+    state_dir: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Mock subprocess: pane split → start --pane → prompt/wait/stop/close succeeds."""
+    from okstratr import cos, dag, herdr
+
+    monkeypatch.delenv("OKSTRATR_HERDR_DRY_RUN", raising=False)
+    monkeypatch.setenv("OKSTRATR_HERDR_TIMEOUT", "5")
+    monkeypatch.setattr(herdr, "PANE_SHELL_WAIT_SEC", 0)
+
+    fake = tmp_path / "herdr"
+    log = tmp_path / "herdr-log.txt"
+    script = f"""#!/bin/sh
+echo "$@" >> "{log}"
+case "$*" in
+  "pane list"*)
+    echo '{{"ok":true,"result":{{"panes":[{{"pane_id":"base1","focused":true,"kind":"shell"}}]}}}}'
+    exit 0 ;;
+  "pane split"*)
+    echo '{{"ok":true,"result":{{"pane":{{"pane_id":"seat42"}}}}}}'
+    exit 0 ;;
+  *) exit 0 ;;
+esac
+"""
+    fake.write_text(script, encoding="utf-8")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ.get('PATH', '')}")
+
+    dag.seat_root("Pane seat")
+    cos.break_down("Pane seat")
+    out = herdr.run_ready(limit=1, dry_run=False)
+    assert out["ran"] == ["cos-clarify"]
+    assert out["results"][0]["ok"] is True
+    assert out["results"][0]["state"] == "done"
+    assert out["results"][0].get("pane_id") == "seat42"
+    aid = out["results"][0]["agent_id"]
+    assert len(aid) <= 32
+    assert herdr.HERDR_NAME_RE.match(aid)
+    log_text = log.read_text(encoding="utf-8")
+    assert "pane split" in log_text
+    assert "agent start" in log_text and "--pane" in log_text and "seat42" in log_text
+    for line in log_text.splitlines():
+        if "agent start" in line:
+            assert "--pane" in line
+    assert "pane close" in log_text
+    g = dag.default_dag(force_reload=True)
+    assert g.nodes["cos-clarify"].state == "done"
+
+
+def test_herdr_dry_run_would_exec_includes_pane(state_dir: Path) -> None:
+    from okstratr import cos, dag, herdr
+
+    dag.seat_root("Dry pane")
+    cos.break_down("Dry pane")
+    out = herdr.run_ready(limit=1, dry_run=True)
+    would = out["results"][0]["would_exec"]
+    flat = [" ".join(c) for c in would]
+    assert any(s.startswith("herdr pane split") for s in flat)
+    assert any("agent start" in s and "--pane" in s for s in flat)
+    assert any(s.startswith("herdr pane close") for s in flat)
+    assert len(out["results"][0]["agent_id"]) <= 32
+
 
 
 def test_http_cos_and_herdr_run_ready(state_dir: Path) -> None:

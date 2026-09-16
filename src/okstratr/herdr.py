@@ -6,10 +6,13 @@ Finite-job rule: always stop/release agents after a node; never leave them runni
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
+import re
 import shutil
 import subprocess
-from time import time
+from time import sleep, time
 from typing import Any
 
 from . import blackboard, dag, status
@@ -17,8 +20,11 @@ from . import blackboard, dag, status
 DEFAULT_KIND = "grok"
 DEFAULT_TIMEOUT_SEC = 120
 DEFAULT_LIMIT = 1
-AGENT_ID_MAX = 64
-AGENT_ID_FORMAT = "okstratr-{desk}-{role}-{node}"
+# Herdr agent names: [a-z][a-z0-9_-]{0,31} (max 32). Desk/thread stay in labels metadata.
+AGENT_ID_MAX = 32
+AGENT_ID_FORMAT = "o{desk8}{role6}{node6}"
+HERDR_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+PANE_SHELL_WAIT_SEC = 0.5
 
 # QML close-dialog copy (bind status.ui.close_warning). Kernel suspends; desks quiet.
 CLOSE_WARNING = (
@@ -325,26 +331,65 @@ def _node_prompt(node: dag.Node) -> str:
 
 
 def re_sub_safe(s: str, max_len: int = AGENT_ID_MAX) -> str:
+    """Filesystem-ish slug (legacy helper; prefer _herdr_token for agent names)."""
     out = []
     for ch in s:
         if ch.isalnum() or ch in "-_":
-            out.append(ch)
+            out.append(ch.lower() if ch.isalpha() else ch)
         else:
             out.append("-")
-    return "".join(out)[: max(1, int(max_len))].strip("-") or "okstratr-node"
+    clipped = "".join(out)[: max(1, int(max_len))].strip("-_")
+    return clipped or "node"
 
 
 def _clip(s: str, n: int) -> str:
     return re_sub_safe(s, max_len=n)
 
 
+def _herdr_token(s: str, n: int) -> str:
+    """Lowercase [a-z0-9_-] token clipped to n (may be empty)."""
+    out: list[str] = []
+    for ch in (s or ""):
+        if ch.isalpha():
+            out.append(ch.lower())
+        elif ch.isdigit() or ch in "-_":
+            out.append(ch)
+        else:
+            out.append("-")
+    tok = "".join(out).strip("-_")
+    # collapse runs of dashes
+    while "--" in tok:
+        tok = tok.replace("--", "-")
+    return tok[: max(0, int(n))]
+
+
+def _ensure_herdr_name(name: str) -> str:
+    """Force Herdr name grammar: [a-z][a-z0-9_-]{0,31}."""
+    raw = _herdr_token(name, AGENT_ID_MAX)
+    if not raw or not raw[0].isalpha():
+        raw = ("o" + raw)[:AGENT_ID_MAX]
+    if not HERDR_NAME_RE.match(raw):
+        digest = hashlib.sha1((name or "node").encode()).hexdigest()
+        raw = ("o" + digest)[:AGENT_ID_MAX]
+    return raw
+
+
 def make_agent_id(desk_id: str, role: str, node_id: str) -> str:
-    """okstratr-{desk}-{role}-{node} capped safely (filesystem / Herdr id)."""
-    desk = _clip(desk_id or "desk", 20)
-    role_s = _clip(role or "worker", 16)
-    node = _clip(node_id or "node", 16)
-    raw = f"okstratr-{desk}-{role_s}-{node}"
-    return re_sub_safe(raw, max_len=AGENT_ID_MAX)
+    """Herdr-safe agent name (≤32): o{desk8}{role6}{node6}, else hash clip.
+
+    Full desk_id / thread_id remain in labels metadata, not the agent name.
+    """
+    desk = _herdr_token(desk_id or "desk", 8) or "desk"
+    role_s = _herdr_token(role or "worker", 6) or "worker"
+    node = _herdr_token(node_id or "node", 6) or "node"
+    # Trim role/node further if needed so total ≤ 32 (1 + 8 + 6 + 6 = 21 typical).
+    candidate = f"o{desk}{role_s}{node}"
+    if len(candidate) > AGENT_ID_MAX or not HERDR_NAME_RE.match(candidate):
+        digest = hashlib.sha1(
+            f"{desk_id}:{role}:{node_id}".encode()
+        ).hexdigest()
+        candidate = ("o" + digest)[:AGENT_ID_MAX]
+    return _ensure_herdr_name(candidate)
 
 
 def _active_desk_ctx() -> dict[str, str]:
@@ -512,6 +557,275 @@ def _stop_agent(bin_path: str, agent_id: str, *, timeout: float = 30.0) -> dict[
     return last
 
 
+def _loads_json_blob(text: str) -> Any | None:
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    # Prefer last JSON object/array in the blob (CLI may prefix logs).
+    for opener, closer in (("{", "}"), ("[", "]")):
+        start = raw.find(opener)
+        end = raw.rfind(closer)
+        if start >= 0 and end > start:
+            chunk = raw[start : end + 1]
+            try:
+                return json.loads(chunk)
+            except json.JSONDecodeError:
+                pass
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+
+
+def _herdr_error_message(res: dict[str, Any], *, fallback: str = "herdr failed") -> str:
+    """Parse Herdr JSON stderr/stdout errors into a clear string."""
+    if not isinstance(res, dict):
+        return fallback
+    if res.get("error") and res.get("error") not in ("timeout",):
+        # Keep structured timeout below after JSON scan
+        err = str(res.get("error") or "").strip()
+        if err and not err.startswith("{"):
+            # Still prefer JSON detail when present
+            pass
+    for key in ("stderr", "stdout"):
+        blob = res.get(key) or ""
+        data = _loads_json_blob(str(blob))
+        if isinstance(data, dict):
+            for k in ("error", "message", "detail", "reason"):
+                val = data.get(k)
+                if val:
+                    code = data.get("code") or data.get("error_code") or data.get("name")
+                    if code and str(code) not in str(val):
+                        return f"{code}: {val}"
+                    return str(val)
+            err_obj = data.get("result") if isinstance(data.get("result"), dict) else None
+            if err_obj:
+                for k in ("error", "message"):
+                    if err_obj.get(k):
+                        return str(err_obj[k])
+            if data.get("ok") is False and data.get("error"):
+                return str(data["error"])
+    if res.get("error"):
+        return str(res["error"])
+    stderr = str(res.get("stderr") or "").strip()
+    if stderr:
+        return stderr.splitlines()[-1][:500]
+    stdout = str(res.get("stdout") or "").strip()
+    if stdout:
+        return stdout.splitlines()[-1][:500]
+    rc = res.get("returncode")
+    if rc not in (None, 0):
+        return f"{fallback} (rc={rc})"
+    return fallback
+
+
+def _cmd_payload(res: dict[str, Any]) -> Any | None:
+    for key in ("stdout", "stderr"):
+        data = _loads_json_blob(str(res.get(key) or ""))
+        if data is not None:
+            return data
+    return None
+
+
+def _pane_id_from_obj(obj: Any) -> str | None:
+    if isinstance(obj, str) and obj.strip():
+        return obj.strip()
+    if not isinstance(obj, dict):
+        return None
+    for key in ("pane_id", "id", "paneId"):
+        val = obj.get(key)
+        if val is not None and str(val).strip():
+            return str(val).strip()
+    pane = obj.get("pane")
+    if isinstance(pane, dict):
+        return _pane_id_from_obj(pane)
+    return None
+
+
+def _iter_panes(data: Any) -> list[dict[str, Any]]:
+    if data is None:
+        return []
+    if isinstance(data, list):
+        return [p for p in data if isinstance(p, dict)]
+    if not isinstance(data, dict):
+        return []
+    for key in ("panes", "items", "windows"):
+        val = data.get(key)
+        if isinstance(val, list):
+            return [p for p in val if isinstance(p, dict)]
+    result = data.get("result")
+    if isinstance(result, dict):
+        return _iter_panes(result)
+    if isinstance(result, list):
+        return [p for p in result if isinstance(p, dict)]
+    # Single pane object
+    if _pane_id_from_obj(data):
+        return [data]
+    return []
+
+
+def _is_shell_pane(pane: dict[str, Any]) -> bool:
+    kind = str(
+        pane.get("kind")
+        or pane.get("type")
+        or pane.get("pane_kind")
+        or pane.get("role")
+        or ""
+    ).lower()
+    if kind in ("shell", "terminal", "pty", ""):
+        # empty kind: treat as eligible shell-like unless marked agent
+        if kind == "" and str(pane.get("agent") or pane.get("agent_id") or "").strip():
+            return False
+        return True
+    return "shell" in kind or "term" in kind
+
+
+def _is_focused_pane(pane: dict[str, Any]) -> bool:
+    for key in ("focused", "is_focused", "active", "is_active"):
+        val = pane.get(key)
+        if val is True or val == 1 or str(val).lower() in ("1", "true", "yes"):
+            return True
+    return False
+
+
+def _pick_base_pane(
+    bin_path: str,
+    *,
+    env: dict[str, str] | None = None,
+    timeout: float = 15.0,
+) -> dict[str, Any]:
+    """herdr pane list JSON → prefer focused shell pane, else first pane."""
+    run_env = env if env is not None else os.environ.copy()
+    list_res = _run_cmd([bin_path, "pane", "list"], timeout=timeout, env=run_env)
+    data = _cmd_payload(list_res)
+    panes = _iter_panes(data)
+    if not panes:
+        return {
+            "ok": False,
+            "error": _herdr_error_message(list_res, fallback="no panes from herdr pane list"),
+            "list": list_res,
+            "pane_id": None,
+        }
+    focused_shell = [p for p in panes if _is_focused_pane(p) and _is_shell_pane(p)]
+    shell_panes = [p for p in panes if _is_shell_pane(p)]
+    focused = [p for p in panes if _is_focused_pane(p)]
+    chosen = (focused_shell or shell_panes or focused or panes)[0]
+    pane_id = _pane_id_from_obj(chosen)
+    if not pane_id:
+        return {
+            "ok": False,
+            "error": "herdr pane list returned panes without pane_id",
+            "list": list_res,
+            "pane_id": None,
+        }
+    return {
+        "ok": True,
+        "pane_id": pane_id,
+        "pane": chosen,
+        "list": list_res,
+        "count": len(panes),
+    }
+
+
+def _split_seat_pane(
+    bin_path: str,
+    *,
+    cwd: str | None = None,
+    direction: str = "right",
+    env: dict[str, str] | None = None,
+    timeout: float = 30.0,
+    shell_wait: float | None = None,
+) -> dict[str, Any]:
+    """Split from base pane; return new seat pane_id (wait briefly for interactive shell)."""
+    run_env = env if env is not None else merge_user_session_env()
+    base = _pick_base_pane(bin_path, env=run_env, timeout=min(15.0, timeout))
+    if not base.get("ok"):
+        return base
+    base_id = str(base["pane_id"])
+    workdir = (cwd or os.getcwd() or os.path.expanduser("~")).strip() or os.path.expanduser("~")
+    direction = (direction or "right").strip() or "right"
+    if direction not in ("right", "down", "left", "up"):
+        direction = "right"
+    cmd = [
+        bin_path,
+        "pane",
+        "split",
+        base_id,
+        "--direction",
+        direction,
+        "--cwd",
+        workdir,
+        "--no-focus",
+    ]
+    split_res = _run_cmd(cmd, timeout=timeout, env=run_env)
+    data = _cmd_payload(split_res)
+    pane_id = None
+    if isinstance(data, dict):
+        result = data.get("result") if isinstance(data.get("result"), dict) else data
+        if isinstance(result, dict):
+            pane_id = _pane_id_from_obj(result.get("pane") if "pane" in result else result)
+        if not pane_id:
+            pane_id = _pane_id_from_obj(data)
+    if not pane_id and split_res.get("ok"):
+        # Some builds print bare id
+        for line in str(split_res.get("stdout") or "").splitlines():
+            line = line.strip()
+            if line and " " not in line and not line.startswith("{"):
+                pane_id = line
+                break
+    if not pane_id or not split_res.get("ok"):
+        return {
+            "ok": False,
+            "error": _herdr_error_message(split_res, fallback="pane split failed"),
+            "base_pane_id": base_id,
+            "split": split_res,
+            "pane_id": None,
+            "cmd": cmd,
+        }
+    wait_s = PANE_SHELL_WAIT_SEC if shell_wait is None else max(0.0, float(shell_wait))
+    if wait_s > 0:
+        sleep(wait_s)
+    return {
+        "ok": True,
+        "pane_id": pane_id,
+        "base_pane_id": base_id,
+        "cwd": workdir,
+        "direction": direction,
+        "split": split_res,
+        "cmd": cmd,
+        "shell_wait_sec": wait_s,
+    }
+
+
+def _close_pane(
+    bin_path: str,
+    pane_id: str,
+    *,
+    env: dict[str, str] | None = None,
+    timeout: float = 15.0,
+) -> dict[str, Any]:
+    """Best-effort close of the seat pane only (never the user's base pane)."""
+    if not pane_id:
+        return {"ok": False, "error": "no pane_id", "closed": False}
+    run_env = env if env is not None else os.environ.copy()
+    candidates = [
+        [bin_path, "pane", "close", pane_id],
+        [bin_path, "pane", "close", pane_id, "--force"],
+    ]
+    last: dict[str, Any] = {"ok": False, "error": "no close attempted", "closed": False}
+    for cmd in candidates:
+        last = _run_cmd(cmd, timeout=timeout, env=run_env)
+        last["cmd"] = cmd
+        if last.get("ok") or last.get("returncode") == 0:
+            last["closed"] = True
+            return last
+        if "returncode" in last:
+            last["closed"] = True  # attempted; pane may already be gone
+            return last
+    last["closed"] = False
+    return last
+
+
 def _live_run_node(
     node: dag.Node,
     *,
@@ -519,68 +833,137 @@ def _live_run_node(
     timeout: float,
 ) -> dict[str, Any]:
     """
-    Start → prompt → wait (bounded) → always stop.
-    Never leaves the agent running after return.
+    Split seat pane → agent start --pane → prompt → wait → always stop + pane close.
+    Never leaves the agent or seat pane running after return (finite-job).
     """
     agent_id = _agent_id_for(node)
     prompt = _node_prompt(node)
     kind = (os.environ.get("OKSTRATR_HERDR_KIND") or DEFAULT_KIND).strip() or DEFAULT_KIND
-    env = os.environ.copy()
+    env = merge_user_session_env()
     env["OKSTRATR_NODE_ID"] = node.id
     env["OKSTRATR_OBJECTIVE"] = prompt
 
     steps: list[dict[str, Any]] = []
-    start_cmd = [bin_path, "agent", "start", agent_id, "--kind", kind, "--", prompt]
-    start_res = _run_cmd(start_cmd, timeout=min(60.0, timeout), env=env)
-    steps.append({"phase": "start", **start_res})
+    pane_id: str | None = None
+    timeout_ms = max(1000, int(float(timeout) * 1000))
 
-    if not start_res.get("ok"):
-        # Still attempt stop in case partial start
-        stop_res = _stop_agent(bin_path, agent_id, timeout=30.0)
-        steps.append({"phase": "stop", **stop_res})
+    try:
+        split = _split_seat_pane(
+            bin_path,
+            cwd=os.getcwd(),
+            direction="right",
+            env=env,
+            timeout=min(60.0, max(15.0, timeout)),
+        )
+        steps.append({"phase": "split", **{k: v for k, v in split.items() if k != "split"}, "detail": split.get("split")})
+        if not split.get("ok"):
+            return {
+                "ok": False,
+                "agent_id": agent_id,
+                "dry_run": False,
+                "steps": steps,
+                "error": split.get("error") or "pane split failed",
+            }
+        pane_id = str(split["pane_id"])
+
+        start_cmd = [
+            bin_path,
+            "agent",
+            "start",
+            agent_id,
+            "--kind",
+            kind,
+            "--pane",
+            pane_id,
+            "--timeout",
+            str(timeout_ms),
+        ]
+        start_res = _run_cmd(start_cmd, timeout=min(60.0, timeout), env=env)
+        steps.append({"phase": "start", **start_res})
+        if not start_res.get("ok"):
+            return {
+                "ok": False,
+                "agent_id": agent_id,
+                "pane_id": pane_id,
+                "dry_run": False,
+                "steps": steps,
+                "error": _herdr_error_message(start_res, fallback="agent start failed"),
+            }
+
+        # CLI shapes: `prompt <target> <text> [--wait]` or `prompt <target> -- <text>`
+        prompt_cmd = [bin_path, "agent", "prompt", agent_id, prompt, "--wait"]
+        prompt_res = _run_cmd(prompt_cmd, timeout=min(60.0, timeout), env=env)
+        if not prompt_res.get("ok"):
+            alt = [bin_path, "agent", "prompt", agent_id, "--", prompt]
+            alt_res = _run_cmd(alt, timeout=min(60.0, timeout), env=env)
+            steps.append({"phase": "prompt", "attempt": "with --wait", **prompt_res})
+            prompt_res = alt_res
+            steps.append({"phase": "prompt", "attempt": "with --", **prompt_res})
+        else:
+            steps.append({"phase": "prompt", **prompt_res})
+
+        wait_cmd = [bin_path, "agent", "wait", agent_id]
+        wait_res = _run_cmd(wait_cmd, timeout=timeout, env=env)
+        steps.append({"phase": "wait", **wait_res})
+
+        ok = bool(wait_res.get("ok")) or (
+            wait_res.get("returncode") == 0 and "error" not in wait_res
+        )
         return {
-            "ok": False,
+            "ok": ok,
             "agent_id": agent_id,
+            "pane_id": pane_id,
             "dry_run": False,
             "steps": steps,
-            "error": start_res.get("error") or start_res.get("stderr") or "start failed",
+            "stdout": wait_res.get("stdout") or prompt_res.get("stdout") or "",
+            "error": None
+            if ok
+            else _herdr_error_message(wait_res, fallback="wait failed"),
         }
-
-    # Optional explicit prompt (some Herdr builds separate start/prompt)
-    prompt_cmd = [bin_path, "agent", "prompt", agent_id, "--", prompt]
-    prompt_res = _run_cmd(prompt_cmd, timeout=min(60.0, timeout), env=env)
-    steps.append({"phase": "prompt", **prompt_res})
-
-    wait_cmd = [bin_path, "agent", "wait", agent_id]
-    wait_res = _run_cmd(wait_cmd, timeout=timeout, env=env)
-    steps.append({"phase": "wait", **wait_res})
-
-    # Finite-job rule: always stop/release
-    stop_res = _stop_agent(bin_path, agent_id, timeout=30.0)
-    steps.append({"phase": "stop", **stop_res})
-
-    ok = bool(wait_res.get("ok")) or (
-        wait_res.get("returncode") == 0 and "error" not in wait_res
-    )
-    return {
-        "ok": ok,
-        "agent_id": agent_id,
-        "dry_run": False,
-        "steps": steps,
-        "stdout": wait_res.get("stdout") or prompt_res.get("stdout") or "",
-        "error": None if ok else (wait_res.get("error") or wait_res.get("stderr") or "wait failed"),
-    }
+    finally:
+        # Finite-job: always stop agent + close the *seat* pane (not the user's base).
+        stop_res = _stop_agent(bin_path, agent_id, timeout=30.0)
+        steps.append({"phase": "stop", **stop_res})
+        if pane_id:
+            close_res = _close_pane(bin_path, pane_id, env=env, timeout=15.0)
+            steps.append({"phase": "pane_close", **close_res})
 
 
 def _dry_run_node(node: dag.Node) -> dict[str, Any]:
     agent_id = _agent_id_for(node)
     prompt = _node_prompt(node)
     kind = (os.environ.get("OKSTRATR_HERDR_KIND") or DEFAULT_KIND).strip() or DEFAULT_KIND
+    timeout_ms = max(1000, int(_timeout_sec() * 1000))
+    cwd = os.getcwd() or os.path.expanduser("~")
     would = [
-        ["herdr", "agent", "start", agent_id, "--kind", kind, "--", prompt],
-        ["herdr", "agent", "prompt", agent_id, "--", prompt],
+        ["herdr", "pane", "list"],
+        [
+            "herdr",
+            "pane",
+            "split",
+            "<base_pane>",
+            "--direction",
+            "right",
+            "--cwd",
+            cwd,
+            "--no-focus",
+        ],
+        [
+            "herdr",
+            "agent",
+            "start",
+            agent_id,
+            "--kind",
+            kind,
+            "--pane",
+            "<pane_id>",
+            "--timeout",
+            str(timeout_ms),
+        ],
+        ["herdr", "agent", "prompt", agent_id, prompt, "--wait"],
         ["herdr", "agent", "wait", agent_id],
         ["herdr", "agent", "stop", agent_id],
+        ["herdr", "pane", "close", "<pane_id>"],
     ]
     return {
         "ok": True,

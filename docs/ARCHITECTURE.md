@@ -16,7 +16,7 @@ Okstratr is the **orchestrator / desk brain**. It owns:
 - **Chief of staff (CoS)** — only user interface into a desk; kind-aware heuristic breakdown
 - **Schedule** — parse named/interval cadences; attach to desk (dialog UI later)
 - **Blackboard** — shared claims / notes / decisions / evidence (append JSONL + index)
-- **Herdr bridge** — seat ready DAG nodes into live agent terminals via Herdr’s runtime API (**finite jobs only**); labels `okstratr-{desk}-{role}-{node}`
+- **Herdr bridge** — seat ready DAG nodes into live agent terminals via Herdr’s runtime API (**finite jobs only**); labels `o{desk8}{role6}{node6}`
 
 It does **not** own the knowledge graph, Atlas, Nautilus reveal, or work-coverage
 ingest — those stay in **okbay**. Desks bind the **active okbay workspace / thread ids**.
@@ -85,7 +85,7 @@ okstratr web status|on|off       # web egress gate
    - **Dry-run** (`--dry-run` or `OKSTRATR_HERDR_DRY_RUN=1`): record would-exec, mark `done`, post blackboard — **no real API calls**
    - **Live:** `herdr agent start` → `prompt` → `wait` (bounded) → **always** `agent stop`
    - Update DAG + blackboard
-3. Agent ids: **`okstratr-{desk}-{role}-{node}`** (capped 64). Every label includes **desk_id + thread_id**.
+3. Agent ids: **`o{desk8}{role6}{node6}`** (capped 32). Every label includes **desk_id + thread_id**.
 4. Status JSON includes `herdr_labels` and `focus_desk_id`. `focus_desk(desk_id)` is a stub for bidirectional sync.
 
 Tests must use `OKSTRATR_STATE_DIR` temp dirs and `OKSTRATR_HERDR_DRY_RUN=1`.

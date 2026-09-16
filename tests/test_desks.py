@@ -491,3 +491,76 @@ def test_http_start_without_drive_herdr_lands_quiet(state_dir: Path) -> None:
         assert reg.active().state == "quiet"
     finally:
         httpd.shutdown()
+
+
+def test_start_empty_objective_keeps_quiet_desk_objective(state_dir: Path) -> None:
+    """Stop then Start with empty objective must not wipe the standing desk objective."""
+    from okstratr import desks, status
+
+    first = desks.start("Keep this objective", kind="work")
+    desk_id = first["desk"]["id"]
+    assert first["desk"]["objective"] == "Keep this objective"
+    desks.stop(desk_id)
+    reg = desks.default_registry(force_reload=True)
+    assert reg.desks[desk_id].state == "quiet"
+    assert reg.desks[desk_id].objective == "Keep this objective"
+
+    # Empty query resume of quiet work desk
+    resumed = desks.start("", kind="work", drive_herdr=False)
+    assert resumed["action"] == "resume"
+    assert resumed["desk"]["id"] == desk_id
+    assert resumed["desk"]["objective"] == "Keep this objective"
+    # Global status objective must not be blanked
+    assert status.get_objective() == "Keep this objective"
+
+
+def test_http_start_all_seats_failed_quiets_and_surfaces_error(state_dir: Path, monkeypatch) -> None:
+    """When every Herdr seat fails, desk must Idle and response includes herdr_error."""
+    from okstratr.server import Handler
+    from http.server import ThreadingHTTPServer
+    import json
+    import threading
+    import urllib.request
+    from okstratr import herdr, desks
+
+    def boom(**kwargs):
+        return {
+            "ok": False,
+            "dry_run": True,
+            "results": [
+                {"ok": False, "error": "missing required --pane", "node_id": "investigator", "state": "failed"}
+            ],
+            "ran": ["investigator"],
+        }
+
+    monkeypatch.setattr(herdr, "run_ready", boom)
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    port = httpd.server_address[1]
+    t = threading.Thread(target=httpd.serve_forever, daemon=True)
+    t.start()
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/desk/start",
+            data=json.dumps({
+                "objective": "Drug report",
+                "kind": "work",
+                "drive_herdr": True,
+            }).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req) as r:
+            body = json.loads(r.read().decode())
+        assert body.get("herdr_error")
+        assert "missing required --pane" in body["herdr_error"]
+        assert "Idle" in (body.get("message") or "") or "quiet" in (body.get("message") or "").lower()
+        desk = (body.get("desk") or {}).get("desk") or body.get("desk") or {}
+        # After stop, state should be quiet
+        reg = desks.default_registry(force_reload=True)
+        active = reg.active()
+        assert active is not None
+        assert active.state == "quiet"
+    finally:
+        httpd.shutdown()
+
