@@ -564,3 +564,81 @@ def test_http_start_all_seats_failed_quiets_and_surfaces_error(state_dir: Path, 
     finally:
         httpd.shutdown()
 
+
+
+def test_focus_quiet_desk_syncs_objective_and_dag(state_dir: Path) -> None:
+    """Focusing a quiet desk must set status objective + sync global DAG root."""
+    from okstratr import desks, herdr, status, dag
+
+    a = desks.start("Quiet Alpha", kind="work")
+    desks.stop()
+    b = desks.start("Working Beta", kind="code")
+    assert status.get_objective() == "Working Beta"
+
+    focused = herdr.focus_desk(a["desk"]["id"])
+    assert focused["ok"] is True
+    assert focused.get("objective") == "Quiet Alpha"
+    assert status.get_objective() == "Quiet Alpha"
+    snap = status.write_status()
+    assert snap["focus_desk_id"] == a["desk"]["id"]
+    assert snap["objective"] == "Quiet Alpha"
+    g = dag.default_dag(force_reload=True)
+    root = g.nodes.get("root")
+    title = getattr(root, "title", None) or getattr(root, "objective", None)
+    assert title == "Quiet Alpha"
+    _ = b
+
+
+def test_dedupe_kind_collapses_quiet_twins(state_dir: Path) -> None:
+    """Two quiet autos → dedupe/start leaves a single live desk of that kind."""
+    from okstratr import desks
+
+    # Bypass start() dedupe by injecting a second quiet twin into the registry.
+    desks.start("Auto one", kind="auto", reset=True)
+    desks.stop()
+    reg = desks.default_registry(force_reload=True)
+    first = next(d for d in reg.desks.values() if d.kind == "auto" and d.state == "quiet")
+    twin = desks.Desk(
+        id="desk-twin-auto",
+        kind="auto",
+        objective="Auto twin",
+        state="quiet",
+        roles=list(first.roles),
+        created_at=first.created_at - 10,
+        updated_at=first.updated_at - 10,
+        thread_id="thread-desk-twin-auto",
+        dag_relpath=f"desks/desk-twin-auto/dag.json",
+    )
+    reg.desks[twin.id] = twin
+    reg.save()
+
+    live_before = [d for d in reg.standing() if d.kind == "auto"]
+    assert len(live_before) == 2
+
+    out = desks.dedupe_kind("auto")
+    assert out["ok"] is True
+    assert len(out["dismissed"]) == 1
+    reg = desks.default_registry(force_reload=True)
+    live_after = [d for d in reg.standing() if d.kind == "auto"]
+    assert len(live_after) == 1
+    assert live_after[0].id == first.id  # newest/preferred kept
+
+    # start without reset resumes that one live desk (no second twin)
+    r = desks.start("Auto three", kind="auto")
+    assert r["action"] == "resume"
+    assert r["desk"]["id"] == first.id
+    reg = desks.default_registry(force_reload=True)
+    assert len([d for d in reg.standing() if d.kind == "auto"]) == 1
+
+
+def test_start_resumes_preferred_live_not_twin(state_dir: Path) -> None:
+    from okstratr import desks
+
+    r1 = desks.start("First work", kind="work")
+    desks.stop()
+    r2 = desks.start("Second work", kind="work")  # should resume, not twin
+    assert r2["action"] == "resume"
+    assert r2["desk"]["id"] == r1["desk"]["id"]
+    assert r2["desk"]["objective"] == "Second work"
+    reg = desks.default_registry(force_reload=True)
+    assert len([d for d in reg.standing() if d.kind == "work"]) == 1

@@ -472,11 +472,22 @@ def focus_desk(desk_id: str | None = None) -> dict[str, Any]:
             "desk_id": target_id,
             "stub": True,
         }
+    # Any non-dismissed desk: focus + activate, always sync DAG + status objective.
     reg.focus_id = desk.id
-    if desk.state != "dismissed":
-        reg.active_id = desk.id
-        if desk.state == "working":
-            reg._sync_global_dag_from_desk(desk)
+    reg.active_id = desk.id
+    reg._sync_global_dag_from_desk(desk)
+    status.set_objective(desk.objective or "")
+    # Keep thread_id stable and visible on Herdr labels / status.
+    if not (desk.thread_id or "").strip():
+        desk.thread_id = f"thread-{desk.id}"
+    try:
+        from . import okbay
+
+        okbay.remember_desk_thread(desk.id, desk.thread_id)
+    except Exception:  # noqa: BLE001 — best-effort stub persistence
+        from .logutil import get_logger
+
+        get_logger(__name__).warning("okbay.remember_desk_thread failed", exc_info=True)
     reg.save()
     status.write_status()
     labels = labels_for_desk(desk)
@@ -487,6 +498,7 @@ def focus_desk(desk_id: str | None = None) -> dict[str, Any]:
         "focus_desk_id": desk.id,
         "desk_id": desk.id,
         "thread_id": desk.thread_id,
+        "objective": desk.objective or "",
         "herdr_labels": labels,
         "herdr_sync": "pending",
         "close_warning": CLOSE_WARNING,

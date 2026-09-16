@@ -11,6 +11,9 @@ from . import PORT, __version__
 from . import blackboard, dag, herdr, okbay, schedule
 # desks imported lazily in snapshot to avoid cycles
 from .paths import state_dir as _state_dir
+from .logutil import get_logger
+
+_log = get_logger(__name__)
 
 STATUS_NAME = "status.json"
 
@@ -132,6 +135,7 @@ def snapshot() -> dict[str, Any]:
             labels = herdr.labels_for_desk(active)
             labels["focus_desk_id"] = focus_desk_id
     except Exception:  # noqa: BLE001
+        _log.exception("status.snapshot: desk brief failed")
         desk_brief = None
         kernel = None  # type: ignore[assignment]
 
@@ -154,6 +158,7 @@ def snapshot() -> dict[str, Any]:
         desk_id = (desk_brief or {}).get("active_id")
         effort_slider = kernel_mod.effort_slider(effort, desk_id=desk_id)
     except Exception:  # noqa: BLE001
+        _log.warning("status.snapshot: effort_slider failed", exc_info=True)
         effort_slider = {"value": effort, "stub": False, "bandit": True}
 
     web_egress = None
@@ -162,6 +167,7 @@ def snapshot() -> dict[str, Any]:
 
         web_egress = web_mod.status()
     except Exception:  # noqa: BLE001
+        _log.warning("status.snapshot: web_egress failed", exc_info=True)
         web_egress = {"mode": "off", "label": "Off", "chip": "Web: Off", "gate": True}
 
     roles_config = None
@@ -170,13 +176,21 @@ def snapshot() -> dict[str, Any]:
 
         roles_config = roles_cfg.load_role_config()
     except Exception:  # noqa: BLE001
+        _log.warning("status.snapshot: roles_config failed", exc_info=True)
         roles_config = None
 
     workspaces = None
     try:
         workspaces = okbay.list_workspaces()
     except Exception:  # noqa: BLE001
+        _log.warning("status.snapshot: okbay workspaces failed", exc_info=True)
         workspaces = {"reachable": False, "workspaces": [], "local_fallback": True}
+
+    if isinstance(web_egress, dict) and web_egress.get("pending_approval"):
+        deny_msg = web_egress.get("message") or web_egress.get("note") or "Web egress denied — needs approval"
+        msg = f"{msg} · {deny_msg}" if msg else str(deny_msg)
+        web_egress = dict(web_egress)
+        web_egress.setdefault("message", deny_msg)
 
     return {
         "ts": time(),
@@ -229,7 +243,7 @@ def write_status(data: dict[str, Any] | None = None) -> dict[str, Any]:
                 path.write_text(json.dumps(snap, indent=2) + "\n", encoding="utf-8")
                 return snap
         except Exception:  # noqa: BLE001
-            pass
+            _log.warning("write_status: maybe_quiet_if_finished failed", exc_info=True)
     snap = data or snapshot()
     path = status_path()
     path.parent.mkdir(parents=True, exist_ok=True)

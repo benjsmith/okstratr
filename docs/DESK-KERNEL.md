@@ -154,6 +154,15 @@ waiting). When the desk DAG is fully terminal (`done`|`failed` only),
 (`default_standing_rows`) prefer working → quiet → most recent dismissed; empty
 startable rows only when that kind has no desks at all.
 
+### One live desk per kind
+
+The registry may historically hold multiple quiet desks of the same kind; the standing
+picker only shows the preferred one (working → quiet, newest) → objective/DAG drift.
+On `start` (when not `reset`), always **resume** `preferred_live_desk(kind)` and update
+the objective — do not spawn a second quiet twin. `desks.dedupe_kind(kind)` (also run
+at end of start) dismisses older quiet twins. HTTP: `POST /api/desk/dedupe_kind`.
+
+
 - **stop**: do not wipe the DAG; CoS remains the contact surface for further input.
 - **dismiss**: archive the desk’s DAG, mark dismissed (still visible in the rail as
   **dismissed** with Delete); clear standing org so tokens are not burned on a dead desk.
@@ -173,6 +182,8 @@ startable rows only when that kind has no desks at all.
 - **Combinations:** e.g. `1h30m` = 90 minutes
 
 Implemented in `okstratr.schedule_parse` with exhaustive tests.
+`okstratr.schedule` wires parse + `desks.schedule` into status `schedule.next_fire`;
+attention-window UI for next fire is the follow-up.
 
 ## Guardrails (historical Switchbay bugs)
 
@@ -240,9 +251,9 @@ keeps the existing objective when resuming a quiet desk with an empty objective.
 
 ### Focus + close
 
-- `focus_desk(desk_id)` — stub for bidirectional sync (records focus, would focus that CoS in Herdr).
-- Switching desks in okstratr focuses that CoS in Herdr, and vice versa (live sync later).
-- Closing okstratr: **warn** that the kernel will shut down, desks suspend (quiet), and the session returns to regular Herdr.
+- `focus_desk(desk_id)` — on focus of any **non-dismissed** desk: set `focus_id` + `active_id`, **always** sync the global DAG from that desk’s DAG file, `status.set_objective(desk.objective)`, save registry + `write_status()`. Panel refills `queryInput` from the focus API `objective` (rail click and API path). Live Herdr pane sync remains pending.
+- Switching desks in okstratr focuses that CoS in Herdr, and vice versa (live pane sync later).
+- Closing okstratr: **warn** (Panel close dialog binds `status.ui.close_warning`); on confirm, `POST /api/desk/quiet_standing` then close panel; cancel stays open.
 
 **Close-warning copy (QML later — bind `status.ui.close_warning`):**
 
@@ -336,3 +347,15 @@ HTTP: /api/desk/* (incl. effort) /api/web (+ /api/seat alias)
 - Improvement #1: classifying a query to suggest/choose a desk kind
 - Herdr desk-grouping lens
 - Inventing arbitrary new desk kinds at runtime (documented; may only pick defaults)
+
+
+## Follow-ups (robustness batch)
+
+Out of scope for the focus/dedupe/stub PR — track next:
+
+- Full DeskSession rewrite
+- Async background `run_ready` after Start
+- Splitting Panel.qml into modules
+- Replacing FileView + HTTP dual bind
+- Live Herdr pane focus sync (beyond recording focus_desk_id)
+- Attention-window UI for schedule next-fire

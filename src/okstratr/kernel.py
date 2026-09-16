@@ -8,6 +8,10 @@ okstratr.bandit and documented in docs/DESK-KERNEL.md.
 
 from __future__ import annotations
 
+from .logutil import get_logger
+
+_log = get_logger(__name__)
+
 import re
 from time import time
 from typing import Any
@@ -386,7 +390,7 @@ def set_effort(desk: Any, value: float) -> dict[str, Any]:
 
         status_mod.write_status()
     except Exception:  # noqa: BLE001
-        pass
+        _log.warning("kernel: status.write_status failed", exc_info=True)
     slider = effort_slider(e, desk_id=getattr(d, "id", None))
     return {
         "ok": True,
@@ -516,7 +520,7 @@ def hire(desk: Any, request: Any) -> dict[str, Any]:
 
         status_mod.write_status()
     except Exception:  # noqa: BLE001
-        pass
+        _log.warning("kernel: status.write_status failed", exc_info=True)
     return {
         "ok": True,
         "action": "hire",
@@ -626,7 +630,7 @@ def retire_worker(
             d.updated_at = time()
             reg.save()
         except Exception:  # noqa: BLE001
-            pass
+            _log.exception("kernel.retire_worker: persist desk DAG failed")
 
     # Bandit reward
     if prior_state == "failed":
@@ -646,7 +650,7 @@ def retire_worker(
 
         status_mod.write_status()
     except Exception:  # noqa: BLE001
-        pass
+        _log.warning("kernel: status.write_status failed", exc_info=True)
 
     return {
         "ok": True,
