@@ -100,6 +100,19 @@ class Handler(BaseHTTPRequestHandler):
             code, body, ct = _json_bytes(payload)
             return self._send(code, body, ct)
 
+
+        if path in ("/api/harness", "/api/harness/list", "/api/config/harness"):
+            from .harness import config as harness_config
+
+            code, body, ct = _json_bytes(harness_config.list_for_api())
+            return self._send(code, body, ct)
+
+        if path == "/api/desk_session":
+            from . import desk_session as desk_session_mod
+
+            code, body, ct = _json_bytes(desk_session_mod.snapshot())
+            return self._send(code, body, ct)
+
         code, body, ct = _json_bytes({"error": "not found", "path": path}, 404)
         self._send(code, body, ct)
 
@@ -469,6 +482,67 @@ class Handler(BaseHTTPRequestHandler):
             code, body, ct = _json_bytes({"ok": True, "roles_config": saved})
             return self._send(code, body, ct)
 
+
+        if path in ("/api/harness/enable", "/api/config/harness/enable"):
+            from .harness import config as harness_config
+
+            hid = str(payload.get("id") or payload.get("harness") or "").strip()
+            if not hid:
+                code, body, ct = _json_bytes({"ok": False, "error": "id required"}, 400)
+                return self._send(code, body, ct)
+            try:
+                harness_config.enable(hid)
+            except ValueError as e:
+                code, body, ct = _json_bytes({"ok": False, "error": str(e)}, 400)
+                return self._send(code, body, ct)
+            status.write_status()
+            code, body, ct = _json_bytes(harness_config.list_for_api())
+            return self._send(code, body, ct)
+
+        if path in ("/api/harness/disable", "/api/config/harness/disable"):
+            from .harness import config as harness_config
+
+            hid = str(payload.get("id") or payload.get("harness") or "").strip()
+            if not hid:
+                code, body, ct = _json_bytes({"ok": False, "error": "id required"}, 400)
+                return self._send(code, body, ct)
+            try:
+                harness_config.disable(hid)
+            except ValueError as e:
+                code, body, ct = _json_bytes({"ok": False, "error": str(e)}, 400)
+                return self._send(code, body, ct)
+            status.write_status()
+            code, body, ct = _json_bytes(harness_config.list_for_api())
+            return self._send(code, body, ct)
+
+        if path in ("/api/harness/reload", "/api/config/harness/reload"):
+            from .harness import config as harness_config
+
+            # Re-read from disk (load is always fresh); refresh status mirror.
+            snap = harness_config.list_for_api()
+            status.write_status()
+            code, body, ct = _json_bytes(snap)
+            return self._send(code, body, ct)
+
+        if path in ("/api/harness/set", "/api/config/harness/set"):
+            from .harness import config as harness_config
+
+            key = str(payload.get("key") or "").strip()
+            value = payload.get("value")
+            if value is None:
+                value = ""
+            if not key:
+                code, body, ct = _json_bytes({"ok": False, "error": "key required"}, 400)
+                return self._send(code, body, ct)
+            try:
+                harness_config.set_value(key, str(value))
+            except ValueError as e:
+                code, body, ct = _json_bytes({"ok": False, "error": str(e)}, 400)
+                return self._send(code, body, ct)
+            status.write_status()
+            code, body, ct = _json_bytes(harness_config.list_for_api())
+            return self._send(code, body, ct)
+
         code, body, ct = _json_bytes({"error": "not found", "path": path}, 404)
         self._send(code, body, ct)
 
@@ -478,7 +552,7 @@ def serve(host: str = "127.0.0.1", port: int = PORT) -> int:
     httpd = ThreadingHTTPServer((host, port), Handler)
     print(
         f"okstratr listening on http://{host}:{port}  "
-        "(/health /api/status /api/desk/* /api/web /api/workspaces /api/config/roles "
+        "(/health /api/status /api/desk/* /api/web /api/workspaces /api/config/roles /api/harness /api/desk_session "
         "/api/seat /api/dag /api/blackboard /api/cos/break /api/herdr/launch /api/herdr/run-ready)"
     )
     try:

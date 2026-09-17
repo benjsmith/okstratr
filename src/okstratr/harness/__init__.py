@@ -1,6 +1,7 @@
 """Harness-agnostic seating — registry, config, selection, direct adapter."""
 
 from .config import (
+    list_for_api,
     HarnessConfig,
     PerHarnessSettings,
     config_path,
@@ -54,4 +55,5 @@ __all__ = [
     "run_direct_stub",
     "save",
     "set_value",
+    "list_for_api",
 ]

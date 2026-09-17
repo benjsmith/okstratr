@@ -215,6 +215,29 @@ def snapshot() -> dict[str, Any]:
         herdr_job = None
         herdr_error = None
 
+
+    desk_session_snap = None
+    try:
+        from . import desk_session as desk_session_mod
+
+        desk_session_snap = desk_session_mod.snapshot(
+            registry=None,
+            dag_summary=d,
+            objective=obj,
+        )
+    except Exception:  # noqa: BLE001
+        _log.warning("status.snapshot: desk_session failed", exc_info=True)
+        desk_session_snap = None
+
+    harness_snap = None
+    try:
+        from .harness import config as harness_config
+
+        harness_snap = harness_config.list_for_api()
+    except Exception:  # noqa: BLE001
+        _log.warning("status.snapshot: harness list failed", exc_info=True)
+        harness_snap = None
+
     return {
         "ts": time(),
         "state": display_state,
@@ -250,6 +273,19 @@ def snapshot() -> dict[str, Any]:
         },
         "version": __version__,
         "message": msg,
+        # Phase 3: canonical DeskSession + harness allowlist (Panel/TUI/HTTP SSOT path)
+        "desk_session": desk_session_snap,
+        "desks": (desk_session_snap or {}).get("desks") or [],
+        "standing": (desk_session_snap or {}).get("standing")
+        or (desk_brief or {}).get("standing")
+        or [],
+        "harness": harness_snap,
+        "status_channel": {
+            "primary": "GET /api/status",
+            "compat_file": str(status_path()),
+            "dual_source": True,
+            "notes": "P3 prefers HTTP; FileView status.json is compat mirror (cleanup in P4).",
+        },
     }
 
 

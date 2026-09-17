@@ -79,8 +79,20 @@ def badge_for_state(state: str | None) -> str:
 
 
 def desk_rows(status: dict[str, Any]) -> list[dict[str, Any]]:
-    """Normalize standing desks for sidebar/tabs with Running/Idle badges."""
-    desks = status.get("desks") or status.get("standing") or []
+    """Normalize standing desks for sidebar/tabs with Running/Idle badges.
+
+    Prefer DeskSession (P3 SSOT) when present; fall back to legacy top-level
+    desks/standing or status.desk.standing.
+    """
+    ds = status.get("desk_session") if isinstance(status.get("desk_session"), dict) else None
+    desks = None
+    if ds:
+        desks = ds.get("desks") or ds.get("standing")
+    if not desks:
+        desks = status.get("desks") or status.get("standing")
+    if not desks and isinstance(status.get("desk"), dict):
+        desks = status["desk"].get("standing")
+    desks = desks or []
     if isinstance(desks, dict):
         rows = list(desks.values()) if desks else []
     else:
