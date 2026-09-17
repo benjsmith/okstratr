@@ -1,4 +1,4 @@
-// Phase 2: Panel is a thin client of okstratr daemon (ADR-001). Harness allowlist: ~/.config/okstratr/harnesses.toml — Config shows path; edit via CLI.
+// Phase 3: Panel is a pure client of okstratr daemon (ADR-001). Status via GET /api/status (DeskSession); harness editor via /api/harness*. FileView status.json is compat fallback.
 // Okstratr panel: full-size FloatingWindow desk UI (native toplevel — not Overlay).
 // Real xdg-shell window so it does NOT paint over lock/screensaver (unlike WlrLayer.Overlay).
 // LEFT rail: standing desks from status.desk.standing / focus_desk_id (POST /api/desk/focus).
@@ -50,6 +50,9 @@ Item {
   property string selectedKind: "auto"
   property bool workspaceMenuOpen: false
   property bool configOpen: false
+  property var harnessRows: []
+  property string harnessConfigPath: "~/.config/okstratr/harnesses.toml"
+  property string harnessActionMsg: ""
   property bool scheduleOpen: false
   property string scheduleDeskId: ""
   property string scheduleKind: ""
@@ -340,6 +343,57 @@ Item {
     })
   }
 
+
+  function applyHarnessPayload(parsed) {
+    if (!parsed) return
+    root.harnessRows = Model.harnessRows(parsed)
+    root.harnessConfigPath = Model.harnessConfigPath(parsed)
+    if (root.status) {
+      root.status.harness = parsed
+      if (parsed && parsed.ok !== false && root.status.desk_session === undefined)
+        root.refreshLive()
+    }
+  }
+
+  function loadHarnessConfig() {
+    Model.getJson(root.apiUrl + "/api/harness", function (parsed) {
+      if (parsed && parsed.ok !== false) {
+        root.applyHarnessPayload(parsed)
+        root.harnessActionMsg = ""
+      } else {
+        root.harnessActionMsg = (parsed && parsed.error) ? String(parsed.error) : "Harness API unavailable — use CLI"
+        // Fall back to status.harness if daemon embedded it
+        if (root.status && root.status.harness)
+          root.applyHarnessPayload(root.status.harness)
+      }
+    })
+  }
+
+  function toggleHarness(hid, enable) {
+    var path = enable ? "/api/harness/enable" : "/api/harness/disable"
+    Model.postJson(root.apiUrl + path, {id: String(hid)}, function (parsed) {
+      if (parsed && parsed.ok !== false) {
+        root.applyHarnessPayload(parsed)
+        root.harnessActionMsg = (enable ? "Enabled " : "Disabled ") + hid
+        root.refreshLive()
+      } else {
+        root.harnessActionMsg = (parsed && parsed.error) ? String(parsed.error) : "Toggle failed"
+      }
+    })
+  }
+
+  function reloadHarnessConfig() {
+    Model.postJson(root.apiUrl + "/api/harness/reload", {}, function (parsed) {
+      if (parsed && parsed.ok !== false) {
+        root.applyHarnessPayload(parsed)
+        root.harnessActionMsg = "Reloaded harnesses.toml"
+        root.refreshLive()
+      } else {
+        root.harnessActionMsg = (parsed && parsed.error) ? String(parsed.error) : "Reload failed"
+      }
+    })
+  }
+
   function setWeb(action) {
     Model.postJson(root.apiUrl + "/api/web", {action: action}, function (parsed) {
       if (parsed) {
@@ -356,8 +410,11 @@ Item {
     watchChanges: true
     printErrors: false
     onLoaded: {
+      // Compat mirror; prefer HTTP /api/status when panel is open (DeskSession SSOT).
       var parsed = Model.parseStatus(statusFile.text())
       if (parsed) root.status = parsed
+      if (root.opened)
+        root.refreshLive()
     }
   }
 
@@ -506,7 +563,7 @@ Item {
 
             Chip {
               label: "⚙ Config"
-              onClicked: root.configOpen = true
+              onClicked: { root.configOpen = true; root.loadHarnessConfig(); root.refreshLive() }
             }
 
             Chip {
@@ -1294,7 +1351,7 @@ Item {
           visible: root.configOpen
           anchors.centerIn: parent
           width: Math.min(parent.width - 60, 900)
-          height: Math.min(parent.height - 60, 610)
+          height: Math.min(parent.height - 40, 720)
           radius: 12
           color: root.themePanel
           border.width: 1
@@ -1330,34 +1387,122 @@ Item {
                 anchors.right: parent.right
                 anchors.top: parent.top
                 anchors.margins: 10
-                spacing: 4
-                Text {
-                  text: "Harness allowlist (thin client)"
-                  color: root.themeFg
-                  font.pixelSize: 13
-                  font.bold: true
+                spacing: 6
+                Row {
+                  width: parent.width
+                  spacing: 8
+                  Text {
+                    text: "Harness allowlist (daemon API)"
+                    color: root.themeFg
+                    font.pixelSize: 13
+                    font.bold: true
+                  }
+                  Item { width: 8; height: 1 }
+                  Chip {
+                    label: "Reload"
+                    onClicked: root.reloadHarnessConfig()
+                  }
                 }
                 Text {
                   width: parent.width
                   wrapMode: Text.Wrap
-                  text: "~/.config/okstratr/harnesses.toml  (OKSTRATR_CONFIG_DIR / OKSTRATR_HARNESSES_TOML)"
+                  text: root.harnessConfigPath + "  ·  GET/POST /api/harness*"
                   color: root.themeAccent
                   font.pixelSize: 11
                 }
                 Text {
+                  visible: !!root.harnessActionMsg
                   width: parent.width
                   wrapMode: Text.Wrap
-                  text: "Edit via: okstratr harness enable|disable · okstratr config set harness.<id>.default_model … · okstratr model list. Reload: restart serve or re-open panel."
+                  text: root.harnessActionMsg
                   color: root.themeMuted
                   font.pixelSize: 10
                 }
                 Row {
+                  width: parent.width
                   spacing: 8
-                  Text {
-                    text: "CLI: okstratr config show | okstratr harness list | okstratr model list"
-                    color: root.themeMuted
-                    font.pixelSize: 10
+                  Text { text: "On"; width: 52; color: root.themeMuted; font.pixelSize: 10 }
+                  Text { text: "Harness"; width: 100; color: root.themeMuted; font.pixelSize: 10 }
+                  Text { text: "Default model"; width: 160; color: root.themeMuted; font.pixelSize: 10 }
+                  Text { text: "Effort rungs"; color: root.themeMuted; font.pixelSize: 10 }
+                }
+                Repeater {
+                  model: root.harnessRows
+                  delegate: Rectangle {
+                    id: harnessRow
+                    required property var modelData
+                    width: harnessCfgCol.width
+                    height: 40
+                    radius: 6
+                    color: root.themePanel
+                    border.width: 1
+                    border.color: root.themeDivider
+                    Row {
+                      anchors.fill: parent
+                      anchors.margins: 6
+                      spacing: 8
+                      Rectangle {
+                        width: 52
+                        height: 28
+                        radius: 8
+                        color: modelData.enabled ? "#3344aa88" : "transparent"
+                        border.width: 1
+                        border.color: modelData.enabled ? root.themeAccent : root.themeBorder
+                        Text {
+                          anchors.centerIn: parent
+                          text: modelData.enabled ? "ON" : "OFF"
+                          color: modelData.enabled ? root.themeAccent : root.themeMuted
+                          font.pixelSize: 11
+                          font.bold: true
+                        }
+                        MouseArea {
+                          anchors.fill: parent
+                          cursorShape: Qt.PointingHandCursor
+                          onClicked: root.toggleHarness(modelData.id, !modelData.enabled)
+                        }
+                      }
+                      Text {
+                        text: (modelData.label || modelData.id) + (modelData.installed ? "" : " · missing")
+                        width: 100
+                        height: 28
+                        verticalAlignment: Text.AlignVCenter
+                        color: root.themeFg
+                        font.pixelSize: 12
+                        elide: Text.ElideRight
+                      }
+                      Text {
+                        text: modelData.default_model || "—"
+                        width: 160
+                        height: 28
+                        verticalAlignment: Text.AlignVCenter
+                        color: root.themeMuted
+                        font.pixelSize: 11
+                        elide: Text.ElideRight
+                      }
+                      Text {
+                        text: {
+                          var e = modelData.effort || {}
+                          var parts = []
+                          if (e.trivial) parts.push("tri=" + e.trivial)
+                          if (e.normal) parts.push("nrm=" + e.normal)
+                          if (e.hard) parts.push("hrd=" + e.hard)
+                          return parts.length ? parts.join(" · ") : "—"
+                        }
+                        width: Math.max(120, harnessRow.width - 52 - 100 - 160 - 40)
+                        height: 28
+                        verticalAlignment: Text.AlignVCenter
+                        color: root.themeMuted
+                        font.pixelSize: 10
+                        elide: Text.ElideRight
+                      }
+                    }
                   }
+                }
+                Text {
+                  visible: !root.harnessRows || root.harnessRows.length === 0
+                  text: "No harness rows yet — open Reload or use CLI: okstratr harness list"
+                  color: root.themeMuted
+                  font.pixelSize: 10
                 }
               }
             }

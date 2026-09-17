@@ -110,7 +110,7 @@ State directory: `~/.local/state/okstratr/` (override with `OKSTRATR_STATE_DIR` 
 
 | File | Role |
 |------|------|
-| `status.json` | Snapshot for QML `FileView` (desk kind/state, effort, herdr_labels, dag) |
+| `status.json` | Compat mirror of daemon snapshot for QML `FileView` (P3 prefers `GET /api/status` / DeskSession; dual-source cleanup in P4) |
 | `ui.json` | Panel visibility `{ "panel_open": true|false }` — re-summon FloatingWindow after shell restart |
 | `desks.json` | Desk registry (active_id, focus_id, standing orgs + org/effort) |
 | `bandit.json` | Per-desk + global hire-policy arm stats / last decision |
@@ -128,7 +128,9 @@ State directory: `~/.local/state/okstratr/` (override with `OKSTRATR_STATE_DIR` 
 ## HTTP
 
 - `GET /health` — liveness
-- `GET /api/status` — objective + desk brief + effort + herdr_labels + dag + blackboard
+- `GET /api/status` — objective + desk brief + **desk_session** + harness allowlist + effort + herdr_labels + dag + blackboard
+- `GET /api/desk_session` — DeskSession-only standing desks + seats + DAG slice
+- `GET /api/harness` · `POST /api/harness/enable|disable|reload|set` — harnesses.toml editor API
 - `POST /api/desk/start` — `{objective, kind?, reset?, cos?, effort?, herdr?, drive_herdr?, herdr_limit?}` — UI Start with objective sets `drive_herdr` and **kicks async** bounded `herdr.run_ready` (response includes `herdr_job`; poll `/api/status` or `GET /api/herdr/job`)
 - `POST /api/desk/stop` — `{desk_id?}`
 - `POST /api/desk/dismiss` — `{desk_id?}`

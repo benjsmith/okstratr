@@ -1,6 +1,6 @@
 # ADR-001: CLI/TUI-first desk brain + harness-agnostic seating
 
-- **Status:** Accepted (Phase 1) · Phase 2 in progress
+- **Status:** Accepted (Phase 1–3) · Phase 4 residual (DeskSession FileView dual-write cleanup)
 - **Date:** 2026-09-17
 - **Deciders:** Ben / okstratr
 
@@ -100,11 +100,12 @@ API. Config UI may read/write `harnesses.toml` later; docs note the path.
 
 ## Later phases
 
-- **P2 (this PR):** richer TUI; real direct-CLI adapters; model rungs / effort;
+- **P2:** richer TUI; real direct-CLI adapters; model rungs / effort;
   agents groupings; Panel Config path stub
-- **P3:** thin Omarchy plugin (Panel pure client); DeskSession path; fuller
-  QML harness editor
-- **P4:** DeskSession single source of truth
+- **P3 (this PR):** thin Omarchy plugin (Panel pure client); DeskSession module;
+  fuller QML harness editor via `/api/harness*`
+- **P4 residual:** DeskSession full SSOT — drop FileView dual-read/write where
+  safe; migrate any remaining desk brief channels onto `desk_session` only
 
 ## References
 
@@ -138,4 +139,30 @@ CLI today: `okstratr harness list|enable|disable`, `okstratr config show|set`.
 - `okstratr agents` groups by `desk_id`/`thread_id` (Herdr list + desks);
   same label keys on Herdr + direct paths; label convention documented.
 - Panel Config: harnesses.toml path + CLI reload hints (no full QML editor).
-- Out of scope remains P3+ Panel rewrite / DeskSession SSOT.
+- Out of scope at P2: Panel rewrite / DeskSession SSOT (delivered in P3/P4).
+
+### Phase 3
+
+- **DeskSession** module (`okstratr.desk_session`): single logical view of
+  standing desks + DAG summary + objective + Herdr/direct seat refs.
+  Embedded in `GET /api/status` as `desk_session` (+ top-level `desks` /
+  `standing` aliases). Also `GET /api/desk_session`.
+- **Harness HTTP API**: `GET /api/harness`, `POST /api/harness/enable|disable|
+  reload|set` — persists `harnesses.toml` via existing harness.config helpers.
+  Status snapshot includes `harness` allowlist rows (default_model + effort).
+- **Panel**: Config harness editor lists enable toggles, default_model, effort
+  rungs; Reload button; Start/focus/dismiss UX unchanged (still `/api/desk/*`).
+  Prefers `GET /api/status` while open; FileView `status.json` marked compat.
+- **TUI**: `desk_rows()` prefers `desk_session` when present.
+- **Status channel hygiene**: `status_channel` documents primary HTTP vs
+  FileView dual-source; P4 drops remaining dual-write.
+- Tests: unit DeskSession + harness API; e2e harness toggle via HTTP.
+  Pytest green (142).
+
+### Phase 4 residual
+
+- Eliminate FileView-only status paths where safe; Panel/TUI/CLI read only
+  DeskSession-backed daemon payload.
+- Optional: split oversized Panel.qml further; richer per-harness model picker
+  in QML (beyond toggle + display).
+- Dual-write cleanup notes live in `desk_session.notes` + this ADR.

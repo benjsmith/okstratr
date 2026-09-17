@@ -469,3 +469,39 @@ def set_value(key: str, value: str, *, path: Path | None = None) -> HarnessConfi
         )
     save(cfg, path or cfg.path)
     return cfg
+
+
+def list_for_api(cfg: HarnessConfig | None = None) -> dict[str, Any]:
+    """Public harness rows for Panel/TUI/HTTP (enable flags, models, effort rungs)."""
+    from . import registry
+
+    cfg = cfg or load()
+    installed = registry.detect_all()
+    rows: list[dict[str, Any]] = []
+    for hdef in registry.list_defs():
+        hid = hdef.id
+        settings = cfg.settings_for(hid) if hasattr(cfg, "settings_for") else None
+        models = [m.id if hasattr(m, "id") else str(m) for m in cfg.models_for(hid)]
+        rows.append(
+            {
+                "id": hid,
+                "label": hdef.label or hid,
+                "herdr_kind": hdef.herdr_kind,
+                "enabled": cfg.is_enabled(hid),
+                "installed": bool(installed.get(hid)),
+                "bin_names": list(hdef.bin_names),
+                "default_model": cfg.default_model_for(hid),
+                "models": models,
+                "effort": dict(cfg.effort_map_for(hid) or {}),
+                "notes": hdef.notes or "",
+            }
+        )
+    return {
+        "ok": True,
+        "path": str(cfg.path or config_path()),
+        "enabled": list(cfg.enabled),
+        "preference": list(cfg.preference_order()),
+        "defaults": dict(cfg.defaults),
+        "backend": cfg.preferred_backend(),
+        "harnesses": rows,
+    }

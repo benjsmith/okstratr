@@ -165,6 +165,13 @@ function webEgressChip(status) {
 function standingDesks(status) {
     if (!status)
         return []
+    // P3: DeskSession is the preferred standing-desks shape
+    if (status.desk_session && Array.isArray(status.desk_session.desks))
+        return status.desk_session.desks
+    if (status.desk_session && Array.isArray(status.desk_session.standing))
+        return status.desk_session.standing
+    if (Array.isArray(status.desks))
+        return status.desks
     var desk = status.desk || {}
     var list = desk.standing
     if (Array.isArray(list))
@@ -549,4 +556,35 @@ function roleConfigRows(status) {
         {id: "curator", title: "Curator", enabled: true, hire_cap: null, model_hint: "strongest_available", notes: ""},
         {id: "researcher", title: "Researcher", enabled: true, hire_cap: null, model_hint: "diverse", notes: ""}
     ]
+}
+
+
+/** Phase 3: harness allowlist rows from /api/harness or status.harness */
+function harnessRows(statusOrHarness) {
+    var src = statusOrHarness
+    if (src && src.harness && Array.isArray(src.harness.harnesses))
+        src = src.harness
+    if (src && Array.isArray(src.harnesses))
+        return src.harnesses
+    return []
+}
+
+function harnessConfigPath(statusOrHarness) {
+    var src = statusOrHarness
+    if (src && src.harness && src.harness.path)
+        return String(src.harness.path)
+    if (src && src.path)
+        return String(src.path)
+    return "~/.config/okstratr/harnesses.toml"
+}
+
+/** Prefer DeskSession standing rows when present. */
+function standingDesksFromSession(status) {
+    if (!status)
+        return []
+    if (status.desk_session && Array.isArray(status.desk_session.desks))
+        return status.desk_session.desks
+    if (status.desk_session && Array.isArray(status.desk_session.standing))
+        return status.desk_session.standing
+    return standingDesks(status)
 }
