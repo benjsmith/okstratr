@@ -1,4 +1,4 @@
-// Phase 1: Panel is a client of okstratr daemon (ADR-001). Harness allowlist: ~/.config/okstratr/harnesses.toml
+// Phase 2: Panel is a thin client of okstratr daemon (ADR-001). Harness allowlist: ~/.config/okstratr/harnesses.toml — Config shows path; edit via CLI.
 // Okstratr panel: full-size FloatingWindow desk UI (native toplevel — not Overlay).
 // Real xdg-shell window so it does NOT paint over lock/screensaver (unlike WlrLayer.Overlay).
 // LEFT rail: standing desks from status.desk.standing / focus_desk_id (POST /api/desk/focus).
@@ -1315,6 +1315,51 @@ Item {
               text: "Persisted in OKSTRATR_STATE_DIR/config/roles.json · CoS is always enabled"
               color: root.themeMuted
               font.pixelSize: 11
+            }
+
+            Rectangle {
+              width: parent.width
+              height: harnessCfgCol.height + 16
+              radius: 8
+              color: root.themeBg
+              border.width: 1
+              border.color: root.themeDivider
+              Column {
+                id: harnessCfgCol
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: 10
+                spacing: 4
+                Text {
+                  text: "Harness allowlist (thin client)"
+                  color: root.themeFg
+                  font.pixelSize: 13
+                  font.bold: true
+                }
+                Text {
+                  width: parent.width
+                  wrapMode: Text.Wrap
+                  text: "~/.config/okstratr/harnesses.toml  (OKSTRATR_CONFIG_DIR / OKSTRATR_HARNESSES_TOML)"
+                  color: root.themeAccent
+                  font.pixelSize: 11
+                }
+                Text {
+                  width: parent.width
+                  wrapMode: Text.Wrap
+                  text: "Edit via: okstratr harness enable|disable · okstratr config set harness.<id>.default_model … · okstratr model list. Reload: restart serve or re-open panel."
+                  color: root.themeMuted
+                  font.pixelSize: 10
+                }
+                Row {
+                  spacing: 8
+                  Text {
+                    text: "CLI: okstratr config show | okstratr harness list | okstratr model list"
+                    color: root.themeMuted
+                    font.pixelSize: 10
+                  }
+                }
+              }
             }
 
             Row {

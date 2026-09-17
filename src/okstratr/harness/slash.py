@@ -6,6 +6,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from .rungs import parse_model_token
+
 
 @dataclass
 class SlashDirectives:
@@ -14,6 +16,8 @@ class SlashDirectives:
     kind: str | None = None
     harnesses: list[str] = field(default_factory=list)
     model: str | None = None
+    model_harness: str | None = None  # from /model claude:sonnet
+    rung: str | None = None
     objective: str = ""
     raw_tokens: list[str] = field(default_factory=list)
 
@@ -22,6 +26,8 @@ class SlashDirectives:
             "kind": self.kind,
             "harnesses": list(self.harnesses),
             "model": self.model,
+            "model_harness": self.model_harness,
+            "rung": self.rung,
             "objective": self.objective,
         }
 
@@ -31,26 +37,19 @@ _KIND_RE = re.compile(
     r"^/(" + "|".join(_KIND) + r")\b",
     flags=re.IGNORECASE,
 )
-_HARNESS_RE = re.compile(
-    r"^/harness(?:es)?\s+([a-z0-9_,\-\s]+)$",
-    flags=re.IGNORECASE,
-)
-_MODEL_RE = re.compile(
-    r"^/model\s+(\S+)\s*$",
-    flags=re.IGNORECASE,
-)
 
 
 def parse_slash_directives(text: str) -> SlashDirectives:
     """Parse leading slash directives from a query / TUI input line.
 
-    Supported (Phase 1):
-      /work|/curate|/code|/deck|/auto   — desk kind (same as kernel)
-      /harness grok,claude              — prefer these harness ids (order = preference)
+    Supported:
+      /work|/curate|/code|/deck|/auto   — desk kind
+      /harness grok,claude              — prefer these harness ids
       /model grok-4                     — prefer model id
+      /model claude:sonnet              — prefer harness + model
+      /rung trivial|normal|hard         — effort rung for model select
 
-    Directives may appear as the first token(s); remainder is the objective.
-    Multiple slash tokens can be chained: ``/harness grok,claude /model grok-4 ship it``
+    Multiple slash tokens can be chained.
     """
     raw = (text or "").strip()
     if not raw:
@@ -60,6 +59,8 @@ def parse_slash_directives(text: str) -> SlashDirectives:
     kind: str | None = None
     harnesses: list[str] = []
     model: str | None = None
+    model_harness: str | None = None
+    rung: str | None = None
     i = 0
     consumed: list[str] = []
 
@@ -67,31 +68,41 @@ def parse_slash_directives(text: str) -> SlashDirectives:
         tok = parts[i]
         if not tok.startswith("/"):
             break
-        # /kind
         m_kind = _KIND_RE.match(tok)
         if m_kind and len(tok) == len(m_kind.group(0)):
             kind = m_kind.group(1).lower()
             consumed.append(tok)
             i += 1
             continue
-        # /harness a,b  (may span: /harness grok,claude)
         if tok.lower() in ("/harness", "/harnesses"):
             if i + 1 >= len(parts):
                 break
             val = parts[i + 1]
-            harnesses = [x.strip().lower() for x in val.replace(" ", ",").split(",") if x.strip()]
+            harnesses = [
+                x.strip().lower() for x in val.replace(" ", ",").split(",") if x.strip()
+            ]
             consumed.extend([tok, val])
             i += 2
             continue
-        # /model id
         if tok.lower() == "/model":
             if i + 1 >= len(parts):
                 break
-            model = parts[i + 1].strip()
-            consumed.extend([tok, model])
+            token = parts[i + 1].strip()
+            hid, mid = parse_model_token(token)
+            model = mid
+            model_harness = hid
+            if hid and hid not in harnesses:
+                harnesses = [hid] + harnesses
+            consumed.extend([tok, token])
             i += 2
             continue
-        # Unknown slash — leave in objective
+        if tok.lower() in ("/rung", "/effort"):
+            if i + 1 >= len(parts):
+                break
+            rung = parts[i + 1].strip().lower()
+            consumed.extend([tok, rung])
+            i += 2
+            continue
         break
 
     objective = " ".join(parts[i:]).strip()
@@ -99,6 +110,8 @@ def parse_slash_directives(text: str) -> SlashDirectives:
         kind=kind,
         harnesses=harnesses,
         model=model,
+        model_harness=model_harness,
+        rung=rung,
         objective=objective,
         raw_tokens=consumed,
     )
@@ -108,9 +121,19 @@ def apply_harness_slash_to_env(directives: SlashDirectives) -> dict[str, str]:
     """Return env overrides implied by slash directives (for start path)."""
     env: dict[str, str] = {}
     if directives.harnesses:
-        # First listed harness becomes OKSTRATR_HERDR_KIND override for this seat
         env["OKSTRATR_HERDR_KIND"] = directives.harnesses[0]
         env["OKSTRATR_HARNESS_PREFER"] = ",".join(directives.harnesses)
+    if directives.model_harness and not directives.harnesses:
+        env["OKSTRATR_HERDR_KIND"] = directives.model_harness
+        env["OKSTRATR_HARNESS_PREFER"] = directives.model_harness
     if directives.model:
         env["OKSTRATR_MODEL"] = directives.model
+    if directives.rung:
+        env["OKSTRATR_RUNG"] = directives.rung
     return env
+
+
+SLASH_HELP = (
+    "/work|/curate|/code|/deck|/auto  /harness id[,id…]  "
+    "/model id|harness:model  /rung trivial|normal|hard"
+)

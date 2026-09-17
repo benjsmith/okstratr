@@ -1,4 +1,4 @@
-"""Harness registry types — model/seat request contracts (Phase 1)."""
+"""Harness registry types — model/seat request contracts."""
 
 from __future__ import annotations
 
@@ -55,6 +55,9 @@ class SeatRequest:
     prefer_harness: HarnessId | None = None
     prefer_model: str | None = None
     objective: str = ""
+    # Phase 2: difficulty / effort for rung selection
+    effort: float | None = None
+    rung: str | None = None  # trivial|normal|hard
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -72,6 +75,8 @@ class SeatResult:
     error: str | None = None
     dry_run: bool = False
     detail: dict[str, Any] = field(default_factory=dict)
+    # Observability labels (same keys for Herdr + direct)
+    labels: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

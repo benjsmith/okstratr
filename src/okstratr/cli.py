@@ -330,8 +330,13 @@ def main(argv=None) -> int:
     cfg_sub = cfg_p.add_subparsers(dest="config_cmd", required=True)
     cfg_sub.add_parser("show", help="Show harness config + path")
     cfg_set = cfg_sub.add_parser("set", help="Set a config key")
-    cfg_set.add_argument("key", help="enabled|preference|models.<id>|defaults.<k>|role_harness.<role>")
+    cfg_set.add_argument("key", help="enabled|preference|models.<id>|defaults.<k>|harness.<id>.default_model|backend|…")
     cfg_set.add_argument("value", help="Value (comma-separated for lists)")
+
+    # --- model ---
+    model_p = sub.add_parser("model", help="List harness models / rungs (Switchbay-inspired)")
+    model_sub = model_p.add_subparsers(dest="model_cmd", required=True)
+    model_sub.add_parser("list", help="List models per enabled harness + effort rungs")
 
     # --- tui ---
     tui_p = sub.add_parser("tui", help="Minimal desk TUI (Textual optional extra [tui])")
@@ -341,7 +346,7 @@ def main(argv=None) -> int:
     # --- agents (Herdr grouping stub) ---
     agents_p = sub.add_parser(
         "agents",
-        help="List Herdr agents filtered by desk/thread labels (observability stub)",
+        help="List/group agents by desk_id/thread_id (Herdr list + desk registry)",
     )
     agents_p.add_argument("--desk", dest="desk_id", default=None, help="Filter by desk_id")
     agents_p.add_argument("--thread", dest="thread_id", default=None, help="Filter by thread_id")
@@ -584,18 +589,28 @@ def main(argv=None) -> int:
             argv.append("--plain")
         return tui_mod.main(argv)
 
-    if args.cmd == "agents":
-        from . import herdr
+    if args.cmd == "model":
+        from . import harness as harness_mod
 
-        # Observability stub: filter known labels from status / would-be herdr list
-        from . import desks, status
+        if args.model_cmd == "list":
+            cfg = harness_mod.load()
+            return _print(
+                {
+                    "path": str(harness_mod.config_path()),
+                    "backend": cfg.preferred_backend(),
+                    "models": harness_mod.list_models(cfg),
+                }
+            )
+        return 1
+
+    if args.cmd == "agents":
+        from . import desks, herdr, status
 
         snap = status.write_status()
         labels = snap.get("herdr_labels") or []
         desk_f = getattr(args, "desk_id", None)
         thread_f = getattr(args, "thread_id", None)
         agents = []
-        # Prefer desk registry labels
         try:
             dsnap = desks.status_snapshot()
         except Exception:  # noqa: BLE001
@@ -619,7 +634,6 @@ def main(argv=None) -> int:
                     "source": "okstratr.desks",
                 }
             )
-        # Include herdr_labels from status when present
         if isinstance(labels, list):
             for lab in labels:
                 if isinstance(lab, dict):
@@ -628,17 +642,30 @@ def main(argv=None) -> int:
                     if thread_f and lab.get("thread_id") != thread_f:
                         continue
                     agents.append({**lab, "source": "status.herdr_labels"})
+        # Live Herdr agent list when available
+        herdr_list = herdr.list_herdr_agents()
+        for a in herdr_list.get("agents") or []:
+            if desk_f and a.get("desk_id") != desk_f:
+                continue
+            if thread_f and a.get("thread_id") != thread_f:
+                continue
+            agents.append(a)
+        grouped = herdr.group_agents_by_labels(agents)
         bin_path = herdr.herdr_bin()
         return _print(
             {
                 "ok": True,
                 "herdr_installed": bool(bin_path),
+                "herdr_list_ok": herdr_list.get("ok"),
                 "filter": {"desk_id": desk_f, "thread_id": thread_f},
                 "agents": agents,
-                "note": (
-                    "P1 stub: desks + status labels. "
-                    "Mac CLI: run herdr + okstratr serve + okstratr tui; "
-                    "group panes by desk_id/thread_id labels."
+                "grouped": grouped,
+                "label_convention": herdr.LABEL_CONVENTION,
+                "mac_howto": (
+                    "herdr &  # multiplexer\n"
+                    "okstratr serve  # daemon :8767\n"
+                    "okstratr tui    # desk brain UI\n"
+                    "okstratr agents  # desk_id/thread_id groupings"
                 ),
             }
         )

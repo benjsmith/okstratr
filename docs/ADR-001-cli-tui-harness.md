@@ -1,6 +1,6 @@
 # ADR-001: CLI/TUI-first desk brain + harness-agnostic seating
 
-- **Status:** Accepted (Phase 1)
+- **Status:** Accepted (Phase 1) · Phase 2 in progress
 - **Date:** 2026-09-17
 - **Deciders:** Ben / okstratr
 
@@ -61,7 +61,7 @@ are unchanged until they `harness enable` others.
 | Adapter | Phase 1 |
 |---------|---------|
 | **Herdr multi-kind** | Implemented — seating uses registry `herdr_kind` |
-| **Direct CLI** | Dry-run stub only (`harness.direct`) — real subprocess in P2 |
+| **Direct CLI** | Real subprocess adapter (`harness.direct`) + dry-run; PID track/kill on quiet |
 
 ### CLI / TUI
 
@@ -98,11 +98,12 @@ API. Config UI may read/write `harnesses.toml` later; docs note the path.
   without it.
 - Tests use `OKSTRATR_STATE_DIR` + `OKSTRATR_CONFIG_DIR` + dry-run.
 
-## Later phases (do not block P1)
+## Later phases
 
-- **P2:** richer TUI DAG viz; real direct-CLI adapters; Switchbay-parity
-  model rungs / effort UI
-- **P3:** thin Omarchy plugin (Panel pure client); Herdr grouping lens polish
+- **P2 (this PR):** richer TUI; real direct-CLI adapters; model rungs / effort;
+  agents groupings; Panel Config path stub
+- **P3:** thin Omarchy plugin (Panel pure client); DeskSession path; fuller
+  QML harness editor
 - **P4:** DeskSession single source of truth
 
 ## References
@@ -121,3 +122,20 @@ Harness allowlist file (read/write from a future Config section):
 - Overrides: `OKSTRATR_CONFIG_DIR`, `OKSTRATR_HARNESSES_TOML`
 
 CLI today: `okstratr harness list|enable|disable`, `okstratr config show|set`.
+
+## Changelog
+
+### Phase 2
+
+- Direct CLI adapter spawns real harness processes (`claude`/`codex`/`grok`/…);
+  argv templates + detect; stdout/stderr → `state/harness_logs/`; PID registry;
+  kill on desk stop/dismiss/quiet.
+- `harnesses.toml`: per-harness `default_model`, `effort` rung map
+  (trivial|normal|hard); `okstratr config set harness.claude.default_model …`;
+  `okstratr model list`; `/model claude:sonnet` + `/rung` wired into select.
+- TUI: desk tabs with Running/Idle badges, DAG topo+status, blackboard head,
+  slash help, optional `/api/status` poll; `--snapshot` unchanged for CI.
+- `okstratr agents` groups by `desk_id`/`thread_id` (Herdr list + desks);
+  same label keys on Herdr + direct paths; label convention documented.
+- Panel Config: harnesses.toml path + CLI reload hints (no full QML editor).
+- Out of scope remains P3+ Panel rewrite / DeskSession SSOT.

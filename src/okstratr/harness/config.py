@@ -1,4 +1,4 @@
-"""Load/save ~/.config/okstratr/harnesses.toml (allowlist + model pools)."""
+"""Load/save ~/.config/okstratr/harnesses.toml (allowlist + model pools + rungs)."""
 
 from __future__ import annotations
 
@@ -13,16 +13,36 @@ from .types import HarnessId, ModelSpec
 
 
 @dataclass
+class PerHarnessSettings:
+    """Per-harness model pool, default, and effort/rung map."""
+
+    models: list[str] = field(default_factory=list)
+    default_model: str | None = None
+    # trivial|normal|hard → model id or {model, flags}
+    effort: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {"models": list(self.models)}
+        if self.default_model:
+            d["default_model"] = self.default_model
+        if self.effort:
+            d["effort"] = dict(self.effort)
+        return d
+
+
+@dataclass
 class HarnessConfig:
-    """User harness allowlist + preference + model pools."""
+    """User harness allowlist + preference + model pools + rungs."""
 
     enabled: list[HarnessId] = field(default_factory=lambda: ["grok"])
     preference: list[HarnessId] = field(default_factory=list)
-    # harness_id -> list of model ids (or ModelSpec dicts)
+    # harness_id -> list of model ids (legacy flat form; merged into harness.*)
     models: dict[str, list[str]] = field(default_factory=dict)
+    # Phase 2: per-harness nested settings
+    harness: dict[str, PerHarnessSettings] = field(default_factory=dict)
     # optional per-role overrides: role -> harness_id
     role_harness: dict[str, HarnessId] = field(default_factory=dict)
-    # default model settings (Switchbay-inspired effort hooks later)
+    # default model settings (adapter, backend, …)
     defaults: dict[str, Any] = field(default_factory=dict)
     path: Path | None = None
 
@@ -35,7 +55,6 @@ class HarnessConfig:
         pref = [p.strip().lower() for p in (self.preference or []) if p.strip()]
         if not pref:
             pref = list(registry.DEFAULT_PREFERENCE)
-        # enabled first in preference order, then any remaining enabled
         enabled = {e.strip().lower() for e in self.enabled}
         ordered: list[str] = []
         for p in pref:
@@ -47,11 +66,22 @@ class HarnessConfig:
                 ordered.append(el)
         return ordered
 
-    def models_for(self, harness_id: HarnessId) -> list[ModelSpec]:
+    def settings_for(self, harness_id: HarnessId) -> PerHarnessSettings:
         hid = (harness_id or "").strip().lower()
-        raw = self.models.get(hid) or self.models.get(harness_id) or []
+        if hid in self.harness:
+            return self.harness[hid]
+        # Synthesize from legacy flat models + builtins
+        models = list(self.models.get(hid) or self.models.get(harness_id) or [])
+        if not models:
+            h = registry.get(hid)
+            if h and h.default_models:
+                models = list(h.default_models)
+        return PerHarnessSettings(models=models, default_model=models[0] if models else None)
+
+    def models_for(self, harness_id: HarnessId) -> list[ModelSpec]:
+        s = self.settings_for(harness_id)
         out: list[ModelSpec] = []
-        for item in raw:
+        for item in s.models:
             if isinstance(item, str):
                 out.append(ModelSpec(id=item))
             elif isinstance(item, dict) and item.get("id"):
@@ -63,16 +93,36 @@ class HarnessConfig:
                     )
                 )
         if not out:
-            h = registry.get(hid)
+            h = registry.get((harness_id or "").strip().lower())
             if h and h.default_models:
                 out = [ModelSpec(id=m) for m in h.default_models]
         return out
+
+    def default_model_for(self, harness_id: HarnessId) -> str | None:
+        s = self.settings_for(harness_id)
+        if s.default_model:
+            return s.default_model
+        mods = self.models_for(harness_id)
+        return mods[0].id if mods else None
+
+    def effort_map_for(self, harness_id: HarnessId) -> dict[str, Any]:
+        return dict(self.settings_for(harness_id).effort or {})
+
+    def preferred_backend(self) -> str:
+        """herdr | direct — from defaults.adapter or defaults.backend."""
+        raw = (
+            self.defaults.get("backend")
+            or self.defaults.get("adapter")
+            or "herdr"
+        )
+        return str(raw).strip().lower() or "herdr"
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "enabled": list(self.enabled),
             "preference": list(self.preference),
             "models": {k: list(v) for k, v in self.models.items()},
+            "harness": {k: v.to_dict() for k, v in self.harness.items()},
             "role_harness": dict(self.role_harness),
             "defaults": dict(self.defaults),
             "path": str(self.path) if self.path else None,
@@ -84,7 +134,6 @@ def config_dir() -> Path:
     if raw:
         p = Path(raw).expanduser()
     else:
-        # Prefer XDG config; fall back under state dir when unset in weird envs
         xdg = (os.environ.get("XDG_CONFIG_HOME") or "").strip()
         if xdg:
             p = Path(xdg).expanduser() / "okstratr"
@@ -107,11 +156,67 @@ def default_config() -> HarnessConfig:
         preference=list(registry.DEFAULT_PREFERENCE),
         models={
             "grok": ["grok-4"],
-            "claude": ["claude-sonnet-4"],
-            "codex": ["gpt-5"],
+            "claude": ["claude-sonnet-4", "claude-opus-4"],
+            "codex": ["gpt-5", "o3"],
         },
-        defaults={"adapter": "herdr"},
+        harness={
+            "grok": PerHarnessSettings(
+                models=["grok-4"],
+                default_model="grok-4",
+                effort={"trivial": "grok-4", "normal": "grok-4", "hard": "grok-4"},
+            ),
+            "claude": PerHarnessSettings(
+                models=["claude-sonnet-4", "claude-opus-4", "claude-haiku"],
+                default_model="claude-sonnet-4",
+                effort={
+                    "trivial": "claude-haiku",
+                    "normal": "claude-sonnet-4",
+                    "hard": "claude-opus-4",
+                },
+            ),
+            "codex": PerHarnessSettings(
+                models=["gpt-5", "o3"],
+                default_model="gpt-5",
+                effort={"trivial": "gpt-5", "normal": "gpt-5", "hard": "o3"},
+            ),
+        },
+        defaults={"adapter": "herdr", "backend": "herdr"},
     )
+
+
+def _parse_per_harness(raw: Any) -> dict[str, PerHarnessSettings]:
+    out: dict[str, PerHarnessSettings] = {}
+    if not isinstance(raw, dict):
+        return out
+    for hid, body in raw.items():
+        key = str(hid).strip().lower()
+        if isinstance(body, list):
+            # shorthand: harness.claude = ["m1","m2"]
+            out[key] = PerHarnessSettings(models=[str(x) for x in body])
+            continue
+        if not isinstance(body, dict):
+            continue
+        models_raw = body.get("models") or []
+        models: list[str] = []
+        if isinstance(models_raw, list):
+            models = [str(x) for x in models_raw]
+        elif isinstance(models_raw, str):
+            models = [x.strip() for x in models_raw.split(",") if x.strip()]
+        default_model = body.get("default_model")
+        if default_model is not None:
+            default_model = str(default_model).strip() or None
+        effort = body.get("effort") if isinstance(body.get("effort"), dict) else {}
+        # also accept effort_trivial style keys
+        for rung in ("trivial", "normal", "hard"):
+            alt = body.get(f"effort_{rung}") or body.get(rung)
+            if alt and rung not in effort:
+                effort[rung] = alt
+        out[key] = PerHarnessSettings(
+            models=models,
+            default_model=default_model,
+            effort=dict(effort or {}),
+        )
+    return out
 
 
 def _parse_toml(data: dict[str, Any]) -> HarnessConfig:
@@ -136,10 +241,37 @@ def _parse_toml(data: dict[str, Any]) -> HarnessConfig:
     if isinstance(rh, dict):
         role_harness = {str(k): str(v) for k, v in rh.items()}
     defaults = data.get("defaults") if isinstance(data.get("defaults"), dict) else {}
+    # Nested [harnesses.harness.claude] or [harness.claude]
+    harness_raw = data.get("harness") or {}
+    per = _parse_per_harness(harness_raw)
+    # Also accept top-level default_model table
+    dm = data.get("default_model") or {}
+    if isinstance(dm, dict):
+        for k, v in dm.items():
+            key = str(k).strip().lower()
+            s = per.get(key) or PerHarnessSettings(models=list(models.get(key) or []))
+            s.default_model = str(v).strip() or None
+            per[key] = s
+    # Effort table: [harnesses.effort.claude] trivial=...
+    effort_tbl = data.get("effort") or {}
+    if isinstance(effort_tbl, dict):
+        for k, v in effort_tbl.items():
+            key = str(k).strip().lower()
+            s = per.get(key) or PerHarnessSettings(models=list(models.get(key) or []))
+            if isinstance(v, dict):
+                s.effort = {str(rk): vv for rk, vv in v.items()}
+            per[key] = s
+    # Sync flat models from per-harness when present
+    for hid, s in per.items():
+        if s.models and hid not in models:
+            models[hid] = list(s.models)
+        elif not s.models and hid in models:
+            s.models = list(models[hid])
     return HarnessConfig(
         enabled=[str(e).strip().lower() for e in enabled if str(e).strip()],
         preference=[str(p).strip().lower() for p in preference if str(p).strip()],
         models=models,
+        harness=per,
         role_harness=role_harness,
         defaults=dict(defaults or {}),
     )
@@ -153,7 +285,6 @@ def load(path: Path | None = None) -> HarnessConfig:
         return cfg
     with p.open("rb") as f:
         data = tomllib.load(f)
-    # Support [harnesses] table or flat root
     if "harnesses" in data and isinstance(data["harnesses"], dict):
         body = data["harnesses"]
     else:
@@ -165,6 +296,20 @@ def load(path: Path | None = None) -> HarnessConfig:
 
 def _toml_escape(s: str) -> str:
     return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _dump_effort_val(v: Any) -> str:
+    if isinstance(v, dict):
+        # inline table
+        parts = []
+        if v.get("model") or v.get("id"):
+            parts.append(f'model = "{_toml_escape(str(v.get("model") or v.get("id")))}"')
+        flags = v.get("flags")
+        if isinstance(flags, list) and flags:
+            arr = ", ".join(f'"{_toml_escape(str(f))}"' for f in flags)
+            parts.append(f"flags = [{arr}]")
+        return "{ " + ", ".join(parts) + " }"
+    return f'"{_toml_escape(str(v))}"'
 
 
 def _dump_toml(cfg: HarnessConfig) -> str:
@@ -183,9 +328,29 @@ def _dump_toml(cfg: HarnessConfig) -> str:
         )
     lines.append("")
     lines.append("[harnesses.models]")
-    for hid, mods in (cfg.models or {}).items():
+    # Prefer harness nested models; fall back to flat
+    model_keys = set(cfg.models) | set(cfg.harness)
+    for hid in sorted(model_keys):
+        mods = list(cfg.harness[hid].models) if hid in cfg.harness and cfg.harness[hid].models else list(cfg.models.get(hid) or [])
+        if not mods:
+            continue
         arr = ", ".join(f'"{_toml_escape(m)}"' for m in mods)
-        lines.append(f'{hid} = [{arr}]')
+        lines.append(f"{hid} = [{arr}]")
+    # Per-harness nested tables
+    for hid in sorted(cfg.harness.keys()):
+        s = cfg.harness[hid]
+        lines.append("")
+        lines.append(f"[harnesses.harness.{hid}]")
+        if s.default_model:
+            lines.append(f'default_model = "{_toml_escape(s.default_model)}"')
+        if s.models:
+            arr = ", ".join(f'"{_toml_escape(m)}"' for m in s.models)
+            lines.append(f"models = [{arr}]")
+        if s.effort:
+            lines.append("")
+            lines.append(f"[harnesses.harness.{hid}.effort]")
+            for rung, val in s.effort.items():
+                lines.append(f"{rung} = {_dump_effort_val(val)}")
     if cfg.role_harness:
         lines.append("")
         lines.append("[harnesses.role_harness]")
@@ -229,17 +394,32 @@ def disable(harness_id: HarnessId, *, path: Path | None = None) -> HarnessConfig
     cfg = load(path)
     cfg.enabled = [e for e in cfg.enabled if e != hid]
     if not cfg.enabled:
-        # Never leave empty allowlist — fall back to grok for safety
         cfg.enabled = ["grok"]
     save(cfg, path or cfg.path)
     return cfg
 
 
+def _ensure_harness_settings(cfg: HarnessConfig, hid: str) -> PerHarnessSettings:
+    if hid not in cfg.harness:
+        mods = list(cfg.models.get(hid) or [])
+        cfg.harness[hid] = PerHarnessSettings(models=mods)
+    return cfg.harness[hid]
+
+
 def set_value(key: str, value: str, *, path: Path | None = None) -> HarnessConfig:
-    """Simple `config set` — keys: enabled, preference, defaults.adapter, models.<id>."""
+    """Set config key.
+
+    Keys:
+      enabled | preference | models.<id> | defaults.<k> | role_harness.<role>
+      harness.<id>.default_model | harness.<id>.models | harness.<id>.effort.<rung>
+      backend (alias defaults.backend)
+    """
     cfg = load(path)
     k = key.strip().lower()
-    if k == "enabled":
+    if k in ("backend", "adapter"):
+        cfg.defaults["backend"] = value.strip().lower()
+        cfg.defaults["adapter"] = value.strip().lower()
+    elif k == "enabled":
         cfg.enabled = [x.strip().lower() for x in value.split(",") if x.strip()]
         if not cfg.enabled:
             cfg.enabled = ["grok"]
@@ -247,17 +427,45 @@ def set_value(key: str, value: str, *, path: Path | None = None) -> HarnessConfi
         cfg.preference = [x.strip().lower() for x in value.split(",") if x.strip()]
     elif k.startswith("models."):
         hid = k.split(".", 1)[1]
-        cfg.models[hid] = [x.strip() for x in value.split(",") if x.strip()]
+        mods = [x.strip() for x in value.split(",") if x.strip()]
+        cfg.models[hid] = mods
+        s = _ensure_harness_settings(cfg, hid)
+        s.models = mods
     elif k.startswith("defaults."):
         dk = k.split(".", 1)[1]
         cfg.defaults[dk] = value
     elif k.startswith("role_harness.") or k.startswith("role."):
         role = k.split(".", 1)[1]
         cfg.role_harness[role] = value.strip().lower()
+    elif k.startswith("harness."):
+        # harness.claude.default_model | harness.claude.models | harness.claude.effort.hard
+        parts = k.split(".")
+        if len(parts) < 3:
+            raise ValueError(
+                "use harness.<id>.default_model|models|effort.<rung>"
+            )
+        hid = parts[1]
+        field = parts[2]
+        s = _ensure_harness_settings(cfg, hid)
+        if field == "default_model":
+            s.default_model = value.strip() or None
+        elif field == "models":
+            mods = [x.strip() for x in value.split(",") if x.strip()]
+            s.models = mods
+            cfg.models[hid] = mods
+        elif field == "effort" and len(parts) >= 4:
+            rung = parts[3]
+            s.effort[rung] = value.strip()
+        else:
+            raise ValueError(
+                f"unknown harness field: {field} "
+                "(default_model|models|effort.<rung>)"
+            )
     else:
         raise ValueError(
             f"unknown config key: {key} "
-            "(use enabled|preference|models.<id>|defaults.<k>|role_harness.<role>)"
+            "(use enabled|preference|models.<id>|defaults.<k>|role_harness.<role>|"
+            "harness.<id>.default_model|backend)"
         )
     save(cfg, path or cfg.path)
     return cfg

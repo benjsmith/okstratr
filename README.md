@@ -31,6 +31,34 @@ Work-coverage default lives in **okbay** (magical all-`~/Work`). **Biocure** is 
 
 See [docs/ADR-001-cli-tui-harness.md](docs/ADR-001-cli-tui-harness.md) for the CLI/TUI-first + harness-agnostic vision, and [docs/DESK-KERNEL.md](docs/DESK-KERNEL.md) for the hiring-manager / desk / Herdr design, and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for package map + APIs.
 
+### Mac CLI workflow (no Omarchy)
+
+```bash
+# Terminal 1 — multiplexer (when installed)
+herdr
+
+# Terminal 2 — desk brain daemon
+okstratr serve          # http://127.0.0.1:8767
+
+# Terminal 3 — TUI (or --snapshot for CI)
+okstratr tui
+# okstratr tui --snapshot
+
+# Observability — group seats like Omarchy desks
+okstratr agents
+okstratr agents --desk <desk_id>
+
+# Harness / models (Switchbay-inspired rungs, no LiteLLM)
+okstratr harness list
+okstratr config set backend direct          # when Herdr unavailable
+okstratr config set harness.claude.default_model claude-sonnet-4
+okstratr model list
+```
+
+Every seat (Herdr + direct) labels with `desk_id` + `thread_id`. Config file:
+`~/.config/okstratr/harnesses.toml`.
+
+
 > **Switchbay release pending** — deep parity check against Switchbay once that tree is available.
 
 Either plugin can be useful alone. They share a future multi-workspace layout, not a monorepo.
