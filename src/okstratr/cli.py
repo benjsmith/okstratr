@@ -289,7 +289,19 @@ def main(argv=None) -> int:
     bb_search = bb_sub.add_parser("search", help="Search entries")
     bb_search.add_argument("substr")
 
-    bb_sub.add_parser("clear", help="Archive and clear blackboard")
+    bb_sub.add_parser("clear", help="Hard-wipe live blackboard (no archive by default)")
+    bb_sub.add_parser("prune", help="Drop live entries older than blackboard.duration (0⇒ASAP agents, ≤60m)")
+    bb_dur = bb_sub.add_parser("duration", help="Set/show live board duration (days; 0=ephemeral≤60m)")
+    bb_dur.add_argument("value", nargs="?", default=None, help="e.g. 3, 3d, 60m, 0")
+
+    # --- audit ---
+    audit_p = sub.add_parser("audit", help="Tamper-evident ops audit log")
+    audit_sub = audit_p.add_subparsers(dest="audit_cmd", required=True)
+    audit_tail = audit_sub.add_parser("tail", help="Show recent audit records")
+    audit_tail.add_argument("n", nargs="?", type=int, default=20)
+    audit_head = audit_sub.add_parser("head", help="Show earliest audit records")
+    audit_head.add_argument("n", nargs="?", type=int, default=20)
+    audit_sub.add_parser("verify", help="Verify hash chain integrity")
 
     web_p = sub.add_parser("web", help="Web egress gate: status|on|off")
     web_sub = web_p.add_subparsers(dest="web_cmd", required=True)
@@ -470,8 +482,12 @@ def main(argv=None) -> int:
         return _print(cos.advise(obj, blackboard.texts(5)))
 
     if args.cmd == "serve":
-        from . import server
+        from . import blackboard, server
 
+        try:
+            blackboard.on_serve_start()
+        except Exception:  # noqa: BLE001
+            pass
         return server.serve(args.host, args.port)
 
     if args.cmd == "dag":
@@ -536,6 +552,30 @@ def main(argv=None) -> int:
             out = blackboard.clear()
             status.write_status()
             return _print(out)
+        if args.bb_cmd == "prune":
+            out = blackboard.prune()
+            status.write_status()
+            return _print(out)
+        if args.bb_cmd == "duration":
+            from . import bb_settings
+
+            if args.value is not None:
+                out = bb_settings.set_value("blackboard.duration", str(args.value))
+            else:
+                out = bb_settings.load()
+            out = {**out, "chip": bb_settings.mode_chip()}
+            return _print(out)
+        return 1
+
+    if args.cmd == "audit":
+        from . import ops_audit
+
+        if args.audit_cmd == "tail":
+            return _print({"path": ops_audit.path(), "records": ops_audit.tail(args.n)})
+        if args.audit_cmd == "head":
+            return _print({"path": ops_audit.path(), "records": ops_audit.head(args.n)})
+        if args.audit_cmd == "verify":
+            return _print(ops_audit.verify())
         return 1
 
     if args.cmd == "harness":
@@ -576,9 +616,26 @@ def main(argv=None) -> int:
         from . import harness as harness_mod
 
         if args.config_cmd == "show":
+            from . import bb_settings
+
             cfg = harness_mod.load()
-            return _print({**cfg.to_dict(), "path": str(cfg.path or harness_mod.config_path())})
+            return _print({
+                **cfg.to_dict(),
+                "path": str(cfg.path or harness_mod.config_path()),
+                "blackboard": bb_settings.load(),
+            })
         if args.config_cmd == "set":
+            from . import bb_settings
+
+            k = args.key.strip().lower()
+            if k.startswith("blackboard.") or k in (
+                "duration", "duration_days", "retention", "retention_days", "archive_on_clear",
+            ):
+                out = bb_settings.set_value(
+                    k if k.startswith("blackboard.") else f"blackboard.{k}",
+                    args.value,
+                )
+                return _print({"ok": True, "blackboard": out})
             cfg = harness_mod.set_value(args.key, args.value)
             return _print({"ok": True, **cfg.to_dict()})
         return 1

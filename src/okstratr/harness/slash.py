@@ -23,6 +23,9 @@ class SlashDirectives:
     cwd: str | None = None
     web: str | None = None  # off|once|session|on|status
     clear_blackboard: bool = False  # /bb clear | /blackboard clear | bare /clear
+    duration_value: str | None = None  # /bb duration <value>
+    prune_board: bool = False  # /bb prune
+    show_audit: bool = False  # /audit
     objective: str = ""
     raw_tokens: list[str] = field(default_factory=list)
 
@@ -37,6 +40,9 @@ class SlashDirectives:
             "cwd": self.cwd,
             "web": self.web,
             "clear_blackboard": self.clear_blackboard,
+            "duration_value": self.duration_value,
+            "prune_board": self.prune_board,
+            "show_audit": self.show_audit,
             "objective": self.objective,
         }
 
@@ -76,6 +82,9 @@ def parse_slash_directives(text: str) -> SlashDirectives:
     cwd: str | None = None
     web: str | None = None
     clear_blackboard = False
+    duration_value = None
+    prune_board = False
+    show_audit = False
     i = 0
     consumed: list[str] = []
 
@@ -161,10 +170,30 @@ def parse_slash_directives(text: str) -> SlashDirectives:
                 consumed.extend([tok, parts[i + 1]])
                 i += 2
                 continue
+            if i + 1 < len(parts) and parts[i + 1].strip().lower() in ("duration", "retention"):
+                consumed.extend([tok, parts[i + 1]])
+                i += 2
+                if i < len(parts):
+                    duration_value = parts[i].strip()
+                    consumed.append(parts[i])
+                    i += 1
+                else:
+                    duration_value = "status"
+                continue
+            if i + 1 < len(parts) and parts[i + 1].strip().lower() == "prune":
+                consumed.extend([tok, parts[i + 1]])
+                i += 2
+                prune_board = True
+                continue
             break
         if tok.lower() == "/clear":
             # Bare /clear is blackboard-only (documented in SLASH_HELP).
             clear_blackboard = True
+            consumed.append(tok)
+            i += 1
+            continue
+        if tok.lower() == "/audit":
+            show_audit = True
             consumed.append(tok)
             i += 1
             continue
@@ -181,6 +210,9 @@ def parse_slash_directives(text: str) -> SlashDirectives:
         cwd=cwd,
         web=web,
         clear_blackboard=clear_blackboard,
+        duration_value=duration_value,
+        prune_board=prune_board,
+        show_audit=show_audit,
         objective=objective,
         raw_tokens=consumed,
     )
@@ -215,5 +247,5 @@ SLASH_HELP = (
     "/work|/curate|/code|/deck|/auto  /harness id[,id…]  "
     "/model id|harness:model[,harness:model…]  /rung trivial|normal|hard  "
     "/cd <path>  /web off|once|session|status  "
-    "/bb clear|/blackboard clear|/clear (blackboard only)"
+    "/bb clear|/blackboard clear|/clear (blackboard only)  /bb duration <3|3d|60m|0>  /bb prune  /audit"
 )

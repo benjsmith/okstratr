@@ -277,6 +277,18 @@ def merge_status_payloads(st: dict[str, Any], desk: dict[str, Any]) -> dict[str,
     return merged
 
 
+
+def _bb_chip(status: dict[str, Any] | None = None) -> str:
+    try:
+        from . import bb_settings
+
+        return bb_settings.mode_chip()
+    except Exception:  # noqa: BLE001
+        bb = (status or {}).get("blackboard") if isinstance(status, dict) else None
+        if isinstance(bb, dict) and bb.get("mode"):
+            return str(bb["mode"])
+        return "bb: ephemeral"
+
 def _web_chip(status: dict[str, Any]) -> str:
     we = status.get("web_egress") if isinstance(status.get("web_egress"), dict) else {}
     if not we:
@@ -398,7 +410,7 @@ def render_snapshot(
     focus = status.get("focus_desk_id") or active_id
     lines = [
         f"okstratr tui — {running_label(status)} — {api_base()}",
-        f"  {_web_chip(status)}  |  {_cwd_chip()}  |  {_backend_chip(status)}  |  {_harness_chip(status)}",
+        f"  {_web_chip(status)}  |  {_bb_chip(status)}  |  {_cwd_chip()}  |  {_backend_chip(status)}  |  {_harness_chip(status)}",
         "",
         "## Desks (tabs)",
         f"  {desk_tab_line(rows, active_id=active_id or focus)}",
@@ -437,27 +449,66 @@ def render_live_snapshot() -> str:
 
 
 def apply_slash_side_effects(directives: SlashDirectives) -> str | None:
-    """Apply non-env slash side effects (blackboard clear, etc.).
+    """Apply non-env slash side effects (bb clear/duration/prune/audit)."""
+    toasts: list[str] = []
+    if getattr(directives, "prune_board", False):
+        result = http_json("POST", "/api/blackboard/prune", {})
+        if not isinstance(result, dict) or not result.get("ok"):
+            from . import blackboard
 
-    When ``clear_blackboard``, call ``POST /api/blackboard/clear`` so the
-    running serve process clears its singleton; fall back to local
-    ``blackboard.clear()`` if the API is unreachable. Returns a short toast
-    string for the TUI status line, or None when nothing ran.
-    """
-    if not directives.clear_blackboard:
-        return None
-    result = http_json("POST", "/api/blackboard/clear", {})
-    # Prefer API so the running serve process clears its singleton.
-    if isinstance(result, dict) and result.get("cleared") is True:
-        return "blackboard cleared"
-    try:
-        from . import blackboard, status as status_mod
+            result = blackboard.prune()
+        pruned = (result.get("retention") or {}).get("pruned") if isinstance(result, dict) else None
+        toasts.append(f"bb pruned={pruned}")
 
-        blackboard.clear()
-        status_mod.write_status()
-    except Exception as e:  # noqa: BLE001
-        return f"blackboard clear failed: {e}"
-    return "blackboard cleared"
+    dv = getattr(directives, "duration_value", None)
+    if dv is not None:
+        from . import bb_settings
+
+        if dv in ("status", ""):
+            toasts.append(bb_settings.mode_chip())
+        else:
+            bb_settings.set_value("blackboard.duration", str(dv))
+            toasts.append(bb_settings.mode_chip())
+
+    if getattr(directives, "show_audit", False):
+        result = http_json("GET", "/api/audit?n=12")
+        if isinstance(result, dict) and result.get("records") is not None:
+            n = len(result.get("records") or [])
+            ok = (result.get("verify") or {}).get("ok")
+            toasts.append(f"audit tail={n} verify={ok}")
+        else:
+            from . import ops_audit
+
+            v = ops_audit.verify()
+            toasts.append(f"audit verify={v.get('ok')} count={v.get('count')}")
+
+    if getattr(directives, "clear_blackboard", False):
+        result = http_json("POST", "/api/blackboard/clear", {})
+        if isinstance(result, dict) and result.get("cleared") is True:
+            toasts.append("blackboard cleared")
+        else:
+            try:
+                from . import blackboard, status as status_mod
+
+                blackboard.clear()
+                status_mod.write_status()
+                toasts.append("blackboard cleared")
+            except Exception as e:  # noqa: BLE001
+                toasts.append(f"blackboard clear failed: {e}")
+
+    return " | ".join(toasts) if toasts else None
+
+
+def _slash_is_bb_control_only(directives: SlashDirectives) -> bool:
+    """True when the line is only bb/audit control (no seating objective)."""
+    if directives.objective or directives.kind or directives.harnesses or directives.model or directives.rung:
+        return False
+    return bool(
+        directives.clear_blackboard
+        or getattr(directives, "duration_value", None) is not None
+        or getattr(directives, "prune_board", False)
+        or getattr(directives, "show_audit", False)
+    )
 
 
 def apply_slash_env(text: str) -> tuple[str, str | None]:
@@ -567,7 +618,7 @@ def run_textual(*, poll_sec: float | None = None) -> int:
             )
             rows = desk_rows(merged) or desk_rows(desk)
             self.query_one("#tabs", Static).update(
-                f"{desk_tab_line(rows, active_id=active_id)}  |  {_web_chip(merged)}  |  {_cwd_chip()}  |  {_backend_chip(merged)}  |  {_harness_chip(merged)}"
+                f"{desk_tab_line(rows, active_id=active_id)}  |  {_web_chip(merged)}  |  {_bb_chip(merged)}  |  {_cwd_chip()}  |  {_backend_chip(merged)}  |  {_harness_chip(merged)}"
             )
             desks_w = self.query_one("#desks", Static)
             desk_lines = []
@@ -576,7 +627,7 @@ def run_textual(*, poll_sec: float | None = None) -> int:
                 suffix = f" [{badge}]" if badge else ""
                 desk_lines.append(f"{r['kind']}{suffix}\n{r['id'][:14]}")
             desks_w.update(
-                f"{running_label(merged)}\n{_web_chip(merged)}\n{_cwd_chip()}\n{_backend_chip(merged)}\n{_harness_chip(merged)}\n\n"
+                f"{running_label(merged)}\n{_web_chip(merged)}\n{_bb_chip(merged)}\n{_cwd_chip()}\n{_backend_chip(merged)}\n{_harness_chip(merged)}\n\n"
                 + ("\n".join(desk_lines) or "(no desks)")
             )
             self.query_one("#dag", Static).update(
@@ -597,7 +648,7 @@ def run_textual(*, poll_sec: float | None = None) -> int:
                 return
             d = parse_slash_directives(text)
             toast = apply_slash_side_effects(d)
-            if d.clear_blackboard:
+            if _slash_is_bb_control_only(d) or d.clear_blackboard:
                 event.input.value = ""
                 self.action_refresh()
                 if toast:
@@ -606,8 +657,8 @@ def run_textual(*, poll_sec: float | None = None) -> int:
                         self.notify(toast)
                     except Exception:  # noqa: BLE001
                         pass
-                # Clear-only line: do not seat/post a query.
-                if not (d.objective or d.kind or d.harnesses or d.model or d.rung):
+                # Control-only line: do not seat/post a query.
+                if _slash_is_bb_control_only(d):
                     return
             obj, kind = apply_slash_env(text)
             if obj.strip() or kind:

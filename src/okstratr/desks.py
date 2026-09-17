@@ -933,24 +933,74 @@ def load_dag_for_api(desk_id: str | None = None) -> dict[str, Any]:
 
 
 def start(objective: str = "", **kwargs: Any) -> dict[str, Any]:
-    return default_registry().start(objective, **kwargs)
+    out = default_registry().start(objective, **kwargs)
+    try:
+        from . import ops_audit
+
+        ops_audit.append(
+            "desk.start",
+            kind="process",
+            desk_id=(out.get("desk_id") or out.get("id")) if isinstance(out, dict) else None,
+            note="desk start",
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    return out
 
 
 def stop(desk_id: str | None = None) -> dict[str, Any]:
     out = default_registry().stop(desk_id)
     killed = _kill_direct_seats(desk_id or (out.get("desk_id") if isinstance(out, dict) else None))
+    eph = {}
+    try:
+        from . import blackboard
+
+        eph = blackboard.clear_agents_asap()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from . import ops_audit
+
+        ops_audit.append(
+            "desk.stop",
+            kind="process",
+            desk_id=desk_id or (out.get("desk_id") if isinstance(out, dict) else None),
+            note=str(op),
+        )
+    except Exception:  # noqa: BLE001
+        pass
     if isinstance(out, dict):
         out = dict(out)
         out["direct_killed"] = killed
+        out["ephemeral_wiped"] = eph
     return out
 
 
 def dismiss(desk_id: str | None = None) -> dict[str, Any]:
     out = default_registry().dismiss(desk_id)
     killed = _kill_direct_seats(desk_id or (out.get("desk_id") if isinstance(out, dict) else None))
+    eph = {}
+    try:
+        from . import blackboard
+
+        eph = blackboard.clear_agents_asap()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from . import ops_audit
+
+        ops_audit.append(
+            "desk.dismiss",
+            kind="process",
+            desk_id=desk_id or (out.get("desk_id") if isinstance(out, dict) else None),
+            note=str(op),
+        )
+    except Exception:  # noqa: BLE001
+        pass
     if isinstance(out, dict):
         out = dict(out)
         out["direct_killed"] = killed
+        out["ephemeral_wiped"] = eph
     return out
 
 
@@ -1008,9 +1058,23 @@ def dedupe_kind(kind: str | None = None) -> dict[str, Any]:
 def quiet_standing() -> dict[str, Any]:
     out = default_registry().quiet_standing()
     killed = _kill_direct_seats(None)  # all tracked direct seats
+    eph = {}
+    try:
+        from . import blackboard
+
+        eph = blackboard.clear_agents_asap()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from . import ops_audit
+
+        ops_audit.append("desk.quiet", kind="process", note="quiet_standing")
+    except Exception:  # noqa: BLE001
+        pass
     if isinstance(out, dict):
         out = dict(out)
         out["direct_killed"] = killed
+        out["ephemeral_cleared"] = eph
     return out
 
 

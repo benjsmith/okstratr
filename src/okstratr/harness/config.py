@@ -430,9 +430,22 @@ def set_value(key: str, value: str, *, path: Path | None = None) -> HarnessConfi
       enabled | preference | models.<id> | defaults.<k> | role_harness.<role>
       harness.<id>.default_model | harness.<id>.models | harness.<id>.effort.<rung>
       backend (alias defaults.backend)
+      blackboard.duration | blackboard.duration_days | …
     """
+    k0 = key.strip().lower()
+    if k0.startswith("blackboard.") or k0 in (
+        "duration",
+        "duration_days",
+        "retention",
+        "retention_days",
+        "archive_on_clear",
+    ):
+        from okstratr import bb_settings
+
+        bb_settings.set_value(k0 if k0.startswith("blackboard.") else f"blackboard.{k0}", value)
+        return load(path)
     cfg = load(path)
-    k = key.strip().lower()
+    k = k0
     if k in ("backend", "adapter"):
         cfg.defaults["backend"] = value.strip().lower()
         cfg.defaults["adapter"] = value.strip().lower()
@@ -535,6 +548,14 @@ def list_for_api(cfg: HarnessConfig | None = None) -> dict[str, Any]:
                 "notes": hdef.notes or "",
             }
         )
+    bb = {}
+    try:
+        from okstratr import bb_settings
+
+        bb = bb_settings.load()
+        bb = {**bb, "chip": bb_settings.mode_chip()}
+    except Exception:  # noqa: BLE001
+        bb = {"duration_days": 3.0, "chip": "bb: 3d"}
     return {
         "ok": True,
         "path": str(cfg.path or config_path()),
@@ -543,4 +564,5 @@ def list_for_api(cfg: HarnessConfig | None = None) -> dict[str, Any]:
         "defaults": dict(cfg.defaults),
         "backend": cfg.preferred_backend(),
         "harnesses": rows,
+        "blackboard": bb,
     }

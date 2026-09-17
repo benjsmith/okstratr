@@ -74,6 +74,12 @@ def set_cwd(path: str | Path) -> dict[str, Any]:
     tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     tmp.replace(dest)
     os.environ["OKSTRATR_CWD"] = resolved
+    try:
+        from . import ops_audit
+
+        ops_audit.append("workspace.set_cwd", kind="file", path=resolved, cwd=resolved)
+    except Exception:  # noqa: BLE001
+        pass
     return {"ok": True, **payload}
 
 
@@ -87,6 +93,51 @@ def status() -> dict[str, Any]:
     }
 
 
+
+def assert_visible_name(name: str) -> dict[str, Any]:
+    """Reject basenames that are hidden/invisible to users (agent write policy).
+
+    Default: reject ALL dotfiles (leading ``.``). Also reject trailing spaces/dots,
+    Unicode bidi/zero-width (Cf), RTLO, and empty names.
+    Returns ``{"ok": True, "name": ...}`` or ``{"ok": False, "error": ...}``.
+    """
+    import unicodedata
+
+    raw = str(name or "")
+    base = Path(raw).name  # basename only
+    if not base or base in (".", ".."):
+        return {"ok": False, "error": "empty or invalid basename", "name": base}
+    if base.startswith("."):
+        return {
+            "ok": False,
+            "error": f"dotfile / hidden basename rejected: {base!r}",
+            "name": base,
+        }
+    if base.endswith(" ") or base.endswith("."):
+        return {
+            "ok": False,
+            "error": f"trailing space/dot basename rejected: {base!r}",
+            "name": base,
+        }
+    # Unicode: Cf (format/zero-width), bidi controls, RTLO
+    for ch in base:
+        cat = unicodedata.category(ch)
+        if cat == "Cf":
+            return {
+                "ok": False,
+                "error": f"invisible/format char U+{ord(ch):04X} in basename",
+                "name": base,
+            }
+        # Explicit bidi / RTLO
+        if ord(ch) in (0x202A, 0x202B, 0x202C, 0x202D, 0x202E, 0x2066, 0x2067, 0x2068, 0x2069, 0x200E, 0x200F):
+            return {
+                "ok": False,
+                "error": f"bidi/RTLO char U+{ord(ch):04X} in basename",
+                "name": base,
+            }
+    return {"ok": True, "name": base}
+
+
 def resolve_in_sandbox(path: str | Path, *, root: str | None = None) -> dict[str, Any]:
     """Resolve *path* under sandbox root; reject escapes.
 
@@ -96,6 +147,10 @@ def resolve_in_sandbox(path: str | Path, *, root: str | None = None) -> dict[str
     root_s = str(Path(root or get_cwd()).resolve())
     root_p = Path(root_s)
     raw = Path(str(path)).expanduser()
+    # Reject invisible basenames for any create/write-style resolve
+    vis = assert_visible_name(raw.name)
+    if not vis.get("ok"):
+        return {"ok": False, "error": vis.get("error"), "root": root_s, "name": vis.get("name")}
     candidate = raw if raw.is_absolute() else (root_p / raw)
     try:
         resolved = candidate.resolve(strict=False)
