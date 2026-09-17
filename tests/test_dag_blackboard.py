@@ -146,9 +146,10 @@ def test_blackboard_post_search_clear(state_dir: Path) -> None:
     assert cleared["cleared"] is True
     assert cleared["count_before"] == 3
     assert blackboard.summary()["count"] == 0
-    # archive should exist
+    # no archives by default (ADR-002)
     archives = list(state_dir.glob("blackboard.jsonl.archive.*"))
-    assert len(archives) == 1
+    assert len(archives) == 0
+    assert cleared.get("archived") is None
 
 
 def test_cli_dag_bb(state_dir: Path) -> None:
@@ -253,8 +254,8 @@ def test_http_dag_blackboard(state_dir: Path) -> None:
         httpd.shutdown()
 
 
-def test_blackboard_hard_clear_empties_live_ignores_archive(state_dir: Path) -> None:
-    """Post N → clear → live head/jsonl empty; archive exists but is ignored."""
+def test_blackboard_hard_clear_empties_live_no_archive(state_dir: Path) -> None:
+    """Post N → clear → live head/jsonl empty; no archive by default (ADR-002)."""
     from okstratr import blackboard
     from okstratr.blackboard import Blackboard, default_blackboard, invalidate_default
 
@@ -267,9 +268,8 @@ def test_blackboard_hard_clear_empties_live_ignores_archive(state_dir: Path) -> 
     cleared = blackboard.clear()
     assert cleared["cleared"] is True
     assert cleared["count_before"] == 5
-    assert cleared["archived"]
-    assert Path(cleared["archived"]).is_file()
-    assert secret in Path(cleared["archived"]).read_text(encoding="utf-8")
+    assert cleared.get("archived") is None
+    assert list(state_dir.glob("blackboard.jsonl.archive.*")) == []
 
     # Live paths must be empty / absent
     live = state_dir / "blackboard.jsonl"
@@ -281,7 +281,7 @@ def test_blackboard_hard_clear_empties_live_ignores_archive(state_dir: Path) -> 
     assert blackboard.summary()["count"] == 0
     assert blackboard.summary()["head"] == []
 
-    # Fresh instance must not merge archive
+    # Fresh instance still empty
     bb2 = Blackboard(live).reload()
     assert bb2.head(50) == []
     assert bb2.search(secret) == []

@@ -108,6 +108,30 @@ class Handler(BaseHTTPRequestHandler):
             code, body, ct = _json_bytes(harness_config.list_for_api())
             return self._send(code, body, ct)
 
+
+        if path in ("/api/audit",):
+            from . import ops_audit
+
+            n = 40
+            if "n" in qs:
+                try:
+                    n = int(qs["n"][0])
+                except (ValueError, IndexError):
+                    n = 40
+            payload = {
+                "ok": True,
+                "path": ops_audit.path(),
+                "verify": ops_audit.verify(),
+                "records": ops_audit.tail(n),
+            }
+            code, body, ct = _json_bytes(payload)
+            return self._send(code, body, ct)
+
+        if path in ("/api/blackboard/prune", "/api/bb/prune"):
+            out = blackboard.prune()
+            code, body, ct = _json_bytes(out)
+            return self._send(code, body, ct)
+
         if path == "/api/desk_session":
             from . import desk_session as desk_session_mod
 
@@ -410,6 +434,13 @@ class Handler(BaseHTTPRequestHandler):
             code, body, ct = _json_bytes(node.to_dict())
             return self._send(code, body, ct)
 
+
+        if path in ("/api/blackboard/prune", "/api/bb/prune"):
+            out = blackboard.prune()
+            status.write_status()
+            code, body, ct = _json_bytes(out)
+            return self._send(code, body, ct)
+
         if path in ("/api/blackboard/clear", "/api/bb/clear"):
             out = blackboard.clear()
             status.write_status()
@@ -571,12 +602,23 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def serve(host: str = "127.0.0.1", port: int = PORT) -> int:
+    try:
+        blackboard.on_serve_start()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from . import ops_audit
+
+        ops_audit.append("serve.start", kind="process", note=f"{host}:{port}")
+    except Exception:  # noqa: BLE001
+        pass
     status.write_status()
     httpd = ThreadingHTTPServer((host, port), Handler)
     print(
         f"okstratr listening on http://{host}:{port}  "
         "(/health /api/status /api/desk/* /api/web /api/workspaces /api/config/roles /api/harness /api/desk_session "
-        "/api/seat /api/dag /api/blackboard /api/blackboard/clear /api/cos/break /api/herdr/launch /api/herdr/run-ready)"
+        "/api/seat /api/dag /api/blackboard /api/blackboard/clear /api/blackboard/prune /api/audit "
+        "/api/cos/break /api/herdr/launch /api/herdr/run-ready)"
     )
     try:
         httpd.serve_forever()

@@ -15,13 +15,47 @@ from .types import SeatRequest, SeatResult
 
 
 
+def _safe_visible_token(s: str, *, fallback: str, n: int = 48) -> str:
+    """Alnum/-/_ only — never leading dot; visible harness_logs names."""
+    raw = "".join(c if c.isalnum() or c in "-_" else "-" for c in (s or fallback))
+    raw = raw.strip("-_") or fallback
+    if raw.startswith("."):
+        raw = "x" + raw.lstrip(".")
+    return raw[:n]
+
+
 def _write_prompt_file(prompt: str, *, node_id: str, harness_id: str) -> str:
-    """Persist seat prompt under harness_logs for --prompt-file harnesses."""
+    """Persist seat prompt under harness_logs for --prompt-file harnesses.
+
+    Filenames are always visible (no leading dot / invisible chars).
+    """
     log_dir = procs.seat_log_dir()
-    safe_node = "".join(c if c.isalnum() or c in "-_" else "-" for c in (node_id or "node"))[:48]
-    safe_h = "".join(c if c.isalnum() or c in "-_" else "-" for c in (harness_id or "h"))[:24]
-    path = log_dir / f"{safe_node}-{safe_h}-prompt-{int(time.time() * 1000)}.txt"
+    safe_node = _safe_visible_token(node_id, fallback="node", n=48)
+    safe_h = _safe_visible_token(harness_id, fallback="h", n=24)
+    name = f"{safe_node}-{safe_h}-prompt-{int(time.time() * 1000)}.txt"
+    try:
+        from okstratr.workspace import assert_visible_name
+
+        vis = assert_visible_name(name)
+        if not vis.get("ok"):
+            name = f"investigator-{safe_h}-{int(time.time() * 1000)}.txt"
+    except Exception:  # noqa: BLE001
+        pass
+    path = log_dir / name
     path.write_text(prompt or "", encoding="utf-8")
+    try:
+        from okstratr import ops_audit
+
+        ops_audit.append(
+            "harness_logs.prompt_file",
+            kind="file",
+            path=str(path),
+            node_id=node_id,
+            harness_id=harness_id,
+            note="prompt file created (contents not logged)",
+        )
+    except Exception:  # noqa: BLE001
+        pass
     return str(path)
 
 
@@ -195,8 +229,17 @@ def run_direct(
         }
 
     log_dir = procs.seat_log_dir()
-    safe_node = "".join(c if c.isalnum() or c in "-_" else "-" for c in req.node_id)[:48]
-    log_path = log_dir / f"{safe_node}-{seat.harness_id}-{int(time.time())}.log"
+    safe_node = _safe_visible_token(req.node_id, fallback="node", n=48)
+    safe_h = _safe_visible_token(seat.harness_id or "h", fallback="h", n=24)
+    log_name = f"{safe_node}-{safe_h}-{int(time.time())}.log"
+    try:
+        from okstratr.workspace import assert_visible_name
+
+        if not assert_visible_name(log_name).get("ok"):
+            log_name = f"investigator-{safe_h}-{int(time.time())}.log"
+    except Exception:  # noqa: BLE001
+        pass
+    log_path = log_dir / log_name
 
     run_env = dict(env if env is not None else os.environ)
     run_env["OKSTRATR_NODE_ID"] = req.node_id
@@ -239,6 +282,22 @@ def run_direct(
             seat.detail["pid"] = proc.pid
             seat.detail["log_path"] = str(log_path)
             seat.adapter = "direct"
+            try:
+                from okstratr import ops_audit
+
+                ops_audit.append(
+                    "direct.spawn",
+                    kind="process",
+                    path=str(log_path),
+                    argv=list(cmd),
+                    cwd=seat_workdir,
+                    desk_id=labels.get("desk_id"),
+                    node_id=req.node_id,
+                    harness_id=seat.harness_id,
+                    pid=proc.pid,
+                )
+            except Exception:  # noqa: BLE001
+                pass
 
             if not wait:
                 return {
@@ -319,7 +378,19 @@ def run_direct(
 
 def kill_direct_for_desk(desk_id: str | None = None, *, thread_id: str | None = None) -> dict[str, Any]:
     """Kill tracked direct seats for a desk (call on quiet/dismiss)."""
-    return procs.kill_for_desk(desk_id, thread_id=thread_id)
+    out = procs.kill_for_desk(desk_id, thread_id=thread_id)
+    try:
+        from okstratr import ops_audit
+
+        ops_audit.append(
+            "direct.kill",
+            kind="process",
+            desk_id=desk_id,
+            note=f"thread_id={thread_id} killed={out.get('killed') if isinstance(out, dict) else out}",
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    return out
 
 
 def _env_dry() -> bool:
