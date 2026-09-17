@@ -29,7 +29,7 @@ Work-coverage default lives in **okbay** (magical all-`~/Work`). **Biocure** is 
 
 **Finite-job rule:** never leave Grok/Herdr agents running after a node — always stop/release.
 
-See [docs/DESK-KERNEL.md](docs/DESK-KERNEL.md) for the hiring-manager / desk / Herdr design, and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for package map + APIs.
+See [docs/ADR-001-cli-tui-harness.md](docs/ADR-001-cli-tui-harness.md) for the CLI/TUI-first + harness-agnostic vision, and [docs/DESK-KERNEL.md](docs/DESK-KERNEL.md) for the hiring-manager / desk / Herdr design, and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for package map + APIs.
 
 > **Switchbay release pending** — deep parity check against Switchbay once that tree is available.
 

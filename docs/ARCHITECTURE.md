@@ -1,5 +1,8 @@
 # Okstratr architecture
 
+> **Product vision:** **[ADR-001-cli-tui-harness.md](ADR-001-cli-tui-harness.md)** — CLI/TUI-first; Omarchy Panel = thin client of this daemon; harness-agnostic seating.
+>
+
 > Desk / kernel design authority: **[DESK-KERNEL.md](DESK-KERNEL.md)**.
 > Switchbay release pending for deep parity check.
 
@@ -38,7 +41,7 @@ ingest — those stay in **okbay**. Desks bind the **active okbay workspace / th
 |-------|--------|----------------|
 | **Knowledge / coverage** | **okbay** | Graph, Atlas, ingest, reviews land path, workspaces |
 | **Runtime / multiplexer** | **Herdr** | Panes, workspaces, agent lifecycle (`working` / `blocked` / `idle`), socket/CLI to start / prompt / wait / stop agents |
-| **Plan + memory of the desk** | **okstratr** | Kernel + desks, durable product DAG, CoS, human blackboard, schedule, Omarchy bar/panel desk UI |
+| **Plan + memory of the desk** | **okstratr** | Kernel + desks, durable product DAG, CoS, human blackboard, schedule, harness registry, CLI/TUI; Omarchy bar/panel is a **client** of the daemon (ADR-001) |
 
 **okstratr** owns the plan + memory; **Herdr** owns live agent terminals. Neither replaces the other.
 

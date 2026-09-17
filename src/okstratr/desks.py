@@ -424,6 +424,18 @@ class DeskRegistry:
         # Slash override: "/curate …" wins over an explicit kind and is stripped
         # from the stored objective. Query box defaults to auto when no slash.
         slash_kind, obj = kernel.parse_objective_slash(raw)
+        # Phase 1: also honor /harness and /model directives (strip from objective)
+        from .harness.slash import apply_harness_slash_to_env, parse_slash_directives
+        import os as _os
+
+        _dir = parse_slash_directives(raw)
+        if _dir.harnesses or _dir.model:
+            for _k, _v in apply_harness_slash_to_env(_dir).items():
+                _os.environ[_k] = _v
+            if _dir.objective:
+                obj = _dir.objective
+            if _dir.kind:
+                slash_kind = _dir.kind
         effective_kind = slash_kind or kind
         wid = (okbay_workspace_id or workspace_id or "").strip()
         if wid and wid not in ("local",):
