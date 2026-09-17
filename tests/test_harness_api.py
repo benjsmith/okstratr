@@ -33,6 +33,9 @@ def test_list_for_api_shape(cfg_dir: Path) -> None:
     assert row["enabled"] is True
     assert row["default_model"]
     assert "trivial" in (row.get("effort") or {}) or row.get("effort") == {}
+    assert isinstance(row.get("settings"), dict)
+    assert row["settings"].get("reasoning") == "low"
+    assert payload.get("backend") in ("herdr", "direct")
 
 
 def test_enable_disable_persist(cfg_dir: Path) -> None:

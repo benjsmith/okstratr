@@ -301,6 +301,85 @@ def _cwd_chip() -> str:
         return "cwd: ?"
 
 
+def _harness_status(status: dict[str, Any] | None) -> dict[str, Any]:
+    """Harness payload from /api/status (preferred) or empty."""
+    status = status if isinstance(status, dict) else {}
+    h = status.get("harness")
+    return h if isinstance(h, dict) else {}
+
+
+def _backend_chip(status: dict[str, Any] | None = None) -> str:
+    h = _harness_status(status)
+    backend = str(h.get("backend") or (h.get("defaults") or {}).get("backend") or "").strip()
+    if not backend:
+        try:
+            from .harness import config as harness_config
+
+            backend = harness_config.load().preferred_backend()
+        except Exception:  # noqa: BLE001
+            backend = "?"
+    return f"backend={backend or '?'}"
+
+
+def _format_enabled_harness(row: dict[str, Any]) -> str:
+    hid = str(row.get("id") or "").strip() or "?"
+    model = str(row.get("default_model") or "").strip()
+    settings = row.get("settings") if isinstance(row.get("settings"), dict) else {}
+    reasoning = str(
+        (settings or {}).get("reasoning")
+        or (settings or {}).get("reasoning_effort")
+        or ""
+    ).strip()
+    base = f"{hid}@{model}" if model else hid
+    if reasoning:
+        return f"{base} (reasoning={reasoning})"
+    return base
+
+
+def _harness_chip(status: dict[str, Any] | None = None) -> str:
+    """Enabled harnesses with default_model + reasoning, comma-separated."""
+    h = _harness_status(status)
+    rows = h.get("harnesses") if isinstance(h.get("harnesses"), list) else []
+    enabled_ids = {
+        str(x).strip().lower()
+        for x in (h.get("enabled") or [])
+        if str(x).strip()
+    }
+    parts: list[str] = []
+    seen: set[str] = set()
+    # Prefer preference / enabled order when present
+    order = [str(x).strip().lower() for x in (h.get("preference") or h.get("enabled") or []) if str(x).strip()]
+    by_id = {
+        str(r.get("id") or "").strip().lower(): r
+        for r in rows
+        if isinstance(r, dict) and r.get("id")
+    }
+    for hid in order:
+        row = by_id.get(hid)
+        if not row:
+            continue
+        if enabled_ids and hid not in enabled_ids and not row.get("enabled"):
+            continue
+        if not row.get("enabled", hid in enabled_ids or not enabled_ids):
+            continue
+        if hid in seen:
+            continue
+        seen.add(hid)
+        parts.append(_format_enabled_harness(row))
+    if not parts:
+        for row in rows:
+            if not isinstance(row, dict) or not row.get("enabled"):
+                continue
+            hid = str(row.get("id") or "").strip().lower()
+            if hid in seen:
+                continue
+            seen.add(hid)
+            parts.append(_format_enabled_harness(row))
+    if not parts:
+        return "harness: (none)"
+    return "harness: " + ", ".join(parts)
+
+
 def render_snapshot(
     status: dict[str, Any] | None = None,
     dag_payload: dict[str, Any] | None = None,
@@ -319,7 +398,7 @@ def render_snapshot(
     focus = status.get("focus_desk_id") or active_id
     lines = [
         f"okstratr tui — {running_label(status)} — {api_base()}",
-        f"  {_web_chip(status)}  |  {_cwd_chip()}",
+        f"  {_web_chip(status)}  |  {_cwd_chip()}  |  {_backend_chip(status)}  |  {_harness_chip(status)}",
         "",
         "## Desks (tabs)",
         f"  {desk_tab_line(rows, active_id=active_id or focus)}",
@@ -463,7 +542,7 @@ def run_textual(*, poll_sec: float | None = None) -> int:
             )
             rows = desk_rows(merged) or desk_rows(desk)
             self.query_one("#tabs", Static).update(
-                f"{desk_tab_line(rows, active_id=active_id)}  |  {_web_chip(merged)}  |  {_cwd_chip()}"
+                f"{desk_tab_line(rows, active_id=active_id)}  |  {_web_chip(merged)}  |  {_cwd_chip()}  |  {_backend_chip(merged)}  |  {_harness_chip(merged)}"
             )
             desks_w = self.query_one("#desks", Static)
             desk_lines = []
@@ -472,7 +551,7 @@ def run_textual(*, poll_sec: float | None = None) -> int:
                 suffix = f" [{badge}]" if badge else ""
                 desk_lines.append(f"{r['kind']}{suffix}\n{r['id'][:14]}")
             desks_w.update(
-                f"{running_label(merged)}\n{_web_chip(merged)}\n{_cwd_chip()}\n\n"
+                f"{running_label(merged)}\n{_web_chip(merged)}\n{_cwd_chip()}\n{_backend_chip(merged)}\n{_harness_chip(merged)}\n\n"
                 + ("\n".join(desk_lines) or "(no desks)")
             )
             self.query_one("#dag", Static).update(

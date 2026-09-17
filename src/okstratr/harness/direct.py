@@ -14,6 +14,17 @@ from .types import SeatRequest, SeatResult
 
 
 
+
+def _write_prompt_file(prompt: str, *, node_id: str, harness_id: str) -> str:
+    """Persist seat prompt under harness_logs for --prompt-file harnesses."""
+    log_dir = procs.seat_log_dir()
+    safe_node = "".join(c if c.isalnum() or c in "-_" else "-" for c in (node_id or "node"))[:48]
+    safe_h = "".join(c if c.isalnum() or c in "-_" else "-" for c in (harness_id or "h"))[:24]
+    path = log_dir / f"{safe_node}-{safe_h}-prompt-{int(time.time() * 1000)}.txt"
+    path.write_text(prompt or "", encoding="utf-8")
+    return str(path)
+
+
 def _seat_workdir_and_web() -> tuple[str, bool]:
     """Operating cwd + whether to pass --disable-web-search (web egress off)."""
     try:
@@ -50,6 +61,10 @@ def run_direct_stub(
         }
     prompt = req.objective or req.node_id
     seat_workdir, disable_web = _seat_workdir_and_web()
+    prompt_file = None
+    hid = (seat.harness_id or "").strip().lower()
+    if argv_mod.uses_prompt_file(hid):
+        prompt_file = _write_prompt_file(prompt, node_id=req.node_id, harness_id=hid)
     try:
         would_argv = argv_mod.build_argv(
             seat.harness_id or "?",
@@ -59,6 +74,7 @@ def run_direct_stub(
             which=lambda name: f"/dry/{name}",
             cwd=seat_workdir,
             disable_web_search=disable_web,
+            prompt_file=prompt_file,
         )
     except (ValueError, FileNotFoundError) as e:
         would_argv = [seat.harness_id or "?", str(e)]
@@ -70,7 +86,7 @@ def run_direct_stub(
         "harness_id": seat.harness_id,
         "herdr_kind": seat.herdr_kind,
         "model": seat.model,
-        "would_exec": [{"argv": would_argv, "prompt": prompt, "note": "direct dry-run"}],
+        "would_exec": [{"argv": would_argv, "prompt": prompt, "prompt_file": prompt_file, "note": "direct dry-run"}],
         "message": f"direct-adapter dry-run for {req.node_id}",
         "seat": seat.to_dict(),
         "herdr_labels": labels,
@@ -138,6 +154,11 @@ def run_direct(
         except Exception:  # noqa: BLE001 — best-effort
             effort_flags = effort_flags or None
     seat_workdir, disable_web = _seat_workdir_and_web()
+    prompt_file = None
+    if argv_mod.uses_prompt_file(seat.harness_id):
+        prompt_file = _write_prompt_file(
+            prompt, node_id=req.node_id, harness_id=seat.harness_id or ""
+        )
     try:
         cmd = argv_mod.build_argv(
             seat.harness_id,
@@ -147,6 +168,7 @@ def run_direct(
             effort_flags=effort_flags,
             cwd=seat_workdir,
             disable_web_search=disable_web,
+            prompt_file=prompt_file,
         )
     except FileNotFoundError as e:
         return {

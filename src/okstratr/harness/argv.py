@@ -7,13 +7,22 @@ from typing import Any
 from . import registry
 from .types import HarnessId
 
-# Templates: {bin}, {model}, {prompt}
-# grok CLI takes a positional PROMPT (or --prompt-file), not --prompt.
+# Templates: {bin}, {model}, {prompt}, {prompt_file}
+# grok non-TTY: positional / TTY prompt path fails with
+# "Device not configured (os error 6)". Use --prompt-file +
+# --output-format plain + --always-approve instead.
 # Options (--model, --reasoning-effort, --cwd, --disable-web-search) must
-# appear before the positional prompt.
+# appear before --prompt-file / positional prompt.
 
 _ARGV: dict[HarnessId, list[str]] = {
-    "grok": ["{bin}", "{prompt}"],
+    "grok": [
+        "{bin}",
+        "--output-format",
+        "plain",
+        "--always-approve",
+        "--prompt-file",
+        "{prompt_file}",
+    ],
     "claude": ["{bin}", "--print", "--model", "{model}", "{prompt}"],
     "codex": ["{bin}", "exec", "--model", "{model}", "{prompt}"],
     "pi": ["{bin}", "{prompt}"],
@@ -39,6 +48,14 @@ _CWD_FLAG: dict[HarnessId, str] = {
 # Harnesses that accept --disable-web-search when web egress is off.
 _DISABLE_WEB_SEARCH: frozenset[HarnessId] = frozenset({"grok"})
 
+# Harnesses that require a prompt file (not bare positional) for non-TTY seats.
+_PROMPT_FILE_HARNESSES: frozenset[HarnessId] = frozenset({"grok"})
+
+
+def uses_prompt_file(harness_id: HarnessId) -> bool:
+    """True when direct seats must write a --prompt-file instead of positional."""
+    return (harness_id or "").strip().lower() in _PROMPT_FILE_HARNESSES
+
 
 def resolve_bin(
     harness_id: HarnessId,
@@ -60,11 +77,17 @@ def resolve_bin(
 
 
 def _insert_before_prompt(argv: list[str], extra: list[str]) -> list[str]:
-    """Insert option flags before the final positional prompt argument."""
+    """Insert option flags before --prompt-file (and path) or final positional prompt."""
     if not extra:
         return argv
     if len(argv) <= 1:
         return argv + list(extra)
+    # Prefer inserting before --prompt-file <path> pair.
+    try:
+        idx = argv.index("--prompt-file")
+        return argv[:idx] + list(extra) + argv[idx:]
+    except ValueError:
+        pass
     # Convention: last element is the prompt for templates that end with {prompt}.
     return argv[:-1] + list(extra) + [argv[-1]]
 
@@ -79,8 +102,13 @@ def build_argv(
     which: Any | None = None,
     cwd: str | None = None,
     disable_web_search: bool = False,
+    prompt_file: str | None = None,
 ) -> list[str]:
-    """Build argv for a direct CLI seat. Raises FileNotFoundError if not installed."""
+    """Build argv for a direct CLI seat. Raises FileNotFoundError if not installed.
+
+    For grok, pass ``prompt_file`` (path written by the direct adapter). A bare
+    positional prompt is not used for non-TTY direct seats.
+    """
     hid = (harness_id or "").strip().lower()
     h = registry.get(hid)
     if h is None:
@@ -91,15 +119,21 @@ def build_argv(
         raise FileNotFoundError(
             f"harness '{hid}' not installed — none of [{bins}] on PATH"
         )
+    if uses_prompt_file(hid) and not (prompt_file or "").strip():
+        raise ValueError(
+            f"harness '{hid}' requires prompt_file for direct seats "
+            "(positional prompt fails non-TTY: Device not configured)"
+        )
     template = list(_ARGV.get(hid) or ["{bin}", "{prompt}"])
     model_s = (model or "").strip()
     mapping = {
         "bin": bin_resolved,
         "model": model_s or "default",
         "prompt": prompt or "",
+        "prompt_file": (prompt_file or "").strip(),
     }
     argv = [part.format(**mapping) for part in template]
-    # Options before positional prompt: effort, then model, then cwd / web.
+    # Options before prompt-file / positional: effort, then model, then cwd / web.
     if effort_flags:
         argv = _insert_before_prompt(argv, list(effort_flags))
     # Inject model flags when template has no {model} placeholder but model set

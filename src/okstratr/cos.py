@@ -7,8 +7,8 @@ from typing import Any
 
 from . import blackboard, dag, roles, status
 
-# (id, title, objective_fmt, depends_on, role)
-_Step = tuple[str, str, str, list[str], str]
+# (id, title, objective_fmt, depends_on, role[, prefer_harness[, prefer_model]])
+_Step = tuple  # 5–7 tuple; prefer_* optional at indices 5,6
 
 # Default / unspecified kind — keep the historical CoS clarify chain so
 # callers that invoke break_down() without a desk stay stable.
@@ -140,8 +140,130 @@ _DECK: list[_Step] = [
     ),
 ]
 
+
+def _parse_models_by_harness(raw: str | None = None) -> dict[str, str]:
+    """Parse ``grok:grok-4.6,claude:haiku`` (or JSON) into harness→model."""
+    import json
+    import os
+
+    s = (raw if raw is not None else os.environ.get("OKSTRATR_MODEL_BY_HARNESS") or "").strip()
+    if not s:
+        return {}
+    if s.startswith("{"):
+        try:
+            data = json.loads(s)
+            if isinstance(data, dict):
+                return {
+                    str(k).strip().lower(): str(v).strip()
+                    for k, v in data.items()
+                    if str(k).strip() and str(v).strip()
+                }
+        except json.JSONDecodeError:
+            pass
+    out: dict[str, str] = {}
+    for part in s.replace(" ", ",").split(","):
+        part = part.strip()
+        if not part or ":" not in part:
+            continue
+        hid, _, mid = part.partition(":")
+        hid = hid.strip().lower()
+        mid = mid.strip()
+        if hid and mid:
+            out[hid] = mid
+    return out
+
+
+def _fanout_harness_ids() -> list[str]:
+    """Enabled harnesses for investigator fan-out (preference order).
+
+    Uses OKSTRATR_HARNESS_PREFER when set (≥1 ids); otherwise config enabled list.
+    """
+    import os
+
+    raw = (os.environ.get("OKSTRATR_HARNESS_PREFER") or "").strip()
+    if raw:
+        ids = [x.strip().lower() for x in raw.split(",") if x.strip()]
+        if ids:
+            return ids
+    try:
+        from .harness import config as harness_config
+
+        cfg = harness_config.load()
+        return list(cfg.preference_order())
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _default_model_for(hid: str, models_by: dict[str, str] | None = None) -> str | None:
+    models_by = models_by or {}
+    if hid in models_by:
+        return models_by[hid]
+    try:
+        from .harness import config as harness_config
+
+        return harness_config.load().default_model_for(hid)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def switchbay_steps(
+    *,
+    harnesses: list[str] | None = None,
+    models_by_harness: dict[str, str] | None = None,
+    force_fanout: bool | None = None,
+) -> list[_Step]:
+    """work/auto template; fan-out parallel investigators when ≥2 harnesses."""
+    harns = [h.strip().lower() for h in (harnesses if harnesses is not None else _fanout_harness_ids()) if h and h.strip()]
+    models_by = dict(models_by_harness or _parse_models_by_harness())
+    do_fan = bool(force_fanout) if force_fanout is not None else len(harns) >= 2
+    if not do_fan or len(harns) < 2:
+        return list(_SWITCHBAY)
+
+    inv_ids: list[str] = []
+    steps: list[_Step] = []
+    for hid in harns:
+        nid = f"investigator-{hid}"
+        inv_ids.append(nid)
+        model = _default_model_for(hid, models_by)
+        title = f"Investigate ({hid})"
+        obj_fmt = f"Gather evidence and context via {hid} for: {{obj}}"
+        steps.append(
+            (nid, title, obj_fmt, ["root"], roles.ROLE_INVESTIGATOR, hid, model)
+        )
+    steps.append(
+        (
+            "synthesizer",
+            "Synthesize",
+            "Merge independent opinions into succinct claims for: {obj}",
+            list(inv_ids),
+            roles.ROLE_SYNTHESIZER,
+        )
+    )
+    steps.append(
+        (
+            "verifier",
+            "Verify",
+            "Check outcomes against success criteria for: {obj}",
+            ["synthesizer"],
+            roles.ROLE_VERIFIER,
+        )
+    )
+    return steps
+
+
+def _unpack_step(step: _Step) -> tuple[str, str, str, list[str], str, str | None, str | None]:
+    nid = step[0]
+    title = step[1]
+    obj_fmt = step[2]
+    deps = list(step[3])
+    role = step[4]
+    prefer_harness = step[5] if len(step) > 5 else None
+    prefer_model = step[6] if len(step) > 6 else None
+    return nid, title, obj_fmt, deps, role, prefer_harness, prefer_model
+
+
 KIND_TEMPLATES: dict[str, list[_Step]] = {
-    "work": _SWITCHBAY,
+    "work": _SWITCHBAY,  # expanded via switchbay_steps() in template_for
     "auto": _SWITCHBAY,
     "curate": _CURATE,
     "code": _CODE,
@@ -167,8 +289,10 @@ def resolve_kind(kind: str | None = None) -> str | None:
 
 
 def template_for(kind: str | None) -> list[_Step]:
-    """Kind-specific planner template. work/auto → Switchbay roles."""
+    """Kind-specific planner template. work/auto → Switchbay (+ multi-harness fan-out)."""
     k = resolve_kind(kind) if kind is None else (kind or "").strip().lower()
+    if k in ("work", "auto"):
+        return switchbay_steps()
     if k in KIND_TEMPLATES:
         return KIND_TEMPLATES[k]
     return _COS_CHAIN
@@ -179,16 +303,21 @@ def advise(objective: str, blackboard_head: list[str] | None = None, *, kind: st
     obj = (objective or "").strip() or "(no objective)"
     notes = list(blackboard_head or [])
     steps = template_for(kind)
-    breakdown = [
-        {
+    breakdown = []
+    for step in steps:
+        nid, title, obj_fmt, deps, role, ph, pm = _unpack_step(step)
+        row = {
             "id": nid,
             "title": title,
             "objective": obj_fmt.format(obj=obj),
             "depends_on": list(deps),
             "role": role,
         }
-        for nid, title, obj_fmt, deps, role in steps
-    ]
+        if ph:
+            row["prefer_harness"] = ph
+        if pm:
+            row["prefer_model"] = pm
+        breakdown.append(row)
     return {
         "objective": obj,
         "kind": resolve_kind(kind) if kind is not None else resolve_kind(None),
@@ -251,9 +380,15 @@ def break_down(
     updated: list[str] = []
     plan_lines: list[str] = []
 
-    for nid, title, obj_fmt, deps, role in steps:
+    for step in steps:
+        nid, title, obj_fmt, deps, role, prefer_harness, prefer_model = _unpack_step(step)
         child_obj = obj_fmt.format(obj=obj)
-        plan_lines.append(f"{nid}: {title} [{role}]")
+        tag = f"{nid}: {title} [{role}]"
+        if prefer_harness:
+            tag += f" harness={prefer_harness}"
+        if prefer_model:
+            tag += f" model={prefer_model}"
+        plan_lines.append(tag)
         if nid in g.nodes:
             n = g.nodes[nid]
             n.title = title
@@ -261,6 +396,10 @@ def break_down(
             n.depends_on = list(deps)
             n.kind = n.kind or role
             n.role = role
+            if prefer_harness:
+                n.prefer_harness = prefer_harness
+            if prefer_model:
+                n.prefer_model = prefer_model
             n.updated_at = time()
             updated.append(nid)
         else:
@@ -272,6 +411,8 @@ def break_down(
                 role=role,
                 objective=child_obj,
                 state="pending",
+                prefer_harness=prefer_harness,
+                prefer_model=prefer_model,
                 save=False,
             )
             created.append(nid)
@@ -322,7 +463,7 @@ def break_down(
         )
 
     ready_ids = [n.id for n in g.ready()]
-    node_ids = [nid for nid, *_ in steps]
+    node_ids = [_unpack_step(s)[0] for s in steps]
     return {
         "ok": True,
         "objective": obj,

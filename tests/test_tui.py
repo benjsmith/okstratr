@@ -13,6 +13,20 @@ def test_render_snapshot_helpers() -> None:
             {"id": "d2", "kind": "work", "state": "quiet", "objective": "idle one"},
         ],
         "active_desk": {"id": "d1"},
+        "harness": {
+            "ok": True,
+            "backend": "direct",
+            "enabled": ["grok"],
+            "preference": ["grok"],
+            "harnesses": [
+                {
+                    "id": "grok",
+                    "enabled": True,
+                    "default_model": "grok-4.6",
+                    "settings": {"reasoning": "low"},
+                }
+            ],
+        },
     }
     dag_payload = {
         "nodes": [
@@ -27,6 +41,8 @@ def test_render_snapshot_helpers() -> None:
     assert "plan ready" in text
     assert "Idle" in text or "work[Idle]" in text or "[Idle]" in text
     assert "/harness" in text or "/model" in text
+    assert "backend=direct" in text
+    assert "harness: grok@grok-4.6 (reasoning=low)" in text
     assert tui.running_label({"state": "setup"}) == "Idle"
 
 
@@ -89,3 +105,34 @@ def test_agents_grouped(tmp_path, monkeypatch, capsys) -> None:
     out = capsys.readouterr().out
     assert "grouped" in out
     assert "label_convention" in out
+
+
+def test_backend_and_harness_chips() -> None:
+    status = {
+        "harness": {
+            "backend": "herdr",
+            "enabled": ["grok", "claude"],
+            "preference": ["grok", "claude"],
+            "harnesses": [
+                {
+                    "id": "grok",
+                    "enabled": True,
+                    "default_model": "grok-4.6",
+                    "settings": {"reasoning": "low"},
+                },
+                {
+                    "id": "claude",
+                    "enabled": True,
+                    "default_model": "claude-sonnet-4",
+                    "settings": {},
+                },
+                {"id": "codex", "enabled": False, "default_model": "gpt-5", "settings": {}},
+            ],
+        }
+    }
+    assert tui._backend_chip(status) == "backend=herdr"
+    chip = tui._harness_chip(status)
+    assert chip.startswith("harness: ")
+    assert "grok@grok-4.6 (reasoning=low)" in chip
+    assert "claude@claude-sonnet-4" in chip
+    assert "codex" not in chip

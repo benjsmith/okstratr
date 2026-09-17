@@ -26,6 +26,10 @@ class Node:
     notes: str = ""
     role: str | None = None
     """Hired role that owns this node (investigator, verifier, …)."""
+    prefer_harness: str | None = None
+    """Pin this seat to a harness id (multi-harness fan-out)."""
+    prefer_model: str | None = None
+    """Pin this seat to a model id for the preferred harness."""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -37,6 +41,8 @@ class Node:
         if state not in VALID_STATES:
             state = "pending"
         kind = data.get("kind")
+        prefer_harness = data.get("prefer_harness") or (data.get("meta") or {}).get("harness")
+        prefer_model = data.get("prefer_model") or (data.get("meta") or {}).get("model")
         return cls(
             id=str(data["id"]),
             title=str(data.get("title") or data["id"]),
@@ -48,6 +54,8 @@ class Node:
             updated_at=float(data.get("updated_at") or now),
             notes=str(data.get("notes") or ""),
             role=str(data["role"]) if data.get("role") else None,
+            prefer_harness=str(prefer_harness).strip().lower() if prefer_harness else None,
+            prefer_model=str(prefer_model).strip() if prefer_model else None,
         )
 
 
@@ -112,6 +120,8 @@ class Dag:
         state: str | None = None,
         notes: str = "",
         role: str | None = None,
+        prefer_harness: str | None = None,
+        prefer_model: str | None = None,
         save: bool = True,
     ) -> Node:
         now = time()
@@ -128,6 +138,8 @@ class Dag:
             updated_at=now,
             notes=notes or "",
             role=role,
+            prefer_harness=(prefer_harness or "").strip().lower() or None,
+            prefer_model=(prefer_model or "").strip() or None,
         )
         self.nodes[node_id] = n
         self.refresh_ready(save=False)
