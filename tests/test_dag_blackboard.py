@@ -190,7 +190,12 @@ def test_http_dag_blackboard(state_dir: Path) -> None:
 
         with urllib.request.urlopen(base + "/api/dag") as r:
             body = json.loads(r.read().decode())
-        assert body["nodes"] >= 1
+        # /api/dag returns nodes as a list (TUI); node_count is the integer
+        n = body.get("node_count")
+        if n is None:
+            nodes = body.get("nodes")
+            n = len(nodes) if isinstance(nodes, list) else int(nodes or 0)
+        assert n >= 1
 
         req = urllib.request.Request(
             base + "/api/dag/nodes",

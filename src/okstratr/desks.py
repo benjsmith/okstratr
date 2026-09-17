@@ -827,7 +827,12 @@ class DeskRegistry:
         return stopped
 
     def _dag_for_desk(self, desk: Desk) -> Any:
-        """Prefer the live global DAG when this desk is active; else desk file."""
+        """Prefer the live global DAG when this desk is active; else desk file.
+
+        Seating (run_one / maybe_quiet) mutates the process-global ``dag.json``.
+        HTTP/TUI should use :func:`load_dag_for_api`, which prefers the desk file
+        when the global copy is empty.
+        """
         if self.active_id == desk.id:
             return dag_mod.default_dag(force_reload=True)
         path = self.dag_path_for(desk)
@@ -853,6 +858,78 @@ def default_registry(*, force_reload: bool = False) -> DeskRegistry:
         _DEFAULT = DeskRegistry.open(path)
         _DEFAULT_PATH = path
     return _DEFAULT
+
+
+
+def load_dag_for_api(desk_id: str | None = None) -> dict[str, Any]:
+    """Resolve DAG payload for GET /api/dag (desk file first).
+
+    Returns a client-friendly summary where ``nodes`` is a **list** of node
+    dicts (TUI/Panel), plus ``node_count``, ``items``, ``desk_id``, ``source``.
+    """
+    reg = default_registry(force_reload=True)
+    desk = None
+    did = (str(desk_id).strip() if desk_id else "") or None
+    if did:
+        desk = reg.desks.get(did)
+        if desk is not None and desk.state == "dismissed":
+            desk = None
+    if desk is None:
+        desk = reg.active()
+    if desk is None:
+        # Newest standing desk with a non-empty dag file
+        for d in reg.standing():
+            p = reg.dag_path_for(d)
+            if p.is_file():
+                probe = dag_mod.Dag(path=p).load()
+                if probe.nodes:
+                    desk = d
+                    break
+    source = "empty"
+    g: Any
+    resolved_id: str | None = None
+    if desk is not None:
+        resolved_id = desk.id
+        path = reg.dag_path_for(desk)
+        desk_dag = dag_mod.Dag(path=path).load() if path.is_file() else dag_mod.Dag(path=path)
+        global_dag = dag_mod.default_dag(force_reload=True)
+        # Prefer desk file when it has the CoS graph and global is empty/stale.
+        # Prefer global when it has nodes (live seating updates) and desk is active.
+        if desk_dag.nodes and not global_dag.nodes:
+            g = desk_dag
+            source = "desk_file"
+        elif global_dag.nodes and reg.active_id == desk.id:
+            g = global_dag
+            source = "global"
+        elif desk_dag.nodes:
+            g = desk_dag
+            source = "desk_file"
+        elif global_dag.nodes:
+            g = global_dag
+            source = "global"
+        else:
+            g = desk_dag if path.is_file() else global_dag
+            source = "desk_empty"
+    else:
+        g = dag_mod.default_dag(force_reload=True)
+        source = "global" if g.nodes else "empty"
+
+    if hasattr(g, "refresh_ready"):
+        g.refresh_ready(save=False)
+    summary = g.summary() if hasattr(g, "summary") else {}
+    items = list(summary.get("items") or [])
+
+    out = dict(summary) if isinstance(summary, dict) else {}
+    out["nodes"] = items  # list for TUI / Panel (not the integer count)
+    out["items"] = items
+    out["node_count"] = len(items)
+    out["source"] = source
+    if resolved_id:
+        out["desk_id"] = resolved_id
+    elif did:
+        out["desk_id"] = did
+    return out
+
 
 
 def start(objective: str = "", **kwargs: Any) -> dict[str, Any]:

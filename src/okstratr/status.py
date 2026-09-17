@@ -85,9 +85,39 @@ def mark_ready() -> None:
         _state = "ready"
 
 
+def _dag_count(summary: dict[str, Any]) -> int:
+    """Integer node count from a summary (nodes may be int or list)."""
+    n = summary.get("node_count")
+    if isinstance(n, int):
+        return n
+    nodes = summary.get("nodes")
+    if isinstance(nodes, int):
+        return nodes
+    if isinstance(nodes, list):
+        return len(nodes)
+    items = summary.get("items")
+    if isinstance(items, list):
+        return len(items)
+    return 0
+
+
 def snapshot() -> dict[str, Any]:
     mark_ready()
-    d = dag.default_dag().summary()
+    # Prefer focused/active desk file so status.dag matches GET /api/dag.
+    # Keep summary.nodes as an **int** count for dag_nodes / bar chips; list under items.
+    try:
+        from . import desks as desks_mod
+
+        api = desks_mod.load_dag_for_api(None)
+        items = list(api.get("items") or [])
+        if isinstance(api.get("nodes"), list):
+            items = list(api["nodes"])
+        d = dict(api)
+        d["items"] = items
+        d["nodes"] = int(api.get("node_count") or len(items))
+        d["node_count"] = d["nodes"]
+    except Exception:  # noqa: BLE001
+        d = dag.default_dag().summary()
     bb = blackboard.summary()
     desk_brief = None
     focus_desk_id = None
@@ -135,7 +165,7 @@ def snapshot() -> dict[str, Any]:
                 active.okbay_workspace_id if active else str(okbay.active_workspace().get("id") or "")
             ),
             "thread_id": active.thread_id if active else "",
-            "dag_nodes": d.get("nodes") or 0,
+            "dag_nodes": _dag_count(d),
         }
         if active:
             labels = herdr.labels_for_desk(active)
@@ -252,7 +282,7 @@ def snapshot() -> dict[str, Any]:
         "desk": desk_brief,
         "desk_kind": kind,
         "desk_state": (desk_brief or {}).get("state"),
-        "dag_nodes": d.get("nodes") or 0,
+        "dag_nodes": _dag_count(d),
         "dag": d,
         "schedule": schedule.summary(),
         "blackboard": bb,

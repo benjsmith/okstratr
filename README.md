@@ -34,15 +34,21 @@ See [docs/ADR-001-cli-tui-harness.md](docs/ADR-001-cli-tui-harness.md) for the C
 ### Mac CLI workflow (no Omarchy)
 
 ```bash
-# Terminal 1 — multiplexer (when installed)
-herdr
+# No Herdr on Mac → direct CLI seating (grok / claude / …)
+okstratr config set backend direct
+okstratr config set harness.grok.default_model grok-4.6
+okstratr config set harness.grok.settings.reasoning low
 
-# Terminal 2 — desk brain daemon
+# Terminal 1 — desk brain daemon (restart after config/pull)
+pkill -f 'okstratr serve' 2>/dev/null || true
 okstratr serve          # http://127.0.0.1:8767
 
-# Terminal 3 — TUI (or --snapshot for CI)
+# Terminal 2 — TUI (Ghostty or any terminal; --snapshot for CI)
 okstratr tui
-# okstratr tui --snapshot
+# okstratr tui --snapshot   # ## DAG (topo) lists CoS nodes for active desk
+
+# Optional multiplexer when installed
+# herdr
 
 # Observability — group seats like Omarchy desks
 okstratr agents
@@ -50,10 +56,12 @@ okstratr agents --desk <desk_id>
 
 # Harness / models (Switchbay-inspired rungs, no LiteLLM)
 okstratr harness list
-okstratr config set backend direct          # when Herdr unavailable
-okstratr config set harness.claude.default_model claude-sonnet-4
 okstratr model list
 ```
+
+`drive_herdr: true` from the Panel/TUI means **drive seats** — with `backend=direct`
+that is `harness.direct` (cwd sandbox + grok-4.6 + `--reasoning-effort low`), not a
+Herdr pane start. `GET /api/dag` reads the focused desk's `desks/<id>/dag.json`.
 
 Every seat (Herdr + direct) labels with `desk_id` + `thread_id`. Config file:
 `~/.config/okstratr/harnesses.toml`.

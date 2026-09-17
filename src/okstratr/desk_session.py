@@ -158,12 +158,25 @@ def build(
 
     if dag_summary is None:
         try:
-            g = dag_mod.default_dag()
-            if hasattr(g, "refresh_ready"):
-                g.refresh_ready()
-            dag_summary = g.summary() if hasattr(g, "summary") else {}
+            # Prefer focused/active desk file when global is empty (same as /api/dag)
+            api_dag = desks_mod.load_dag_for_api(None)
+            items = list(api_dag.get("items") or api_dag.get("nodes") or [])
+            if isinstance(api_dag.get("nodes"), list):
+                items = list(api_dag["nodes"])
+            # DeskRow.dag_nodes expects an int count
+            dag_summary = {
+                k: v for k, v in api_dag.items() if k not in ("nodes",)
+            }
+            dag_summary["nodes"] = int(api_dag.get("node_count") or len(items))
+            dag_summary["items"] = items
         except Exception:  # noqa: BLE001
-            dag_summary = {}
+            try:
+                g = dag_mod.default_dag()
+                if hasattr(g, "refresh_ready"):
+                    g.refresh_ready()
+                dag_summary = g.summary() if hasattr(g, "summary") else {}
+            except Exception:  # noqa: BLE001
+                dag_summary = {}
 
     labels: dict[str, Any] = {
         "desk_id": None,

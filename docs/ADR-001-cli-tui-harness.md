@@ -77,12 +77,23 @@ Every seat still carries **desk_id + thread_id** labels for Herdr grouping.
 Mac workflow:
 
 ```text
-herdr          # multiplexer
+herdr          # multiplexer (optional)
 okstratr serve # daemon :8767
-okstratr tui   # desk brain UI
+okstratr tui   # desk brain UI (Ghostty / any terminal)
+```
+
+**No Herdr on Mac?** Point seating at the direct CLI adapter (uses `grok` etc.):
+
+```bash
+okstratr config set backend direct
+# optional: grok-4.6 + low reasoning
+okstratr config set harness.grok.default_model grok-4.6
+okstratr config set harness.grok.settings.reasoning low
+# restart serve, then Start / drive_herdr drives *seats* via harness.direct
 ```
 
 Desks appear grouped by labels; `okstratr agents --desk …` lists them.
+`GET /api/dag` (and TUI `## DAG`) load the focused desk's `desks/<id>/dag.json`.
 
 ### Omarchy
 
@@ -187,3 +198,11 @@ CLI today: `okstratr harness list|enable|disable`, `okstratr config show|set`.
   path escapes rejected — see `okstratr.workspace` policy string.
 - Web egress remains deny-by-default (`web_egress`); TUI shows Web chip + `/web`.
 - No LiteLLM / no Cloud Agents (unchanged boundary).
+
+### Smoke: desk-file DAG + direct backend
+
+- `GET /api/dag` loads focused/active desk `desks/<id>/dag.json` (CoS graph);
+  response `nodes` is a **list** (TUI no longer sees empty topo when count>0).
+- `drive_herdr` / `drive_seats` means drive seats; with `backend=direct` never
+  starts Herdr panes (even if a broken `herdr` shim is on PATH).
+- Mac without Herdr: `okstratr config set backend direct`.
