@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+def _has_investigator(nodes) -> bool:
+    ids = set(nodes) if not hasattr(nodes, "keys") else set(nodes.keys())
+    return "investigator" in ids or any(str(i).startswith("investigator-") for i in ids)
+
+
 import json
 import os
 from pathlib import Path
@@ -69,7 +74,7 @@ def test_seat_auto_cos_and_flag(state_dir: Path) -> None:
 
     assert main(["seat", "Auto CoS objective"]) == 0
     g = dag.default_dag(force_reload=True)
-    assert "investigator" in g.nodes
+    assert _has_investigator(g.nodes) or "investigator-grok" in g.nodes
     assert g.nodes["root"].state == "done"
 
     # With existing children, seat without --cos should not re-break... wait:
@@ -84,7 +89,7 @@ def test_seat_auto_cos_and_flag(state_dir: Path) -> None:
     # Explicit --cos refreshes (idempotent)
     assert main(["seat", "Force CoS", "--cos"]) == 0
     g = dag.default_dag(force_reload=True)
-    assert "investigator" in g.nodes
+    assert _has_investigator(g.nodes)
 
 
 def test_cos_break_cli(state_dir: Path) -> None:
@@ -269,7 +274,7 @@ def test_http_cos_and_herdr_run_ready(state_dir: Path) -> None:
         assert "cos_break" in seat
         created = seat["cos_break"].get("created") or []
         ready = (seat.get("dag") or {}).get("ready") or []
-        assert "investigator" in created or "investigator" in ready
+        assert _has_investigator(created) or "investigator" in ready
 
         req = urllib.request.Request(
             base + "/api/herdr/run-ready",
@@ -280,12 +285,18 @@ def test_http_cos_and_herdr_run_ready(state_dir: Path) -> None:
         with urllib.request.urlopen(req) as r:
             body = json.loads(r.read().decode())
         assert body["dry_run"] is True
-        assert body["ran"] == ["investigator"]
+        assert body["ran"] and str(body["ran"][0]).startswith("investigator")
         assert body["results"][0]["state"] == "done"
 
         with urllib.request.urlopen(base + "/api/dag") as r:
             dag_body = json.loads(r.read().decode())
-        assert "synthesizer" in dag_body["ready"]
+        ready_after = dag_body.get("ready") or []
+        # Single-harness: synthesizer unlocks after one investigator.
+        # Fan-out: peer investigator still ready until both complete.
+        assert (
+            "synthesizer" in ready_after
+            or any(str(x).startswith("investigator-") for x in ready_after)
+        )
     finally:
         httpd.shutdown()
 
@@ -560,7 +571,7 @@ def test_dag_graph_view_idle_and_switchbay(state_dir: Path) -> None:
     assert view["idle"] is False
     ids = {n["id"] for n in view["nodes"]}
     assert "cos" in ids and "blackboard" in ids
-    assert "investigator" in ids
+    assert _has_investigator(ids)
     assert "synthesizer" in ids or "verifier" in ids
     # summary exposes graph for /api/status and /api/dag
     summary = g.summary()

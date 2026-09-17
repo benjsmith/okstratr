@@ -334,6 +334,35 @@ LABEL_CONVENTION = (
 
 
 
+
+def _node_seat_prefs(node: dag.Node) -> tuple[str | None, str | None]:
+    """Per-node prefer_harness / prefer_model (fan-out pins), else env defaults."""
+    import os
+
+    node_h = getattr(node, "prefer_harness", None)
+    node_m = getattr(node, "prefer_model", None)
+    meta = getattr(node, "meta", None)
+    if isinstance(meta, dict):
+        node_h = node_h or meta.get("harness") or meta.get("prefer_harness")
+        node_m = node_m or meta.get("model") or meta.get("prefer_model")
+    prefer_h = (str(node_h).strip().lower() if node_h else None) or None
+    prefer_m = (str(node_m).strip() if node_m else None) or None
+    if not prefer_h:
+        prefer_h = (os.environ.get("OKSTRATR_HARNESS_PREFER") or "").split(",")[0].strip() or None
+    if prefer_h and not prefer_m:
+        mbh = os.environ.get("OKSTRATR_MODEL_BY_HARNESS") or ""
+        for part in mbh.replace(" ", ",").split(","):
+            if ":" not in part:
+                continue
+            hid, _, mid = part.partition(":")
+            if hid.strip().lower() == prefer_h and mid.strip():
+                prefer_m = mid.strip()
+                break
+    if not prefer_m:
+        prefer_m = (os.environ.get("OKSTRATR_MODEL") or "").strip() or None
+    return prefer_h, prefer_m
+
+
 def resolve_seat_kind(
     *,
     node_id: str = "?",
@@ -1005,7 +1034,14 @@ def _live_run_node(
     agent_id = _agent_id_for(node)
     prompt = _node_prompt(node)
     role = getattr(node, "role", None) or getattr(node, "kind", None) or "worker"
-    seat = resolve_seat_kind(node_id=node.id, role=str(role), require_installed=False)
+    prefer_h, prefer_m = _node_seat_prefs(node)
+    seat = resolve_seat_kind(
+        node_id=node.id,
+        role=str(role),
+        prefer_harness=prefer_h,
+        prefer_model=prefer_m,
+        require_installed=False,
+    )
     if not seat.get("ok"):
         return {
             "ok": False,
@@ -1112,7 +1148,14 @@ def _dry_run_node(node: dag.Node) -> dict[str, Any]:
     agent_id = _agent_id_for(node)
     prompt = _node_prompt(node)
     role = getattr(node, "role", None) or getattr(node, "kind", None) or "worker"
-    seat = resolve_seat_kind(node_id=node.id, role=str(role), require_installed=False)
+    prefer_h, prefer_m = _node_seat_prefs(node)
+    seat = resolve_seat_kind(
+        node_id=node.id,
+        role=str(role),
+        prefer_harness=prefer_h,
+        prefer_model=prefer_m,
+        require_installed=False,
+    )
     if not seat.get("ok"):
         return {
             "ok": False,
@@ -1219,13 +1262,14 @@ def run_one(
                         effort_f = float(effort_raw)
                     except ValueError:
                         pass
+                prefer_h, prefer_m = _node_seat_prefs(node)
                 req = harness_mod.SeatRequest(
                     node_id=node.id,
                     role=str(role),
                     desk_id=ctx.get("desk_id"),
                     thread_id=ctx.get("thread_id"),
-                    prefer_harness=(_os.environ.get("OKSTRATR_HARNESS_PREFER") or "").split(",")[0].strip() or None,
-                    prefer_model=(_os.environ.get("OKSTRATR_MODEL") or "").strip() or None,
+                    prefer_harness=prefer_h,
+                    prefer_model=prefer_m,
                     objective=_node_prompt(node),
                     effort=effort_f,
                     rung=rung,

@@ -22,8 +22,8 @@ BUILTIN: dict[HarnessId, HarnessDef] = {
         herdr_kind="claude",
         bin_names=("claude", "claude-code"),
         label="Claude Code",
-        default_models=("claude-sonnet-4", "claude-opus-4"),
-        notes="Anthropic Claude Code / Herdr claude kind.",
+        default_models=("claude-haiku", "claude-sonnet-4", "claude-opus-4"),
+        notes="Anthropic Claude Code / Herdr claude kind. Prefer haiku for fast dual seats.",
     ),
     "pi": HarnessDef(
         id="pi",

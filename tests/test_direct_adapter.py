@@ -51,6 +51,12 @@ def test_dry_run_stub(env: Path) -> None:
     assert out["ok"] and out["dry_run"]
     assert out["labels"]["desk_id"] == "d1"
     assert out["harness_id"] == "grok"
+    would = (out.get("would_exec") or [{}])[0]
+    argv = would.get("argv") or []
+    assert "--prompt-file" in argv
+    assert "--output-format" in argv and "plain" in argv
+    assert "--always-approve" in argv
+    assert would.get("prompt_file")
 
 
 def test_spawn_fake_harness(env: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -61,7 +67,17 @@ def test_spawn_fake_harness(env: Path, monkeypatch: pytest.MonkeyPatch, tmp_path
     fake = tmp_path / "bin"
     fake.mkdir()
     script = fake / "grok"
-    script.write_text("#!/bin/sh\necho fake-grok-ok\nexit 0\n", encoding="utf-8")
+    script.write_text(
+        "#!/bin/sh\n"
+        "# read --prompt-file if present\n"
+        "while [ $# -gt 0 ]; do\n"
+        '  if [ "$1" = "--prompt-file" ]; then shift; cat "$1"; shift; continue; fi\n'
+        "  shift\n"
+        "done\n"
+        "echo fake-grok-ok\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
     script.chmod(0o755)
     monkeypatch.setenv("PATH", f"{fake}:{tmp_path}")
 
@@ -73,6 +89,7 @@ def test_spawn_fake_harness(env: Path, monkeypatch: pytest.MonkeyPatch, tmp_path
     assert out["labels"]["desk_id"] == "deskA"
     assert "fake-grok-ok" in (out.get("stdout") or "")
     assert out.get("log_path")
+    assert "--prompt-file" in (out.get("argv") or [])
 
 
 def test_kill_on_desk(env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -88,13 +105,14 @@ def test_kill_on_desk(env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert out["count"] >= 1
 
 
-def test_build_argv_grok_positional_no_prompt_flag() -> None:
-    """grok CLI rejects --prompt; prompt must be positional after options."""
+def test_build_argv_grok_prompt_file_shape() -> None:
+    """grok direct seats use --prompt-file (not positional / not --prompt)."""
     from okstratr.harness import argv as argv_mod
 
     cmd = argv_mod.build_argv(
         "grok",
-        prompt="do the thing",
+        prompt="ignored-when-file",
+        prompt_file="/tmp/ws/prompt.txt",
         model="grok-4.6",
         effort_flags=["--reasoning-effort", "low"],
         which=lambda n: f"/bin/{n}" if n == "grok" else None,
@@ -103,17 +121,32 @@ def test_build_argv_grok_positional_no_prompt_flag() -> None:
     )
     assert cmd[0] == "/bin/grok"
     assert "--prompt" not in cmd
-    assert cmd[-1] == "do the thing"
-    # options before positional prompt
-    assert "--model" in cmd and "grok-4.6" in cmd
-    assert cmd[cmd.index("--model") + 1] == "grok-4.6"
-    assert "--reasoning-effort" in cmd and "low" in cmd
-    assert cmd[cmd.index("--reasoning-effort") + 1] == "low"
+    assert "ignored-when-file" not in cmd
+    assert "--prompt-file" in cmd
+    assert cmd[cmd.index("--prompt-file") + 1] == "/tmp/ws/prompt.txt"
+    assert "--output-format" in cmd and cmd[cmd.index("--output-format") + 1] == "plain"
+    assert "--always-approve" in cmd
+    assert "--model" in cmd and cmd[cmd.index("--model") + 1] == "grok-4.6"
+    assert "--reasoning-effort" in cmd and cmd[cmd.index("--reasoning-effort") + 1] == "low"
     assert "--cwd" in cmd and cmd[cmd.index("--cwd") + 1] == "/tmp/ws"
     assert "--disable-web-search" in cmd
-    # effort before model (stable option order)
+    # options before --prompt-file
     assert cmd.index("--reasoning-effort") < cmd.index("--model") < cmd.index("--cwd")
-    assert cmd.index("--cwd") < cmd.index("--disable-web-search") < len(cmd) - 1
+    assert cmd.index("--cwd") < cmd.index("--disable-web-search") < cmd.index("--prompt-file")
+    # plain/always-approve present before prompt-file
+    assert cmd.index("--output-format") < cmd.index("--prompt-file")
+    assert cmd.index("--always-approve") < cmd.index("--prompt-file")
+
+
+def test_build_argv_grok_requires_prompt_file() -> None:
+    from okstratr.harness import argv as argv_mod
+
+    with pytest.raises(ValueError, match="prompt_file"):
+        argv_mod.build_argv(
+            "grok",
+            prompt="hi",
+            which=lambda n: "/usr/bin/grok" if n == "grok" else None,
+        )
 
 
 def test_build_argv_grok_web_on_skips_disable() -> None:
@@ -122,19 +155,20 @@ def test_build_argv_grok_web_on_skips_disable() -> None:
     cmd = argv_mod.build_argv(
         "grok",
         prompt="hi",
+        prompt_file="/tmp/p.txt",
         model="grok-4",
         which=lambda n: "/usr/bin/grok" if n == "grok" else None,
         disable_web_search=False,
     )
     assert "--disable-web-search" not in cmd
-    assert cmd[-1] == "hi"
+    assert "--prompt-file" in cmd
     assert "--prompt" not in cmd
 
 
-def test_spawn_fake_grok_records_positional_argv(
+def test_spawn_fake_grok_prompt_file(
     env: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """e2e: fake grok records argv; must not see --prompt."""
+    """e2e: fake grok records argv; must use --prompt-file with prompt contents."""
     from okstratr.harness.direct import run_direct
     from okstratr.harness.types import SeatRequest, SeatResult
     from okstratr import web_egress
@@ -146,7 +180,7 @@ def test_spawn_fake_grok_records_positional_argv(
     script.write_text(
         "#!/bin/sh\n"
         f'printf "%s\\n" "$@" > "{argv_log}"\n'
-        "echo fake-grok-positional-ok\n"
+        "echo fake-grok-prompt-file-ok\n"
         "exit 0\n",
         encoding="utf-8",
     )
@@ -169,10 +203,16 @@ def test_spawn_fake_grok_records_positional_argv(
         effort_flags=["--reasoning-effort", "low"],
     )
     assert out["ok"] is True
-    assert "fake-grok-positional-ok" in (out.get("stdout") or "")
+    assert "fake-grok-prompt-file-ok" in (out.get("stdout") or "")
     recorded = argv_log.read_text(encoding="utf-8").splitlines()
     assert "--prompt" not in recorded
-    assert recorded[-1] == "seat objective"
+    assert "seat objective" not in recorded  # content is in the file, not argv
+    assert "--prompt-file" in recorded
+    pf = recorded[recorded.index("--prompt-file") + 1]
+    assert Path(pf).is_file()
+    assert Path(pf).read_text(encoding="utf-8") == "seat objective"
+    assert "--output-format" in recorded and "plain" in recorded
+    assert "--always-approve" in recorded
     assert "--model" in recorded and "grok-4.6" in recorded
     assert "--reasoning-effort" in recorded and "low" in recorded
     assert "--disable-web-search" in recorded

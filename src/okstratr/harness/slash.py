@@ -17,6 +17,8 @@ class SlashDirectives:
     harnesses: list[str] = field(default_factory=list)
     model: str | None = None
     model_harness: str | None = None  # from /model claude:sonnet
+    # Multi: /model grok:grok-4.6,claude:haiku
+    models_by_harness: dict[str, str] = field(default_factory=dict)
     rung: str | None = None
     cwd: str | None = None
     web: str | None = None  # off|once|session|on|status
@@ -29,6 +31,7 @@ class SlashDirectives:
             "harnesses": list(self.harnesses),
             "model": self.model,
             "model_harness": self.model_harness,
+            "models_by_harness": dict(self.models_by_harness),
             "rung": self.rung,
             "cwd": self.cwd,
             "web": self.web,
@@ -64,6 +67,7 @@ def parse_slash_directives(text: str) -> SlashDirectives:
     harnesses: list[str] = []
     model: str | None = None
     model_harness: str | None = None
+    models_by_harness: dict[str, str] = {}
     rung: str | None = None
     cwd: str | None = None
     web: str | None = None
@@ -94,9 +98,28 @@ def parse_slash_directives(text: str) -> SlashDirectives:
             if i + 1 >= len(parts):
                 break
             token = parts[i + 1].strip()
+            # Multi: grok:grok-4.6,claude:haiku  OR single: grok-4 / claude:sonnet
+            if "," in token and ":" in token:
+                for part in token.split(","):
+                    part = part.strip()
+                    if not part:
+                        continue
+                    hid_i, mid_i = parse_model_token(part)
+                    if hid_i and mid_i:
+                        models_by_harness[hid_i] = mid_i
+                        if hid_i not in harnesses:
+                            harnesses.append(hid_i)
+                        if model is None:
+                            model = mid_i
+                            model_harness = hid_i
+                consumed.extend([tok, token])
+                i += 2
+                continue
             hid, mid = parse_model_token(token)
             model = mid
             model_harness = hid
+            if hid and mid:
+                models_by_harness[hid] = mid
             if hid and hid not in harnesses:
                 harnesses = [hid] + harnesses
             consumed.extend([tok, token])
@@ -135,6 +158,7 @@ def parse_slash_directives(text: str) -> SlashDirectives:
         harnesses=harnesses,
         model=model,
         model_harness=model_harness,
+        models_by_harness=models_by_harness,
         rung=rung,
         cwd=cwd,
         web=web,
@@ -152,6 +176,15 @@ def apply_harness_slash_to_env(directives: SlashDirectives) -> dict[str, str]:
     if directives.model_harness and not directives.harnesses:
         env["OKSTRATR_HERDR_KIND"] = directives.model_harness
         env["OKSTRATR_HARNESS_PREFER"] = directives.model_harness
+    if directives.models_by_harness:
+        # Preserve multi-model map for CoS fan-out + per-node prefer_model.
+        env["OKSTRATR_MODEL_BY_HARNESS"] = ",".join(
+            f"{k}:{v}" for k, v in directives.models_by_harness.items()
+        )
+        # Also ensure harness prefer includes those ids
+        if not directives.harnesses:
+            env["OKSTRATR_HARNESS_PREFER"] = ",".join(directives.models_by_harness.keys())
+            env["OKSTRATR_HERDR_KIND"] = next(iter(directives.models_by_harness))
     if directives.model:
         env["OKSTRATR_MODEL"] = directives.model
     if directives.rung:
@@ -161,6 +194,6 @@ def apply_harness_slash_to_env(directives: SlashDirectives) -> dict[str, str]:
 
 SLASH_HELP = (
     "/work|/curate|/code|/deck|/auto  /harness id[,id…]  "
-    "/model id|harness:model  /rung trivial|normal|hard  "
+    "/model id|harness:model[,harness:model…]  /rung trivial|normal|hard  "
     "/cd <path>  /web off|once|session|status"
 )

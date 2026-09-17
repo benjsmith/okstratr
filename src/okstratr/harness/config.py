@@ -156,11 +156,11 @@ def config_path() -> Path:
 
 def default_config() -> HarnessConfig:
     return HarnessConfig(
-        enabled=["grok"],
-        preference=list(registry.DEFAULT_PREFERENCE),
+        enabled=["grok", "claude"],
+        preference=["grok", "claude"],
         models={
             "grok": ["grok-4.6", "grok-4"],
-            "claude": ["claude-sonnet-4", "claude-opus-4"],
+            "claude": ["claude-haiku", "haiku", "claude-sonnet-4", "claude-opus-4"],
             "codex": ["gpt-5", "o3"],
         },
         harness={
@@ -171,8 +171,8 @@ def default_config() -> HarnessConfig:
                 settings={"reasoning": "low"},
             ),
             "claude": PerHarnessSettings(
-                models=["claude-sonnet-4", "claude-opus-4", "claude-haiku"],
-                default_model="claude-sonnet-4",
+                models=["claude-haiku", "haiku", "claude-sonnet-4", "claude-opus-4"],
+                default_model="claude-haiku",
                 effort={
                     "trivial": "claude-haiku",
                     "normal": "claude-sonnet-4",
@@ -531,6 +531,7 @@ def list_for_api(cfg: HarnessConfig | None = None) -> dict[str, Any]:
                 "default_model": cfg.default_model_for(hid),
                 "models": models,
                 "effort": dict(cfg.effort_map_for(hid) or {}),
+                "settings": dict(getattr(settings, "settings", None) or {}),
                 "notes": hdef.notes or "",
             }
         )

@@ -1,6 +1,11 @@
+from __future__ import annotations
+
+def _has_investigator(nodes) -> bool:
+    ids = set(nodes) if not hasattr(nodes, "keys") else set(nodes.keys())
+    return "investigator" in ids or any(str(i).startswith("investigator-") for i in ids)
+
 """Desk lifecycle: start/stop keeps DAG; dismiss clears standing desk."""
 
-from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -46,7 +51,7 @@ def test_desk_start_hires_cos(state_dir: Path) -> None:
     assert "cos" in desk["roles"]
     g = dag.default_dag(force_reload=True)
     assert "root" in g.nodes
-    assert "investigator" in g.nodes  # Switchbay work template
+    assert _has_investigator(g.nodes)  # Switchbay work template
 
 
 def test_desk_stop_keeps_dag(state_dir: Path) -> None:
