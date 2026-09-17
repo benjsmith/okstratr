@@ -314,7 +314,40 @@ def main(argv=None) -> int:
     web_search = web_sub.add_parser("search", help="Alias: web search off")
     web_search.add_argument("action", nargs="?", default="off", help="off")
 
+
+    # --- harness ---
+    harness_p = sub.add_parser("harness", help="Harness registry: list|detect|enable|disable")
+    harness_sub = harness_p.add_subparsers(dest="harness_cmd", required=True)
+    harness_sub.add_parser("list", help="List built-in harnesses + enabled/installed")
+    harness_sub.add_parser("detect", help="Detect which harness CLIs are on PATH")
+    h_en = harness_sub.add_parser("enable", help="Allowlist a harness in harnesses.toml")
+    h_en.add_argument("id", help="Harness id (grok|claude|codex|…)")
+    h_dis = harness_sub.add_parser("disable", help="Remove harness from allowlist")
+    h_dis.add_argument("id", help="Harness id")
+
+    # --- config ---
+    cfg_p = sub.add_parser("config", help="Show/set harness config (harnesses.toml)")
+    cfg_sub = cfg_p.add_subparsers(dest="config_cmd", required=True)
+    cfg_sub.add_parser("show", help="Show harness config + path")
+    cfg_set = cfg_sub.add_parser("set", help="Set a config key")
+    cfg_set.add_argument("key", help="enabled|preference|models.<id>|defaults.<k>|role_harness.<role>")
+    cfg_set.add_argument("value", help="Value (comma-separated for lists)")
+
+    # --- tui ---
+    tui_p = sub.add_parser("tui", help="Minimal desk TUI (Textual optional extra [tui])")
+    tui_p.add_argument("--snapshot", action="store_true", help="One-shot text snapshot")
+    tui_p.add_argument("--plain", action="store_true", help="Force plain snapshot")
+
+    # --- agents (Herdr grouping stub) ---
+    agents_p = sub.add_parser(
+        "agents",
+        help="List Herdr agents filtered by desk/thread labels (observability stub)",
+    )
+    agents_p.add_argument("--desk", dest="desk_id", default=None, help="Filter by desk_id")
+    agents_p.add_argument("--thread", dest="thread_id", default=None, help="Filter by thread_id")
+
     args = p.parse_args(argv)
+
 
     if args.cmd == "status":
         from . import status
@@ -495,6 +528,120 @@ def main(argv=None) -> int:
             status.write_status()
             return _print(out)
         return 1
+
+    if args.cmd == "harness":
+        from . import harness as harness_mod
+
+        cmd = args.harness_cmd
+        if cmd == "list":
+            cfg = harness_mod.load()
+            detected = harness_mod.detect_all()
+            rows = []
+            for h in harness_mod.list_defs():
+                rows.append(
+                    {
+                        **h.to_dict(),
+                        "enabled": cfg.is_enabled(h.id),
+                        "installed": detected.get(h.id, False),
+                    }
+                )
+            return _print(
+                {
+                    "path": str(harness_mod.config_path()),
+                    "enabled": cfg.enabled,
+                    "preference": cfg.preference_order(),
+                    "harnesses": rows,
+                }
+            )
+        if cmd == "detect":
+            return _print(harness_mod.detect_all())
+        if cmd == "enable":
+            cfg = harness_mod.enable(args.id)
+            return _print({"ok": True, "enabled": cfg.enabled, "path": str(cfg.path)})
+        if cmd == "disable":
+            cfg = harness_mod.disable(args.id)
+            return _print({"ok": True, "enabled": cfg.enabled, "path": str(cfg.path)})
+        return 1
+
+    if args.cmd == "config":
+        from . import harness as harness_mod
+
+        if args.config_cmd == "show":
+            cfg = harness_mod.load()
+            return _print({**cfg.to_dict(), "path": str(cfg.path or harness_mod.config_path())})
+        if args.config_cmd == "set":
+            cfg = harness_mod.set_value(args.key, args.value)
+            return _print({"ok": True, **cfg.to_dict()})
+        return 1
+
+    if args.cmd == "tui":
+        from . import tui as tui_mod
+
+        argv = []
+        if getattr(args, "snapshot", False):
+            argv.append("--snapshot")
+        if getattr(args, "plain", False):
+            argv.append("--plain")
+        return tui_mod.main(argv)
+
+    if args.cmd == "agents":
+        from . import herdr
+
+        # Observability stub: filter known labels from status / would-be herdr list
+        from . import desks, status
+
+        snap = status.write_status()
+        labels = snap.get("herdr_labels") or []
+        desk_f = getattr(args, "desk_id", None)
+        thread_f = getattr(args, "thread_id", None)
+        agents = []
+        # Prefer desk registry labels
+        try:
+            dsnap = desks.status_snapshot()
+        except Exception:  # noqa: BLE001
+            dsnap = {}
+        for d in (dsnap.get("desks") or []):
+            if not isinstance(d, dict):
+                continue
+            did = d.get("id") or d.get("desk_id")
+            tid = d.get("thread_id")
+            if desk_f and did != desk_f:
+                continue
+            if thread_f and tid != thread_f:
+                continue
+            agents.append(
+                {
+                    "desk_id": did,
+                    "thread_id": tid,
+                    "kind": d.get("kind"),
+                    "state": d.get("state"),
+                    "objective": (d.get("objective") or "")[:80],
+                    "source": "okstratr.desks",
+                }
+            )
+        # Include herdr_labels from status when present
+        if isinstance(labels, list):
+            for lab in labels:
+                if isinstance(lab, dict):
+                    if desk_f and lab.get("desk_id") != desk_f:
+                        continue
+                    if thread_f and lab.get("thread_id") != thread_f:
+                        continue
+                    agents.append({**lab, "source": "status.herdr_labels"})
+        bin_path = herdr.herdr_bin()
+        return _print(
+            {
+                "ok": True,
+                "herdr_installed": bool(bin_path),
+                "filter": {"desk_id": desk_f, "thread_id": thread_f},
+                "agents": agents,
+                "note": (
+                    "P1 stub: desks + status labels. "
+                    "Mac CLI: run herdr + okstratr serve + okstratr tui; "
+                    "group panes by desk_id/thread_id labels."
+                ),
+            }
+        )
 
     return 1
 

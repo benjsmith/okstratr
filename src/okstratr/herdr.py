@@ -17,6 +17,7 @@ from typing import Any
 
 from . import blackboard, dag, status
 
+# Historical fallback when no harness config / env override (see harness registry).
 DEFAULT_KIND = "grok"
 DEFAULT_TIMEOUT_SEC = 120
 DEFAULT_LIMIT = 1
@@ -221,6 +222,44 @@ def dry_run_enabled(explicit: bool | None = None) -> bool:
     if explicit is not None:
         return bool(explicit)
     return _env_truthy("OKSTRATR_HERDR_DRY_RUN", default=False)
+
+
+
+def resolve_seat_kind(
+    *,
+    node_id: str = "?",
+    role: str | None = None,
+    prefer_harness: str | None = None,
+    prefer_model: str | None = None,
+    require_installed: bool = True,
+) -> dict:
+    """Resolve Herdr --kind via harness registry (OKSTRATR_HERDR_KIND still wins).
+
+    Returns a dict with ok, harness_id, herdr_kind, model, error, …
+    """
+    import os
+
+    from . import harness as harness_mod
+    from .harness.types import SeatRequest
+
+    env_kind = (os.environ.get("OKSTRATR_HERDR_KIND") or "").strip() or None
+    prefer = prefer_harness or (os.environ.get("OKSTRATR_HARNESS_PREFER") or "").split(",")[0].strip() or None
+    model = prefer_model or (os.environ.get("OKSTRATR_MODEL") or "").strip() or None
+    # When env override is set, skip install checks (user force).
+    req = SeatRequest(
+        node_id=node_id,
+        role=role or "worker",
+        prefer_harness=prefer,
+        prefer_model=model,
+    )
+    # In dry-run / test envs without CLIs, allow selection without install
+    # unless explicitly requiring binaries (live path).
+    result = harness_mod.resolve_herdr_kind(
+        env_override=env_kind,
+        req=req,
+        require_installed=require_installed and not dry_run_enabled(),
+    )
+    return result.to_dict()
 
 
 def launch(objective: str = "", *, focus: bool = True) -> dict[str, Any]:
@@ -850,7 +889,17 @@ def _live_run_node(
     """
     agent_id = _agent_id_for(node)
     prompt = _node_prompt(node)
-    kind = (os.environ.get("OKSTRATR_HERDR_KIND") or DEFAULT_KIND).strip() or DEFAULT_KIND
+    role = getattr(node, "role", None) or getattr(node, "kind", None) or "worker"
+    seat = resolve_seat_kind(node_id=node.id, role=str(role), require_installed=False)
+    if not seat.get("ok"):
+        return {
+            "ok": False,
+            "agent_id": agent_id,
+            "dry_run": False,
+            "error": seat.get("error") or "no harness available",
+            "harness": seat,
+        }
+    kind = (seat.get("herdr_kind") or DEFAULT_KIND).strip() or DEFAULT_KIND
     env = merge_user_session_env()
     env["OKSTRATR_NODE_ID"] = node.id
     env["OKSTRATR_OBJECTIVE"] = prompt
@@ -926,6 +975,9 @@ def _live_run_node(
             "agent_id": agent_id,
             "pane_id": pane_id,
             "dry_run": False,
+            "harness_id": seat.get("harness_id"),
+            "herdr_kind": kind,
+            "model": seat.get("model"),
             "steps": steps,
             "stdout": wait_res.get("stdout") or prompt_res.get("stdout") or "",
             "error": None
@@ -944,7 +996,17 @@ def _live_run_node(
 def _dry_run_node(node: dag.Node) -> dict[str, Any]:
     agent_id = _agent_id_for(node)
     prompt = _node_prompt(node)
-    kind = (os.environ.get("OKSTRATR_HERDR_KIND") or DEFAULT_KIND).strip() or DEFAULT_KIND
+    role = getattr(node, "role", None) or getattr(node, "kind", None) or "worker"
+    seat = resolve_seat_kind(node_id=node.id, role=str(role), require_installed=False)
+    if not seat.get("ok"):
+        return {
+            "ok": False,
+            "agent_id": agent_id,
+            "dry_run": True,
+            "error": seat.get("error") or "no harness available",
+            "harness": seat,
+        }
+    kind = (seat.get("herdr_kind") or DEFAULT_KIND).strip() or DEFAULT_KIND
     timeout_ms = max(1000, int(_timeout_sec() * 1000))
     cwd = os.getcwd() or os.path.expanduser("~")
     would = [
@@ -981,8 +1043,12 @@ def _dry_run_node(node: dag.Node) -> dict[str, Any]:
         "ok": True,
         "agent_id": agent_id,
         "dry_run": True,
+        "harness_id": seat.get("harness_id"),
+        "herdr_kind": kind,
+        "model": seat.get("model"),
+        "harness": seat,
         "would_exec": would,
-        "message": f"dry-run seat for {node.id}",
+        "message": f"dry-run seat for {node.id} via {kind}",
     }
 
 

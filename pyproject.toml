@@ -1,12 +1,16 @@
 [project]
 name = "okstratr"
 version = "0.1.0"
-description = "Desk-brain orchestrator for Omarchy — DAG, CoS, schedule, blackboard; pairs with Herdr"
+description = "CLI/TUI desk-brain orchestrator — harness-agnostic seating, DAG, CoS, blackboard; pairs with Herdr (Omarchy Panel is a client)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Ben Smith" }]
 dependencies = []
+
+[project.optional-dependencies]
+tui = ["textual>=0.80"]
+dev = ["pytest>=8"]
 
 [project.scripts]
 okstratr = "okstratr.cli:main"

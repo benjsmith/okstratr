@@ -1,3 +1,4 @@
+// Phase 1: Panel is a client of okstratr daemon (ADR-001). Harness allowlist: ~/.config/okstratr/harnesses.toml
 // Okstratr panel: full-size FloatingWindow desk UI (native toplevel — not Overlay).
 // Real xdg-shell window so it does NOT paint over lock/screensaver (unlike WlrLayer.Overlay).
 // LEFT rail: standing desks from status.desk.standing / focus_desk_id (POST /api/desk/focus).
