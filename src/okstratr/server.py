@@ -34,7 +34,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_OPTIONS(self) -> None:  # noqa: N802
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
 
@@ -410,6 +410,12 @@ class Handler(BaseHTTPRequestHandler):
             code, body, ct = _json_bytes(node.to_dict())
             return self._send(code, body, ct)
 
+        if path in ("/api/blackboard/clear", "/api/bb/clear"):
+            out = blackboard.clear()
+            status.write_status()
+            code, body, ct = _json_bytes({"ok": True, **out})
+            return self._send(code, body, ct)
+
         if path == "/api/blackboard":
             text = str(payload.get("text") or "").strip()
             if not text:
@@ -552,13 +558,25 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, body, ct)
 
 
+    def do_DELETE(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        path = parsed.path.rstrip("/") or "/"
+        if path in ("/api/blackboard", "/api/bb"):
+            out = blackboard.clear()
+            status.write_status()
+            code, body, ct = _json_bytes({"ok": True, **out})
+            return self._send(code, body, ct)
+        code, body, ct = _json_bytes({"error": "not found", "path": path}, 404)
+        self._send(code, body, ct)
+
+
 def serve(host: str = "127.0.0.1", port: int = PORT) -> int:
     status.write_status()
     httpd = ThreadingHTTPServer((host, port), Handler)
     print(
         f"okstratr listening on http://{host}:{port}  "
         "(/health /api/status /api/desk/* /api/web /api/workspaces /api/config/roles /api/harness /api/desk_session "
-        "/api/seat /api/dag /api/blackboard /api/cos/break /api/herdr/launch /api/herdr/run-ready)"
+        "/api/seat /api/dag /api/blackboard /api/blackboard/clear /api/cos/break /api/herdr/launch /api/herdr/run-ready)"
     )
     try:
         httpd.serve_forever()
