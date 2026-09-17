@@ -58,27 +58,8 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/dag":
             desk_id = (qs.get("desk_id") or [None])[0]
-            g = dag.default_dag()
-            g.refresh_ready()
-            summary = g.summary()
-            # If global DAG empty, try desk_session.dag for the focused desk
-            nodes = summary.get("nodes") or summary.get("items") or []
-            if not nodes:
-                try:
-                    from . import desk_session as desk_session_mod
-
-                    ds = desk_session_mod.snapshot()
-                    ds_dag = (ds or {}).get("dag") if isinstance(ds, dict) else None
-                    if isinstance(ds_dag, dict) and (ds_dag.get("nodes") or ds_dag.get("items")):
-                        summary = dict(ds_dag)
-                        summary.setdefault("source", "desk_session")
-                        if desk_id:
-                            summary["desk_id"] = desk_id
-                except Exception:  # noqa: BLE001
-                    pass
-            elif desk_id:
-                summary = dict(summary)
-                summary["desk_id"] = desk_id
+            # Prefer focused/active desk's dag.json (same graph CoS wrote).
+            summary = desks.load_dag_for_api(desk_id)
             code, body, ct = _json_bytes(summary)
             return self._send(code, body, ct)
 
@@ -151,8 +132,12 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/api/desk/start", "/api/seat"):
             objective = str(payload.get("objective") or "").strip()
             launch = bool(payload.get("herdr", False))
-            # Panel Start with objective sets drive_herdr; API/CLI default False (plan-only quiet).
-            drive_herdr = bool(payload.get("drive_herdr", False))
+            # Panel Start with objective sets drive_herdr / drive_seats.
+            # Semantics: "drive seats" (Herdr *or* direct per harnesses.toml backend) —
+            # not "force herdr". When backend=direct, kick_run_ready uses harness.direct.
+            drive_herdr = bool(
+                payload.get("drive_seats", payload.get("drive_herdr", False))
+            )
             reset = bool(payload.get("reset", False))
             kind = payload.get("kind")
             kind = str(kind).strip() if kind else None

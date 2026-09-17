@@ -40,6 +40,26 @@ def herdr_bin(path: str | None = None) -> str | None:
     return shutil.which("herdr", path=path) or shutil.which("omarchy-herdr", path=path)
 
 
+def prefer_direct_adapter(*, cfg: Any | None = None, bin_path: str | None = None) -> bool:
+    """True when seating should use harness.direct (not Herdr pane start).
+
+    ``defaults.backend`` / ``defaults.adapter`` = ``direct`` always wins — even if a
+    broken ``herdr`` shim is on PATH. Otherwise fall back to direct when Herdr is
+    missing. ``drive_herdr`` from the UI means *drive seats*, not *force Herdr*.
+    """
+    try:
+        from . import harness as harness_mod
+
+        cfg = cfg or harness_mod.load()
+        backend = str(cfg.preferred_backend() or "").strip().lower()
+    except Exception:  # noqa: BLE001
+        backend = "herdr"
+    if backend in ("direct", "cli", "subprocess"):
+        return True
+    bp = bin_path if bin_path is not None else herdr_bin()
+    return not bp
+
+
 NOT_INSTALLED_MSG = (
     "Herdr not installed — install with: omarchy pkg add herdr "
     "or curl -fsSL https://herdr.dev/install.sh | sh"
@@ -1183,11 +1203,10 @@ def run_one(
             from . import harness as harness_mod
 
             cfg = harness_mod.load()
-            backend = cfg.preferred_backend()
             bin_path = herdr_bin()
-            prefer_direct = backend == "direct" or not bin_path
+            prefer_direct = prefer_direct_adapter(cfg=cfg, bin_path=bin_path)
             if prefer_direct:
-                # Direct CLI adapter (Herdr unavailable or config prefers direct)
+                # Direct CLI adapter (backend=direct or Herdr unavailable)
                 role = getattr(node, "role", None) or node.kind or "worker"
                 ctx = _active_desk_ctx()
                 import os as _os
@@ -1244,28 +1263,30 @@ def run_one(
 
     # Re-load in case another writer touched state
     g = dag.default_dag(force_reload=True)
+    adapter = str(result.get("adapter") or ("direct" if result.get("harness_id") else "herdr"))
+    tag = "direct" if adapter == "direct" else "herdr"
     if result.get("ok"):
-        notes = "herdr dry-run ok" if result.get("dry_run") else "herdr seat ok"
+        notes = f"{tag} dry-run ok" if result.get("dry_run") else f"{tag} seat ok"
         if result.get("stdout"):
             notes = f"{notes}: {str(result['stdout'])[:500]}"
         g.mark_done(node_id, notes=notes, save=True)
         blackboard.post(
-            f"herdr seat done: {node_id}",
-            author="herdr",
+            f"{tag} seat done: {node_id}",
+            author=tag,
             kind="evidence",
-            tags=["herdr", "seat", "done"],
+            tags=[tag, "seat", "done"],
             provenance="okstratr.herdr.run_one",
             node_id=node_id,
         )
         result["state"] = "done"
     else:
         err = str(result.get("error") or "failed")
-        g.mark_failed(node_id, notes=f"herdr seat failed: {err}"[:1000], save=True)
+        g.mark_failed(node_id, notes=f"{tag} seat failed: {err}"[:1000], save=True)
         blackboard.post(
-            f"herdr seat failed: {node_id}: {err}",
-            author="herdr",
+            f"{tag} seat failed: {node_id}: {err}",
+            author=tag,
             kind="note",
-            tags=["herdr", "seat", "failed"],
+            tags=[tag, "seat", "failed"],
             provenance="okstratr.herdr.run_one",
             node_id=node_id,
         )

@@ -273,7 +273,8 @@ Item {
     if (!String(objective || "").trim())
       objective = root.standingObjectiveForKind(k)
     root.actionMsg = "Starting " + k + " desk…"
-    // Non-empty effective objective → drive Herdr (run_ready) so Start doesn't park Idle.
+    // Non-empty effective objective → drive seats (run_ready). drive_herdr means
+    // "drive seats" — Herdr *or* direct per harnesses.toml backend (not force herdr).
     var payload = {
       kind: k,
       objective: objective,

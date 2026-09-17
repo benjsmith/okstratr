@@ -44,6 +44,22 @@ def http_json(method: str, path: str, body: dict | None = None, *, timeout: floa
         return {"ok": False, "error": str(e), "url": url}
 
 
+
+def _node_list(payload: dict[str, Any] | None) -> list[Any]:
+    """Extract node dicts from a DAG payload (nodes may be count or list)."""
+    if not isinstance(payload, dict):
+        return []
+    nodes = payload.get("nodes")
+    if isinstance(nodes, list):
+        return nodes
+    items = payload.get("items")
+    if isinstance(items, list):
+        return items
+    if isinstance(nodes, dict):
+        return list(nodes.values())
+    return []
+
+
 def fetch_status() -> dict[str, Any]:
     return http_json("GET", "/api/status")
 
@@ -63,9 +79,12 @@ def resolve_dag_payload(
 ) -> dict[str, Any]:
     """Prefer /api/dag; fall back to desk_session.dag / status.dag / CoS-on-blackboard."""
     dag_payload = dag_payload if isinstance(dag_payload, dict) else {}
-    nodes = dag_payload.get("nodes") or dag_payload.get("items") or []
+    nodes = _node_list(dag_payload)
     if nodes:
-        return dag_payload
+        out = dict(dag_payload)
+        out["nodes"] = nodes
+        out.setdefault("items", nodes)
+        return out
     st = status if isinstance(status, dict) else {}
     ds = st.get("desk_session") if isinstance(st.get("desk_session"), dict) else {}
     for cand in (
@@ -75,9 +94,11 @@ def resolve_dag_payload(
     ):
         if not isinstance(cand, dict):
             continue
-        n = cand.get("nodes") or cand.get("items") or []
+        n = _node_list(cand)
         if n:
             out = dict(cand)
+            out["nodes"] = n
+            out.setdefault("items", n)
             out.setdefault("source", "desk_session-fallback")
             return out
     bb = st.get("blackboard") if isinstance(st.get("blackboard"), dict) else {}
@@ -187,11 +208,7 @@ def desk_tab_line(rows: list[dict[str, Any]], *, active_id: str | None = None) -
 
 def dag_topo_lines(dag_payload: dict[str, Any]) -> list[str]:
     """Render DAG nodes in topo-ish order with node status."""
-    nodes = dag_payload.get("nodes") or []
-    if isinstance(nodes, dict):
-        items = list(nodes.values())
-    else:
-        items = list(nodes) if isinstance(nodes, list) else []
+    items = _node_list(dag_payload if isinstance(dag_payload, dict) else {})
     by_id = {n.get("id"): n for n in items if isinstance(n, dict) and n.get("id")}
     # Kahn-ish: score by unresolved dep depth
     scored: list[tuple[int, str, str]] = []
