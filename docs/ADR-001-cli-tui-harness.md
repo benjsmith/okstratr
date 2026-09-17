@@ -140,7 +140,7 @@ CLI today: `okstratr harness list|enable|disable`, `okstratr config show|set`.
 ### Phase 2
 
 - Direct CLI adapter spawns real harness processes (`claude`/`codex`/`grok`/…);
-  argv templates + detect; stdout/stderr → `state/harness_logs/`; PID registry;
+  argv templates + detect (`grok` uses positional prompt, not `--prompt`); stdout/stderr → `state/harness_logs/`; PID registry;
   kill on desk stop/dismiss/quiet.
 - `harnesses.toml`: per-harness `default_model`, `effort` rung map
   (trivial|normal|hard); `okstratr config set harness.claude.default_model …`;

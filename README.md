@@ -61,7 +61,7 @@ okstratr model list
 
 `drive_herdr: true` from the Panel/TUI means **drive seats** — with `backend=direct`
 that is `harness.direct` (cwd sandbox + grok-4.6 + `--reasoning-effort low`), not a
-Herdr pane start. `GET /api/dag` reads the focused desk's `desks/<id>/dag.json`.
+Herdr pane start. Direct `grok` seats use a **positional** prompt (not `--prompt`). `GET /api/dag` reads the focused desk's `desks/<id>/dag.json`.
 
 Every seat (Herdr + direct) labels with `desk_id` + `thread_id`. Config file:
 `~/.config/okstratr/harnesses.toml`.
