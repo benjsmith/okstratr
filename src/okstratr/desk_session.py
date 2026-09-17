@@ -1,8 +1,8 @@
 """DeskSession — single logical view of standing desks + DAG + objective + seats.
 
-Phase 3 (ADR-001): HTTP status, TUI, and Panel should all read this shape.
-Full FileView dual-write cleanup is deferred to Phase 4; status.json remains a
-compat mirror of the daemon snapshot that embeds ``desk_session``.
+Phase 4 (ADR-001): DeskSession is the SSOT for Panel, TUI, CLI, and bar widgets
+via GET /api/status and GET /api/desk_session. status.json is an optional
+daemon write-through compat mirror only (not authoritative when HTTP is up).
 """
 
 from __future__ import annotations
@@ -84,8 +84,8 @@ class DeskSession:
     herdr_labels: dict[str, Any] = field(default_factory=dict)
     schema: str = SCHEMA
     notes: str = (
-        "P3: status/TUI/Panel read desk_session; FileView status.json is a "
-        "compat mirror (dual-source residual → P4)."
+        "P4: DeskSession is SSOT via HTTP; status.json is daemon compat mirror "
+        "only (clients must not treat FileView as authoritative when HTTP is up)."
     )
 
     def to_dict(self) -> dict[str, Any]:

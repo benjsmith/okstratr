@@ -110,7 +110,7 @@ State directory: `~/.local/state/okstratr/` (override with `OKSTRATR_STATE_DIR` 
 
 | File | Role |
 |------|------|
-| `status.json` | Compat mirror of daemon snapshot for QML `FileView` (P3 prefers `GET /api/status` / DeskSession; dual-source cleanup in P4) |
+| `status.json` | Compat mirror of daemon snapshot for QML `FileView` (P3 prefers `GET /api/status` / DeskSession; P4: HTTP DeskSession SSOT; status.json compat mirror only) |
 | `ui.json` | Panel visibility `{ "panel_open": true|false }` — re-summon FloatingWindow after shell restart |
 | `desks.json` | Desk registry (active_id, focus_id, standing orgs + org/effort) |
 | `bandit.json` | Per-desk + global hire-policy arm stats / last decision |

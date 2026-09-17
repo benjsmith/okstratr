@@ -1,4 +1,8 @@
-"""Publish ~/.local/state/okstratr/status.json for QML FileView."""
+"""Publish status snapshot (HTTP SSOT) + optional status.json compat mirror.
+
+P4: clients prefer GET /api/status (DeskSession). status.json is a daemon
+write-through compat mirror for offline bar chips — not authoritative when HTTP is up.
+"""
 
 from __future__ import annotations
 
@@ -283,8 +287,13 @@ def snapshot() -> dict[str, Any]:
         "status_channel": {
             "primary": "GET /api/status",
             "compat_file": str(status_path()),
-            "dual_source": True,
-            "notes": "P3 prefers HTTP; FileView status.json is compat mirror (cleanup in P4).",
+            "dual_source": False,
+            "mirror": True,
+            "notes": (
+                "P4: DeskSession via HTTP is SSOT. status.json is a daemon "
+                "write-through compat mirror for offline/stale bar chips; "
+                "clients must not treat FileView as authoritative when HTTP is up."
+            ),
         },
     }
 

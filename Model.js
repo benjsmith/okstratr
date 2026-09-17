@@ -1,5 +1,6 @@
 // Shared status helpers for Okstratr QML surfaces.
-// The daemon publishes ~/.local/state/okstratr/status.json.
+// P4: DeskSession via GET /api/status is SSOT. status.json is a daemon
+// write-through compat mirror — FileView only as last-resort offline.
 // Bind desk.kind + desk.state (working|quiet|dismissed), not "seated".
 // Display labels: working→Running, quiet→Idle, dismissed→dismissed; empty has no Idle suffix.
 
@@ -587,4 +588,42 @@ function standingDesksFromSession(status) {
     if (status.desk_session && Array.isArray(status.desk_session.standing))
         return status.desk_session.standing
     return standingDesks(status)
+}
+
+/** P4: status_channel from daemon snapshot. */
+function statusChannel(status) {
+    if (status && status.status_channel && typeof status.status_channel === "object")
+        return status.status_channel
+    return { primary: "GET /api/status", dual_source: false, mirror: true }
+}
+
+/** True when clients should treat HTTP DeskSession as authoritative. */
+function statusPrimaryIsHttp(status) {
+    var ch = statusChannel(status)
+    var p = String(ch.primary || "")
+    if (ch.dual_source === true)
+        return false
+    return p.indexOf("/api/status") >= 0 || p.indexOf("HTTP") >= 0 || p.indexOf("http") >= 0
+}
+
+/** Default API base when status has not been loaded yet. */
+function defaultApiUrl() {
+    return "http://127.0.0.1:8767"
+}
+
+/** Resolve API URL from status or default. */
+function resolveApiUrl(status) {
+    return apiUrl(status) || defaultApiUrl()
+}
+
+/** Poll GET /api/status; callback(parsed|null, httpOk). */
+function pollStatusHttp(apiBase, callback) {
+    var base = String(apiBase || defaultApiUrl()).replace(/\/$/, "")
+    getJson(base + "/api/status", function (parsed, code) {
+        var ok = !!(parsed && (code === undefined || code === 200 || code === 0 || code >= 200 && code < 300))
+        // Some getJson wrappers only pass parsed — treat non-null as ok.
+        if (code === undefined)
+            ok = !!parsed
+        callback(parsed, ok)
+    })
 }
