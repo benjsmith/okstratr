@@ -101,6 +101,19 @@ def run_direct(
 
     labels = _labels(req, seat)
     prompt = req.objective or req.node_id
+    # Derive CLI effort/reasoning flags from harnesses.toml settings when not passed.
+    if not effort_flags:
+        try:
+            from . import config as harness_config
+
+            cfg = harness_config.load()
+            settings = dict(getattr(cfg.settings_for(seat.harness_id), 'settings', None) or {})
+            effort_flags = argv_mod.effort_flags_for(seat.harness_id, settings)
+            reasoning = str(settings.get("reasoning") or "").strip()
+            if reasoning:
+                labels["reasoning"] = reasoning
+        except Exception:  # noqa: BLE001 — best-effort
+            effort_flags = effort_flags or None
     try:
         cmd = argv_mod.build_argv(
             seat.harness_id,
@@ -146,6 +159,16 @@ def run_direct(
         run_env["OKSTRATR_DESK_ID"] = str(labels["desk_id"])
     if labels.get("thread_id"):
         run_env["OKSTRATR_THREAD_ID"] = str(labels["thread_id"])
+    if labels.get("reasoning"):
+        run_env["OKSTRATR_REASONING"] = str(labels["reasoning"])
+        run_env["OKSTRATR_REASONING_EFFORT"] = str(labels["reasoning"])
+    try:
+        from okstratr.workspace import seat_cwd
+
+        seat_workdir = seat_cwd()
+    except Exception:  # noqa: BLE001
+        seat_workdir = os.getcwd()
+    run_env["OKSTRATR_CWD"] = seat_workdir
 
     t0 = time.time()
     try:
@@ -157,6 +180,7 @@ def run_direct(
                 stdout=logf,
                 stderr=subprocess.STDOUT,
                 env=run_env,
+                cwd=seat_workdir,
                 start_new_session=True,
             )
             rec = procs.ProcRecord(

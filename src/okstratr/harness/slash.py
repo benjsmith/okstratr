@@ -18,6 +18,8 @@ class SlashDirectives:
     model: str | None = None
     model_harness: str | None = None  # from /model claude:sonnet
     rung: str | None = None
+    cwd: str | None = None
+    web: str | None = None  # off|once|session|on|status
     objective: str = ""
     raw_tokens: list[str] = field(default_factory=list)
 
@@ -28,6 +30,8 @@ class SlashDirectives:
             "model": self.model,
             "model_harness": self.model_harness,
             "rung": self.rung,
+            "cwd": self.cwd,
+            "web": self.web,
             "objective": self.objective,
         }
 
@@ -61,6 +65,8 @@ def parse_slash_directives(text: str) -> SlashDirectives:
     model: str | None = None
     model_harness: str | None = None
     rung: str | None = None
+    cwd: str | None = None
+    web: str | None = None
     i = 0
     consumed: list[str] = []
 
@@ -103,6 +109,24 @@ def parse_slash_directives(text: str) -> SlashDirectives:
             consumed.extend([tok, rung])
             i += 2
             continue
+        if tok.lower() in ("/cd", "/cwd", "/workdir"):
+            if i + 1 >= len(parts):
+                break
+            cwd = parts[i + 1].strip()
+            consumed.extend([tok, cwd])
+            i += 2
+            continue
+        if tok.lower() in ("/web", "/egress"):
+            if i + 1 >= len(parts):
+                # bare /web → status
+                web = "status"
+                consumed.append(tok)
+                i += 1
+                continue
+            web = parts[i + 1].strip().lower()
+            consumed.extend([tok, web])
+            i += 2
+            continue
         break
 
     objective = " ".join(parts[i:]).strip()
@@ -112,6 +136,8 @@ def parse_slash_directives(text: str) -> SlashDirectives:
         model=model,
         model_harness=model_harness,
         rung=rung,
+        cwd=cwd,
+        web=web,
         objective=objective,
         raw_tokens=consumed,
     )
@@ -135,5 +161,6 @@ def apply_harness_slash_to_env(directives: SlashDirectives) -> dict[str, str]:
 
 SLASH_HELP = (
     "/work|/curate|/code|/deck|/auto  /harness id[,id…]  "
-    "/model id|harness:model  /rung trivial|normal|hard"
+    "/model id|harness:model  /rung trivial|normal|hard  "
+    "/cd <path>  /web off|once|session|status"
 )

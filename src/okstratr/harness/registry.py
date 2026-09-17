@@ -14,7 +14,7 @@ BUILTIN: dict[HarnessId, HarnessDef] = {
         herdr_kind="grok",
         bin_names=("grok",),
         label="Grok",
-        default_models=("grok-4",),
+        default_models=("grok-4.6", "grok-4"),
         notes="xAI Grok CLI / Herdr grok kind (historical DEFAULT_KIND).",
     ),
     "claude": HarnessDef(

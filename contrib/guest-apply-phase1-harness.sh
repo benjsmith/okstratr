@@ -2,8 +2,9 @@
 # Apply Phase 1 CLI/TUI harness branch on Omarchy guest (Mac Mini SSH → guest).
 # Prefer: from Mac `ssh -p 2222 benj@127.0.0.1` then run this, or gh checkout the PR.
 set -euo pipefail
+# Post-merge: defaults to main (override with OKSTRATR_BRANCH=…).
 REPO="${OKSTRATR_SRC:-$HOME/src/okstratr}"
-BRANCH="${1:-feat/phase1-cli-tui-harness}"
+BRANCH="${OKSTRATR_BRANCH:-${1:-main}}"
 cd "$REPO"
 git fetch origin
 git checkout "$BRANCH"

@@ -178,7 +178,12 @@ CLI today: `okstratr harness list|enable|disable`, `okstratr config show|set`.
 
 ### Residual hygiene (honest, out of ADR-001 scope)
 
-- Live QML verification on Omarchy guest (guest SSH apply script provided).
-- Further Panel.qml size reductions beyond ConfigHarnessEditor.
-- Optional removal of status.json write entirely once all bar hosts are HTTP-capable.
+- Live QML verification on Omarchy guest (`contrib/guest-apply-main.sh`).
+- Further Panel.qml size reductions (DeskRail.qml extracted; query bar still inlined).
+- **status.json write-through mirror kept** for offline bar chips. Opt out with
+  `OKSTRATR_STATUS_MIRROR=0` (skips disk write; HTTP SSOT unchanged). Eventual
+  removal still TBD once all bar hosts are HTTP-only.
+- Workspace sandbox (`okstratr cd` / TUI `/cd`): seats chdir into operating dir;
+  path escapes rejected — see `okstratr.workspace` policy string.
+- Web egress remains deny-by-default (`web_egress`); TUI shows Web chip + `/web`.
 - No LiteLLM / no Cloud Agents (unchanged boundary).

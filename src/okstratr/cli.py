@@ -339,6 +339,10 @@ def main(argv=None) -> int:
     model_sub.add_parser("list", help="List models per enabled harness + effort rungs")
 
     # --- tui ---
+    # --- cd (operating workspace / seat sandbox root) ---
+    cd_p = sub.add_parser("cd", help="Set/show operating workspace directory (seat sandbox root)")
+    cd_p.add_argument("path", nargs="?", default=None, help="Directory to set; omit to show current")
+
     tui_p = sub.add_parser("tui", help="Minimal desk TUI (Textual optional extra [tui])")
     tui_p.add_argument("--snapshot", action="store_true", help="One-shot text snapshot")
     tui_p.add_argument("--plain", action="store_true", help="Force plain snapshot")
@@ -578,6 +582,14 @@ def main(argv=None) -> int:
             cfg = harness_mod.set_value(args.key, args.value)
             return _print({"ok": True, **cfg.to_dict()})
         return 1
+
+
+    if args.cmd == "cd":
+        from . import workspace
+
+        if getattr(args, "path", None):
+            return _print(workspace.set_cwd(args.path))
+        return _print(workspace.status())
 
     if args.cmd == "tui":
         from . import tui as tui_mod

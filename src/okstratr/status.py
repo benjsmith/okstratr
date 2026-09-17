@@ -6,6 +6,8 @@ write-through compat mirror for offline bar chips — not authoritative when HTT
 
 from __future__ import annotations
 
+import os
+
 import json
 from pathlib import Path
 from time import time
@@ -288,14 +290,23 @@ def snapshot() -> dict[str, Any]:
             "primary": "GET /api/status",
             "compat_file": str(status_path()),
             "dual_source": False,
-            "mirror": True,
+            "mirror": _mirror_enabled(),
+            "mirror_env": "OKSTRATR_STATUS_MIRROR",
             "notes": (
                 "P4: DeskSession via HTTP is SSOT. status.json is a daemon "
-                "write-through compat mirror for offline/stale bar chips; "
+                "write-through compat mirror for offline/stale bar chips "
+                "(OKSTRATR_STATUS_MIRROR=0 skips the disk write; eventual removal still TBD); "
                 "clients must not treat FileView as authoritative when HTTP is up."
             ),
         },
     }
+
+
+
+def _mirror_enabled() -> bool:
+    """Compat status.json write-through; set OKSTRATR_STATUS_MIRROR=0 to skip."""
+    raw = (os.environ.get("OKSTRATR_STATUS_MIRROR") or "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
 
 
 def write_status(data: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -308,14 +319,16 @@ def write_status(data: dict[str, Any] | None = None) -> dict[str, Any]:
             if quieted.get("action") == "auto_quiet":
                 # stop() already wrote status; rebuild snapshot
                 snap = snapshot()
-                path = status_path()
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(json.dumps(snap, indent=2) + "\n", encoding="utf-8")
+                if _mirror_enabled():
+                    path = status_path()
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(json.dumps(snap, indent=2) + "\n", encoding="utf-8")
                 return snap
         except Exception:  # noqa: BLE001
             _log.warning("write_status: maybe_quiet_if_finished failed", exc_info=True)
     snap = data or snapshot()
-    path = status_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(snap, indent=2) + "\n", encoding="utf-8")
+    if _mirror_enabled():
+        path = status_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(snap, indent=2) + "\n", encoding="utf-8")
     return snap

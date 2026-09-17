@@ -882,6 +882,12 @@ def _split_seat_pane(
     if not base.get("ok"):
         return base
     base_id = str(base["pane_id"])
+    if not cwd:
+        try:
+            from .workspace import seat_cwd
+            cwd = seat_cwd()
+        except Exception:  # noqa: BLE001
+            cwd = None
     workdir = (cwd or os.getcwd() or os.path.expanduser("~")).strip() or os.path.expanduser("~")
     direction = (direction or "right").strip() or "right"
     if direction not in ("right", "down", "left", "up"):
@@ -1097,7 +1103,11 @@ def _dry_run_node(node: dag.Node) -> dict[str, Any]:
         }
     kind = (seat.get("herdr_kind") or DEFAULT_KIND).strip() or DEFAULT_KIND
     timeout_ms = max(1000, int(_timeout_sec() * 1000))
-    cwd = os.getcwd() or os.path.expanduser("~")
+    try:
+        from .workspace import seat_cwd
+        cwd = seat_cwd()
+    except Exception:  # noqa: BLE001
+        cwd = os.getcwd() or os.path.expanduser("~")
     would = [
         ["herdr", "pane", "list"],
         [
