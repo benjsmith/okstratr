@@ -86,3 +86,93 @@ def test_kill_on_desk(env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out = kill_direct_for_desk("d9")
     assert out["ok"]
     assert out["count"] >= 1
+
+
+def test_build_argv_grok_positional_no_prompt_flag() -> None:
+    """grok CLI rejects --prompt; prompt must be positional after options."""
+    from okstratr.harness import argv as argv_mod
+
+    cmd = argv_mod.build_argv(
+        "grok",
+        prompt="do the thing",
+        model="grok-4.6",
+        effort_flags=["--reasoning-effort", "low"],
+        which=lambda n: f"/bin/{n}" if n == "grok" else None,
+        cwd="/tmp/ws",
+        disable_web_search=True,
+    )
+    assert cmd[0] == "/bin/grok"
+    assert "--prompt" not in cmd
+    assert cmd[-1] == "do the thing"
+    # options before positional prompt
+    assert "--model" in cmd and "grok-4.6" in cmd
+    assert cmd[cmd.index("--model") + 1] == "grok-4.6"
+    assert "--reasoning-effort" in cmd and "low" in cmd
+    assert cmd[cmd.index("--reasoning-effort") + 1] == "low"
+    assert "--cwd" in cmd and cmd[cmd.index("--cwd") + 1] == "/tmp/ws"
+    assert "--disable-web-search" in cmd
+    # effort before model (stable option order)
+    assert cmd.index("--reasoning-effort") < cmd.index("--model") < cmd.index("--cwd")
+    assert cmd.index("--cwd") < cmd.index("--disable-web-search") < len(cmd) - 1
+
+
+def test_build_argv_grok_web_on_skips_disable() -> None:
+    from okstratr.harness import argv as argv_mod
+
+    cmd = argv_mod.build_argv(
+        "grok",
+        prompt="hi",
+        model="grok-4",
+        which=lambda n: "/usr/bin/grok" if n == "grok" else None,
+        disable_web_search=False,
+    )
+    assert "--disable-web-search" not in cmd
+    assert cmd[-1] == "hi"
+    assert "--prompt" not in cmd
+
+
+def test_spawn_fake_grok_records_positional_argv(
+    env: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """e2e: fake grok records argv; must not see --prompt."""
+    from okstratr.harness.direct import run_direct
+    from okstratr.harness.types import SeatRequest, SeatResult
+    from okstratr import web_egress
+
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    argv_log = tmp_path / "grok-argv.txt"
+    script = fake / "grok"
+    script.write_text(
+        "#!/bin/sh\n"
+        f'printf "%s\\n" "$@" > "{argv_log}"\n'
+        "echo fake-grok-positional-ok\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake}:{tmp_path}")
+
+    web_egress.set_mode("off")
+
+    seat = SeatResult(
+        ok=True, harness_id="grok", herdr_kind="grok", model="grok-4.6", adapter="direct"
+    )
+    req = SeatRequest(
+        node_id="n-pos", objective="seat objective", desk_id="deskP", thread_id="thP"
+    )
+    out = run_direct(
+        req,
+        seat,
+        dry_run=False,
+        timeout=10.0,
+        effort_flags=["--reasoning-effort", "low"],
+    )
+    assert out["ok"] is True
+    assert "fake-grok-positional-ok" in (out.get("stdout") or "")
+    recorded = argv_log.read_text(encoding="utf-8").splitlines()
+    assert "--prompt" not in recorded
+    assert recorded[-1] == "seat objective"
+    assert "--model" in recorded and "grok-4.6" in recorded
+    assert "--reasoning-effort" in recorded and "low" in recorded
+    assert "--disable-web-search" in recorded

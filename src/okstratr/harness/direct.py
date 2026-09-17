@@ -13,6 +13,26 @@ from . import procs
 from .types import SeatRequest, SeatResult
 
 
+
+def _seat_workdir_and_web() -> tuple[str, bool]:
+    """Operating cwd + whether to pass --disable-web-search (web egress off)."""
+    try:
+        from okstratr.workspace import seat_cwd
+
+        workdir = seat_cwd()
+    except Exception:  # noqa: BLE001
+        workdir = os.getcwd()
+    disable_web = True
+    try:
+        from okstratr import web_egress
+
+        mode = str((web_egress.status() or {}).get("mode") or "off").lower()
+        disable_web = mode == "off"
+    except Exception:  # noqa: BLE001
+        disable_web = True
+    return workdir, disable_web
+
+
 def run_direct_stub(
     req: SeatRequest,
     seat: SeatResult,
@@ -29,6 +49,7 @@ def run_direct_stub(
             "seat": seat.to_dict(),
         }
     prompt = req.objective or req.node_id
+    seat_workdir, disable_web = _seat_workdir_and_web()
     try:
         would_argv = argv_mod.build_argv(
             seat.harness_id or "?",
@@ -36,6 +57,8 @@ def run_direct_stub(
             model=seat.model,
             bin_path=seat.harness_id,  # placeholder name in dry-run
             which=lambda name: f"/dry/{name}",
+            cwd=seat_workdir,
+            disable_web_search=disable_web,
         )
     except (ValueError, FileNotFoundError) as e:
         would_argv = [seat.harness_id or "?", str(e)]
@@ -114,6 +137,7 @@ def run_direct(
                 labels["reasoning"] = reasoning
         except Exception:  # noqa: BLE001 — best-effort
             effort_flags = effort_flags or None
+    seat_workdir, disable_web = _seat_workdir_and_web()
     try:
         cmd = argv_mod.build_argv(
             seat.harness_id,
@@ -121,6 +145,8 @@ def run_direct(
             model=seat.model,
             which=which,
             effort_flags=effort_flags,
+            cwd=seat_workdir,
+            disable_web_search=disable_web,
         )
     except FileNotFoundError as e:
         return {
@@ -162,12 +188,6 @@ def run_direct(
     if labels.get("reasoning"):
         run_env["OKSTRATR_REASONING"] = str(labels["reasoning"])
         run_env["OKSTRATR_REASONING_EFFORT"] = str(labels["reasoning"])
-    try:
-        from okstratr.workspace import seat_cwd
-
-        seat_workdir = seat_cwd()
-    except Exception:  # noqa: BLE001
-        seat_workdir = os.getcwd()
     run_env["OKSTRATR_CWD"] = seat_workdir
 
     t0 = time.time()

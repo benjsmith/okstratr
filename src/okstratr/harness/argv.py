@@ -7,11 +7,13 @@ from typing import Any
 from . import registry
 from .types import HarnessId
 
-# Templates: {bin}, {model}, {prompt}, {effort_flags}
-# Some harnesses are stubs with clear not-installed errors when bin missing.
+# Templates: {bin}, {model}, {prompt}
+# grok CLI takes a positional PROMPT (or --prompt-file), not --prompt.
+# Options (--model, --reasoning-effort, --cwd, --disable-web-search) must
+# appear before the positional prompt.
 
 _ARGV: dict[HarnessId, list[str]] = {
-    "grok": ["{bin}", "--prompt", "{prompt}"],
+    "grok": ["{bin}", "{prompt}"],
     "claude": ["{bin}", "--print", "--model", "{model}", "{prompt}"],
     "codex": ["{bin}", "exec", "--model", "{model}", "{prompt}"],
     "pi": ["{bin}", "{prompt}"],
@@ -28,6 +30,14 @@ _MODEL_FLAGS: dict[HarnessId, list[str]] = {
     "opencode": ["--model", "{model}"],
     "cursor": ["--model", "{model}"],
 }
+
+# Harnesses that accept --cwd PATH before the prompt / trailing args.
+_CWD_FLAG: dict[HarnessId, str] = {
+    "grok": "--cwd",
+}
+
+# Harnesses that accept --disable-web-search when web egress is off.
+_DISABLE_WEB_SEARCH: frozenset[HarnessId] = frozenset({"grok"})
 
 
 def resolve_bin(
@@ -49,6 +59,16 @@ def resolve_bin(
     return None
 
 
+def _insert_before_prompt(argv: list[str], extra: list[str]) -> list[str]:
+    """Insert option flags before the final positional prompt argument."""
+    if not extra:
+        return argv
+    if len(argv) <= 1:
+        return argv + list(extra)
+    # Convention: last element is the prompt for templates that end with {prompt}.
+    return argv[:-1] + list(extra) + [argv[-1]]
+
+
 def build_argv(
     harness_id: HarnessId,
     *,
@@ -57,6 +77,8 @@ def build_argv(
     bin_path: str | None = None,
     effort_flags: list[str] | None = None,
     which: Any | None = None,
+    cwd: str | None = None,
+    disable_web_search: bool = False,
 ) -> list[str]:
     """Build argv for a direct CLI seat. Raises FileNotFoundError if not installed."""
     hid = (harness_id or "").strip().lower()
@@ -77,17 +99,21 @@ def build_argv(
         "prompt": prompt or "",
     }
     argv = [part.format(**mapping) for part in template]
+    # Options before positional prompt: effort, then model, then cwd / web.
+    if effort_flags:
+        argv = _insert_before_prompt(argv, list(effort_flags))
     # Inject model flags when template has no {model} placeholder but model set
     if model_s and "{model}" not in " ".join(template):
         flags = _MODEL_FLAGS.get(hid) or []
         extra = [f.format(**mapping) for f in flags]
-        # Insert after bin
         if extra:
-            argv = [argv[0]] + extra + argv[1:]
-    if effort_flags:
-        # Insert after bin (+ optional model flags)
-        insert_at = 1
-        argv = argv[:insert_at] + list(effort_flags) + argv[insert_at:]
+            argv = _insert_before_prompt(argv, extra)
+    cwd_s = (cwd or "").strip()
+    cwd_flag = _CWD_FLAG.get(hid)
+    if cwd_s and cwd_flag:
+        argv = _insert_before_prompt(argv, [cwd_flag, cwd_s])
+    if disable_web_search and hid in _DISABLE_WEB_SEARCH:
+        argv = _insert_before_prompt(argv, ["--disable-web-search"])
     return argv
 
 
