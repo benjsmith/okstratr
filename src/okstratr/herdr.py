@@ -225,6 +225,95 @@ def dry_run_enabled(explicit: bool | None = None) -> bool:
 
 
 
+
+
+def list_herdr_agents(*, bin_path: str | None = None, timeout: float = 15.0) -> dict[str, Any]:
+    """Best-effort `herdr agent list` JSON parse for observability groupings."""
+    bp = bin_path or herdr_bin()
+    if not bp:
+        return {"ok": False, "error": "herdr not on PATH", "agents": []}
+    res = _run_cmd([bp, "agent", "list"], timeout=timeout, env=merge_user_session_env())
+    data = _cmd_payload(res)
+    agents: list[dict[str, Any]] = []
+    if isinstance(data, list):
+        raw_list = data
+    elif isinstance(data, dict):
+        raw_list = data.get("agents") or data.get("items") or data.get("result") or []
+        if isinstance(raw_list, dict):
+            raw_list = list(raw_list.values())
+    else:
+        raw_list = []
+    if not isinstance(raw_list, list):
+        raw_list = []
+    for item in raw_list:
+        if not isinstance(item, dict):
+            continue
+        labels = item.get("labels") or item.get("meta") or item.get("metadata") or {}
+        if not isinstance(labels, dict):
+            labels = {}
+        desk_id = (
+            labels.get("desk_id")
+            or item.get("desk_id")
+            or labels.get("okstratr_desk_id")
+        )
+        thread_id = (
+            labels.get("thread_id")
+            or item.get("thread_id")
+            or labels.get("okstratr_thread_id")
+        )
+        agents.append(
+            {
+                "id": item.get("id") or item.get("name") or item.get("agent_id"),
+                "kind": item.get("kind") or item.get("herdr_kind"),
+                "state": item.get("state") or item.get("status"),
+                "desk_id": desk_id,
+                "thread_id": thread_id,
+                "labels": labels,
+                "raw": {k: item.get(k) for k in ("id", "name", "kind", "state") if k in item},
+                "source": "herdr.agent.list",
+            }
+        )
+    return {
+        "ok": bool(res.get("ok")) or bool(agents),
+        "agents": agents,
+        "herdr_bin": bp,
+        "list": {k: res.get(k) for k in ("ok", "returncode", "stderr") if k in res},
+    }
+
+
+def group_agents_by_labels(agents: list[dict[str, Any]]) -> dict[str, Any]:
+    """Group agent rows by desk_id then thread_id (Omarchy desk lens)."""
+    by_desk: dict[str, dict[str, list]] = {}
+    ungrouped: list = []
+    for a in agents:
+        if not isinstance(a, dict):
+            continue
+        did = a.get("desk_id") or (a.get("labels") or {}).get("desk_id")
+        tid = a.get("thread_id") or (a.get("labels") or {}).get("thread_id")
+        if not did:
+            ungrouped.append(a)
+            continue
+        by_desk.setdefault(str(did), {})
+        key = str(tid) if tid else "_default"
+        by_desk[str(did)].setdefault(key, []).append(a)
+    groups = []
+    for did, threads in sorted(by_desk.items()):
+        trows = []
+        for tid, items in sorted(threads.items()):
+            trows.append({"thread_id": tid, "count": len(items), "agents": items})
+        groups.append({"desk_id": did, "threads": trows, "count": sum(t["count"] for t in trows)})
+    return {"groups": groups, "ungrouped": ungrouped, "total": len(agents)}
+
+
+LABEL_CONVENTION = (
+    "Every seat (Herdr + direct) sets labels desk_id + thread_id. "
+    "Herdr agent names stay short (o{desk8}{role6}{node6}); full ids live in labels. "
+    "If Herdr gains rename/label APIs, wire them here; until then seating already "
+    "passes labels via env OKSTRATR_DESK_ID / OKSTRATR_THREAD_ID and herdr_labels."
+)
+
+
+
 def resolve_seat_kind(
     *,
     node_id: str = "?",
@@ -1081,20 +1170,58 @@ def run_one(
         if use_dry:
             result = _dry_run_node(node)
         else:
+            from . import harness as harness_mod
+
+            cfg = harness_mod.load()
+            backend = cfg.preferred_backend()
             bin_path = herdr_bin()
-            if not bin_path:
-                result = {
-                    "ok": False,
-                    "error": "Herdr not on PATH",
-                    "dry_run": False,
-                    "hint": "Set OKSTRATR_HERDR_DRY_RUN=1 for tests, or install herdr",
-                }
-            else:
+            prefer_direct = backend == "direct" or not bin_path
+            if prefer_direct:
+                # Direct CLI adapter (Herdr unavailable or config prefers direct)
+                role = getattr(node, "role", None) or node.kind or "worker"
+                ctx = _active_desk_ctx()
+                import os as _os
+
+                rung = (_os.environ.get("OKSTRATR_RUNG") or "").strip() or None
+                effort_raw = (_os.environ.get("OKSTRATR_EFFORT") or "").strip()
+                effort_f = None
+                if effort_raw:
+                    try:
+                        effort_f = float(effort_raw)
+                    except ValueError:
+                        pass
+                req = harness_mod.SeatRequest(
+                    node_id=node.id,
+                    role=str(role),
+                    desk_id=ctx.get("desk_id"),
+                    thread_id=ctx.get("thread_id"),
+                    prefer_harness=(_os.environ.get("OKSTRATR_HARNESS_PREFER") or "").split(",")[0].strip() or None,
+                    prefer_model=(_os.environ.get("OKSTRATR_MODEL") or "").strip() or None,
+                    objective=_node_prompt(node),
+                    effort=effort_f,
+                    rung=rung,
+                )
+                seat = harness_mod.choose_harness(req, cfg=cfg, require_installed=True)
+                result = harness_mod.run_direct(
+                    req,
+                    seat,
+                    dry_run=False,
+                    timeout=timeout if timeout is not None else _timeout_sec(),
+                )
+                result.setdefault("adapter", "direct")
+            elif bin_path:
                 result = _live_run_node(
                     node,
                     bin_path=bin_path,
                     timeout=timeout if timeout is not None else _timeout_sec(),
                 )
+            else:
+                result = {
+                    "ok": False,
+                    "error": "Herdr not on PATH and no direct harness available",
+                    "dry_run": False,
+                    "hint": "Install herdr, set defaults.backend=direct, or OKSTRATR_HERDR_DRY_RUN=1",
+                }
     except Exception as e:  # noqa: BLE001
         result = {"ok": False, "error": str(e), "dry_run": use_dry}
 

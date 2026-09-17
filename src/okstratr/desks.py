@@ -35,6 +35,15 @@ REGISTRY_NAME = "desks.json"
 PLACEHOLDER_ID_PREFIX = "kind:"
 
 
+def _kill_direct_seats(desk_id: str | None = None, thread_id: str | None = None) -> dict:
+    """Best-effort: stop direct-CLI seat processes for this desk."""
+    try:
+        from . import harness as harness_mod
+        return harness_mod.kill_direct_for_desk(desk_id, thread_id=thread_id)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)}
+
+
 def default_standing_rows(registry: "DeskRegistry | None" = None) -> list[dict[str, Any]]:
     """Always expose default desk kinds (work/curate/code/deck/auto).
 
@@ -851,11 +860,21 @@ def start(objective: str = "", **kwargs: Any) -> dict[str, Any]:
 
 
 def stop(desk_id: str | None = None) -> dict[str, Any]:
-    return default_registry().stop(desk_id)
+    out = default_registry().stop(desk_id)
+    killed = _kill_direct_seats(desk_id or (out.get("desk_id") if isinstance(out, dict) else None))
+    if isinstance(out, dict):
+        out = dict(out)
+        out["direct_killed"] = killed
+    return out
 
 
 def dismiss(desk_id: str | None = None) -> dict[str, Any]:
-    return default_registry().dismiss(desk_id)
+    out = default_registry().dismiss(desk_id)
+    killed = _kill_direct_seats(desk_id or (out.get("desk_id") if isinstance(out, dict) else None))
+    if isinstance(out, dict):
+        out = dict(out)
+        out["direct_killed"] = killed
+    return out
 
 
 def delete(
@@ -910,7 +929,12 @@ def dedupe_kind(kind: str | None = None) -> dict[str, Any]:
 
 
 def quiet_standing() -> dict[str, Any]:
-    return default_registry().quiet_standing()
+    out = default_registry().quiet_standing()
+    killed = _kill_direct_seats(None)  # all tracked direct seats
+    if isinstance(out, dict):
+        out = dict(out)
+        out["direct_killed"] = killed
+    return out
 
 
 

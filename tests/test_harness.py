@@ -44,6 +44,12 @@ def test_config_roundtrip(cfg_dir: Path) -> None:
     cfg.enabled = ["grok", "claude"]
     cfg.preference = ["claude", "grok"]
     cfg.models["claude"] = ["claude-sonnet-4", "claude-opus-4"]
+    # Keep nested Phase-2 settings in sync with flat models table
+    from okstratr.harness.config import PerHarnessSettings
+    cfg.harness["claude"] = PerHarnessSettings(
+        models=["claude-sonnet-4", "claude-opus-4"],
+        default_model="claude-sonnet-4",
+    )
     path = hcfg.save(cfg)
     assert path.is_file()
     loaded = hcfg.load()
