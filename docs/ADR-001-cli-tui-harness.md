@@ -1,6 +1,6 @@
 # ADR-001: CLI/TUI-first desk brain + harness-agnostic seating
 
-- **Status:** Accepted (Phase 1–3) · Phase 4 residual (DeskSession FileView dual-write cleanup)
+- **Status:** Accepted (Phase 1–4) · Vision complete for ADR-001 scope
 - **Date:** 2026-09-17
 - **Deciders:** Ben / okstratr
 
@@ -159,10 +159,26 @@ CLI today: `okstratr harness list|enable|disable`, `okstratr config show|set`.
 - Tests: unit DeskSession + harness API; e2e harness toggle via HTTP.
   Pytest green (142).
 
-### Phase 4 residual
+### Phase 4 (complete)
 
-- Eliminate FileView-only status paths where safe; Panel/TUI/CLI read only
-  DeskSession-backed daemon payload.
-- Optional: split oversized Panel.qml further; richer per-harness model picker
-  in QML (beyond toggle + display).
-- Dual-write cleanup notes live in `desk_session.notes` + this ADR.
+- **DeskSession full SSOT**: Panel, TUI, CLI, BarWidget, and Service prefer
+  `desk_session` from `GET /api/status` / `GET /api/desk_session`.
+- **status.json**: daemon write-through **compat mirror** only
+  (`status_channel.dual_source=false`, `mirror=true`). Clients must not treat
+  FileView as authoritative when HTTP is up. Panel sets `httpLive` and ignores
+  FileView overwrites while open+live; BarWidget/Service HTTP-poll first,
+  FileView last-resort offline.
+- **ConfigHarnessEditor.qml**: extracted harness allowlist editor; richer
+  per-harness model field + quick picks → `POST /api/harness/set`
+  (`harness.<id>.default_model`).
+- **Tests**: status channel primary=http; FileView mirror matches desk_session;
+  Panel/Model helper contracts; harness set e2e. Pytest green.
+- **ADR-001 vision**: complete for stated scope (CLI/TUI-first desk brain +
+  harness-agnostic seating + thin Omarchy client).
+
+### Residual hygiene (honest, out of ADR-001 scope)
+
+- Live QML verification on Omarchy guest (guest SSH apply script provided).
+- Further Panel.qml size reductions beyond ConfigHarnessEditor.
+- Optional removal of status.json write entirely once all bar hosts are HTTP-capable.
+- No LiteLLM / no Cloud Agents (unchanged boundary).

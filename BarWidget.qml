@@ -3,6 +3,7 @@
 // Right-click: no-op for now (reserved; explicitly documented).
 // Shows desk kind + display label (Running|Idle) and DAG count.
 // Uses the Quattro BarWidget host type (same contract as okbay / khephri.sia).
+// P4: prefer HTTP GET /api/status (DeskSession SSOT); FileView status.json is last-resort offline.
 
 import QtQuick
 import Quickshell
@@ -19,8 +20,10 @@ BarWidget {
   property bool statusResolved: false
   property bool stale: true
   property real nowMs: Date.now()
+  property bool httpLive: false
 
   readonly property string statusPath: (Quickshell.env("HOME") || "") + "/.local/state/okstratr/status.json"
+  readonly property string apiUrl: Model.resolveApiUrl(root.status)
   readonly property real staleAfterSec: {
     var v = root.setting ? root.setting("staleAfterSec", 240) : 240
     return Number(v)
@@ -34,12 +37,15 @@ BarWidget {
     path: root.statusPath
     watchChanges: true
     printErrors: false
-    onLoaded: root.applyStatus()
+    onLoaded: root.applyFileStatus()
     onFileChanged: applyTimer.restart()
     onLoadFailed: {
-      root.status = null
-      root.statusResolved = true
-      root.stale = true
+      // Only clear if HTTP is also down — keep last HTTP snapshot when live.
+      if (!root.httpLive) {
+        root.status = null
+        root.statusResolved = true
+        root.stale = true
+      }
     }
   }
 
@@ -49,6 +55,7 @@ BarWidget {
     onTriggered: statusFile.reload()
   }
 
+  // P4: HTTP poll is primary; FileView only when HTTP fails.
   Timer {
     interval: 4000
     running: true
@@ -56,11 +63,29 @@ BarWidget {
     onTriggered: {
       root.nowMs = Date.now()
       root.stale = Model.isStale(root.status, root.nowMs, root.staleAfterSec)
-      statusFile.reload()
+      root.pollHttp()
     }
   }
 
-  function applyStatus() {
+  function pollHttp() {
+    Model.pollStatusHttp(root.apiUrl, function (parsed, ok) {
+      if (ok && parsed) {
+        root.status = parsed
+        root.statusResolved = true
+        root.httpLive = true
+        root.stale = Model.isStale(parsed, Date.now(), root.staleAfterSec)
+        return
+      }
+      // Last-resort offline: FileView mirror.
+      root.httpLive = false
+      statusFile.reload()
+    })
+  }
+
+  function applyFileStatus() {
+    // P4: never let FileView overwrite a live HTTP DeskSession.
+    if (root.httpLive)
+      return
     var parsed = Model.parseStatus(statusFile.text())
     root.status = parsed
     root.statusResolved = true
@@ -78,6 +103,8 @@ BarWidget {
   function runSetup() {
     Quickshell.execDetached(["sh", "-lc", "command -v okstratr >/dev/null && okstratr status || (command -v foot && foot -e bash -lc 'echo Okstratr is not on PATH yet. Clone github.com/benjsmith/okstratr and run contrib/setup.sh; read')"])
   }
+
+  Component.onCompleted: root.pollHttp()
 
   MouseArea {
     anchors.fill: parent
@@ -98,7 +125,7 @@ BarWidget {
 
   Text {
     anchors.centerIn: parent
-    text: "\u25b6 " + root.chipText + " · " + root.webChip
+    text: "\\u25b6 " + root.chipText + " · " + root.webChip
     color: {
       if (root.setupMode || root.stale)
         return (typeof Color !== "undefined" && Color.urgent) ? Color.urgent : "#f7768e"

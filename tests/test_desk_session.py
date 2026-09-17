@@ -62,6 +62,7 @@ def test_status_embeds_desk_session(iso_env: Path) -> None:
     assert isinstance(snap.get("desks"), list)
     assert isinstance(snap.get("standing"), list)
     assert snap.get("status_channel", {}).get("primary") == "GET /api/status"
+    assert snap.get("status_channel", {}).get("dual_source") is False
     # At least one non-placeholder standing desk after start
     live = [r for r in snap["desks"] if not r.get("placeholder") and r.get("objective")]
     assert live, snap["desks"]

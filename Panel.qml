@@ -1,4 +1,4 @@
-// Phase 3: Panel is a pure client of okstratr daemon (ADR-001). Status via GET /api/status (DeskSession); harness editor via /api/harness*. FileView status.json is compat fallback.
+// Phase 4: Panel is a pure client of okstratr daemon (ADR-001). DeskSession SSOT via GET /api/status; status.json FileView is offline/compat only (never overwrites HTTP while open). Harness editor: ConfigHarnessEditor.qml + /api/harness*.
 // Okstratr panel: full-size FloatingWindow desk UI (native toplevel — not Overlay).
 // Real xdg-shell window so it does NOT paint over lock/screensaver (unlike WlrLayer.Overlay).
 // LEFT rail: standing desks from status.desk.standing / focus_desk_id (POST /api/desk/focus).
@@ -53,6 +53,9 @@ Item {
   property var harnessRows: []
   property string harnessConfigPath: "~/.config/okstratr/harnesses.toml"
   property string harnessActionMsg: ""
+  // P4: true after a successful HTTP /api/status while panel is open — blocks FileView overwrite.
+  property bool httpLive: false
+  property string statusSource: "none"  // http | file | none
   property bool scheduleOpen: false
   property string scheduleDeskId: ""
   property string scheduleKind: ""
@@ -67,7 +70,7 @@ Item {
   function open(payloadJson) {
     opened = true
     persistPanelUi()
-    statusFile.reload()
+    root.refreshStatus()
     refreshLive()
   }
   function close() {
@@ -86,8 +89,10 @@ Item {
       if (parsed && parsed.ok === false)
         root.actionMsg = parsed.error || parsed.message || "Quiet standing failed"
       opened = false
+      root.httpLive = false
+      root.statusSource = "none"
       persistPanelUi()
-      statusFile.reload()
+      root.refreshStatus()
     })
   }
   function toggle(payloadJson) { opened ? close() : open(payloadJson) }
@@ -112,8 +117,15 @@ Item {
 
   function refreshLive() {
     Model.getJson(root.apiUrl + "/api/status", function (parsed) {
-      if (!parsed) return
+      if (!parsed) {
+        // HTTP miss — allow FileView mirror as last-resort offline while open.
+        if (root.opened)
+          root.httpLive = false
+        return
+      }
       root.status = parsed
+      root.httpLive = true
+      root.statusSource = "http"
       // Surface async Herdr job errors after Start returns (non-blocking).
       if (parsed.herdr_error) {
         var errMsg = parsed.message || ("Herdr: " + parsed.herdr_error)
@@ -208,7 +220,7 @@ Item {
       // Focus API path: ensure queryInput tracks status objective (quiet desks too).
       if (parsed && parsed.objective)
         queryInput.text = String(parsed.objective)
-      statusFile.reload()
+      root.refreshStatus()
       root.refreshLive()
     })
   }
@@ -216,7 +228,7 @@ Item {
   function afterDeskAction(parsed) {
     if (parsed && parsed.ok === false) {
       root.actionMsg = parsed.herdr_error || parsed.error || "Desk action failed"
-      statusFile.reload()
+      root.refreshStatus()
       root.refreshLive()
       return
     }
@@ -238,7 +250,7 @@ Item {
     }
     if (deskObj && !String(queryInput.text || "").trim())
       queryInput.text = deskObj
-    statusFile.reload()
+    root.refreshStatus()
     root.refreshLive()
   }
 
@@ -301,7 +313,7 @@ Item {
       path: item.path || ""
     }, function(parsed) {
       root.actionMsg = "Workspace: " + root.selectedWorkspaceId
-      statusFile.reload()
+      root.refreshStatus()
       root.refreshLive()
     })
   }
@@ -338,7 +350,7 @@ Item {
     Model.postJson(root.apiUrl + "/api/config/roles", {roles: rows}, function(parsed) {
       root.actionMsg = (parsed && parsed.ok) ? "Role config saved" : "Role config save failed"
       root.configOpen = false
-      statusFile.reload()
+      root.refreshStatus()
       root.refreshLive()
     })
   }
@@ -394,25 +406,56 @@ Item {
     })
   }
 
+
+  function setHarnessModel(hid, model) {
+    var key = "harness." + String(hid) + ".default_model"
+    Model.postJson(root.apiUrl + "/api/harness/set", {key: key, value: String(model || "")}, function (parsed) {
+      if (parsed && parsed.ok !== false) {
+        root.applyHarnessPayload(parsed)
+        root.harnessActionMsg = "Model " + hid + " → " + model
+        root.refreshLive()
+      } else {
+        root.harnessActionMsg = (parsed && parsed.error) ? String(parsed.error) : "Set model failed"
+      }
+    })
+  }
+
+
+  function refreshStatus() {
+    // P4: when HTTP is live, never poke FileView (avoids silent diverge).
+    if (root.opened)
+      root.refreshLive()
+    else
+      statusFile.reload()
+  }
+
   function setWeb(action) {
     Model.postJson(root.apiUrl + "/api/web", {action: action}, function (parsed) {
       if (parsed) {
         if (!root.status) root.status = {}
         root.status.web_egress = parsed
       }
-      statusFile.reload()
+      root.refreshStatus()
     })
   }
 
-  FileView {
+    FileView {
     id: statusFile
     path: root.statusPath
     watchChanges: true
     printErrors: false
     onLoaded: {
-      // Compat mirror; prefer HTTP /api/status when panel is open (DeskSession SSOT).
+      // P4: status.json is compat mirror only. Never overwrite HTTP DeskSession while open+live.
       var parsed = Model.parseStatus(statusFile.text())
-      if (parsed) root.status = parsed
+      if (root.opened && root.httpLive) {
+        root.refreshLive()
+        return
+      }
+      if (parsed) {
+        root.status = parsed
+        if (!root.httpLive)
+          root.statusSource = "file"
+      }
       if (root.opened)
         root.refreshLive()
     }
@@ -433,12 +476,12 @@ Item {
   // Poll status while desk is working or a Herdr drive job is running (async Start).
   Timer {
     id: livePollTimer
-    interval: 2000
+    interval: (String(root.deskState || "") === "working"
+      || (root.status && root.status.herdr_job && String(root.status.herdr_job.state || "") === "running"))
+      ? 2000 : 5000
     repeat: true
-    running: root.opened && (
-      String(root.deskState || "") === "working"
-      || (root.status && root.status.herdr_job && String(root.status.herdr_job.state || "") === "running")
-    )
+    // P4: always HTTP-poll while open so FileView cannot silently diverge.
+    running: root.opened
     onTriggered: root.refreshLive()
   }
 
@@ -1374,137 +1417,21 @@ Item {
               font.pixelSize: 11
             }
 
-            Rectangle {
+            ConfigHarnessEditor {
               width: parent.width
-              height: harnessCfgCol.height + 16
-              radius: 8
-              color: root.themeBg
-              border.width: 1
-              border.color: root.themeDivider
-              Column {
-                id: harnessCfgCol
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.top: parent.top
-                anchors.margins: 10
-                spacing: 6
-                Row {
-                  width: parent.width
-                  spacing: 8
-                  Text {
-                    text: "Harness allowlist (daemon API)"
-                    color: root.themeFg
-                    font.pixelSize: 13
-                    font.bold: true
-                  }
-                  Item { width: 8; height: 1 }
-                  Chip {
-                    label: "Reload"
-                    onClicked: root.reloadHarnessConfig()
-                  }
-                }
-                Text {
-                  width: parent.width
-                  wrapMode: Text.Wrap
-                  text: root.harnessConfigPath + "  ·  GET/POST /api/harness*"
-                  color: root.themeAccent
-                  font.pixelSize: 11
-                }
-                Text {
-                  visible: !!root.harnessActionMsg
-                  width: parent.width
-                  wrapMode: Text.Wrap
-                  text: root.harnessActionMsg
-                  color: root.themeMuted
-                  font.pixelSize: 10
-                }
-                Row {
-                  width: parent.width
-                  spacing: 8
-                  Text { text: "On"; width: 52; color: root.themeMuted; font.pixelSize: 10 }
-                  Text { text: "Harness"; width: 100; color: root.themeMuted; font.pixelSize: 10 }
-                  Text { text: "Default model"; width: 160; color: root.themeMuted; font.pixelSize: 10 }
-                  Text { text: "Effort rungs"; color: root.themeMuted; font.pixelSize: 10 }
-                }
-                Repeater {
-                  model: root.harnessRows
-                  delegate: Rectangle {
-                    id: harnessRow
-                    required property var modelData
-                    width: harnessCfgCol.width
-                    height: 40
-                    radius: 6
-                    color: root.themePanel
-                    border.width: 1
-                    border.color: root.themeDivider
-                    Row {
-                      anchors.fill: parent
-                      anchors.margins: 6
-                      spacing: 8
-                      Rectangle {
-                        width: 52
-                        height: 28
-                        radius: 8
-                        color: modelData.enabled ? "#3344aa88" : "transparent"
-                        border.width: 1
-                        border.color: modelData.enabled ? root.themeAccent : root.themeBorder
-                        Text {
-                          anchors.centerIn: parent
-                          text: modelData.enabled ? "ON" : "OFF"
-                          color: modelData.enabled ? root.themeAccent : root.themeMuted
-                          font.pixelSize: 11
-                          font.bold: true
-                        }
-                        MouseArea {
-                          anchors.fill: parent
-                          cursorShape: Qt.PointingHandCursor
-                          onClicked: root.toggleHarness(modelData.id, !modelData.enabled)
-                        }
-                      }
-                      Text {
-                        text: (modelData.label || modelData.id) + (modelData.installed ? "" : " · missing")
-                        width: 100
-                        height: 28
-                        verticalAlignment: Text.AlignVCenter
-                        color: root.themeFg
-                        font.pixelSize: 12
-                        elide: Text.ElideRight
-                      }
-                      Text {
-                        text: modelData.default_model || "—"
-                        width: 160
-                        height: 28
-                        verticalAlignment: Text.AlignVCenter
-                        color: root.themeMuted
-                        font.pixelSize: 11
-                        elide: Text.ElideRight
-                      }
-                      Text {
-                        text: {
-                          var e = modelData.effort || {}
-                          var parts = []
-                          if (e.trivial) parts.push("tri=" + e.trivial)
-                          if (e.normal) parts.push("nrm=" + e.normal)
-                          if (e.hard) parts.push("hrd=" + e.hard)
-                          return parts.length ? parts.join(" · ") : "—"
-                        }
-                        width: Math.max(120, harnessRow.width - 52 - 100 - 160 - 40)
-                        height: 28
-                        verticalAlignment: Text.AlignVCenter
-                        color: root.themeMuted
-                        font.pixelSize: 10
-                        elide: Text.ElideRight
-                      }
-                    }
-                  }
-                }
-                Text {
-                  visible: !root.harnessRows || root.harnessRows.length === 0
-                  text: "No harness rows yet — open Reload or use CLI: okstratr harness list"
-                  color: root.themeMuted
-                  font.pixelSize: 10
-                }
-              }
+              harnessRows: root.harnessRows
+              harnessConfigPath: root.harnessConfigPath
+              harnessActionMsg: root.harnessActionMsg
+              themeFg: root.themeFg
+              themeMuted: root.themeMuted
+              themeAccent: root.themeAccent
+              themeBg: root.themeBg
+              themePanel: root.themePanel
+              themeBorder: root.themeBorder
+              themeDivider: root.themeDivider
+              onReloadClicked: root.reloadHarnessConfig()
+              onToggleClicked: function (hid, enable) { root.toggleHarness(hid, enable) }
+              onModelCommit: function (hid, model) { root.setHarnessModel(hid, model) }
             }
 
             Row {
