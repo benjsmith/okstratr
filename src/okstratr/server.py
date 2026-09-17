@@ -57,9 +57,29 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(code, body, ct)
 
         if path == "/api/dag":
+            desk_id = (qs.get("desk_id") or [None])[0]
             g = dag.default_dag()
             g.refresh_ready()
-            code, body, ct = _json_bytes(g.summary())
+            summary = g.summary()
+            # If global DAG empty, try desk_session.dag for the focused desk
+            nodes = summary.get("nodes") or summary.get("items") or []
+            if not nodes:
+                try:
+                    from . import desk_session as desk_session_mod
+
+                    ds = desk_session_mod.snapshot()
+                    ds_dag = (ds or {}).get("dag") if isinstance(ds, dict) else None
+                    if isinstance(ds_dag, dict) and (ds_dag.get("nodes") or ds_dag.get("items")):
+                        summary = dict(ds_dag)
+                        summary.setdefault("source", "desk_session")
+                        if desk_id:
+                            summary["desk_id"] = desk_id
+                except Exception:  # noqa: BLE001
+                    pass
+            elif desk_id:
+                summary = dict(summary)
+                summary["desk_id"] = desk_id
+            code, body, ct = _json_bytes(summary)
             return self._send(code, body, ct)
 
         if path == "/api/blackboard":

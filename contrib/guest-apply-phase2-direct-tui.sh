@@ -2,8 +2,9 @@
 # Apply Phase 2 direct-CLI / TUI / rungs branch on Omarchy guest (Mac Mini SSH → guest).
 # Prefer: from Mac `ssh -p 2222 benj@127.0.0.1` then run this, or gh checkout the PR.
 set -euo pipefail
+# Post-merge: defaults to main (override with OKSTRATR_BRANCH=…).
 REPO="${OKSTRATR_SRC:-$HOME/src/okstratr}"
-BRANCH="${OKSTRATR_BRANCH:-feat/phase2-direct-cli-tui-rungs}"
+BRANCH="${OKSTRATR_BRANCH:-main}"
 cd "$REPO"
 git fetch origin
 git checkout "$BRANCH"

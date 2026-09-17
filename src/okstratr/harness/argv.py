@@ -93,3 +93,23 @@ def build_argv(
 
 def list_templates() -> dict[str, list[str]]:
     return {k: list(v) for k, v in _ARGV.items()}
+
+
+def effort_flags_for(harness_id: HarnessId, settings: dict | None = None) -> list[str]:
+    """Map harness settings (e.g. reasoning=low) to CLI flags for direct seats."""
+    hid = (harness_id or "").strip().lower()
+    s = dict(settings or {})
+    flags: list[str] = []
+    reasoning = str(s.get("reasoning") or s.get("reasoning_effort") or "").strip().lower()
+    if not reasoning:
+        return flags
+    if hid == "grok":
+        # grok CLI: --reasoning-effort low|high|… (also exportable via env)
+        flags.extend(["--reasoning-effort", reasoning])
+    elif hid == "claude":
+        flags.extend(["--thinking", reasoning])
+    elif hid == "codex":
+        flags.extend(["-c", f"reasoning_effort={reasoning}"])
+    else:
+        flags.extend(["--reasoning-effort", reasoning])
+    return flags

@@ -52,8 +52,57 @@ def fetch_desk_status() -> dict[str, Any]:
     return http_json("GET", "/api/desk/status")
 
 
-def fetch_dag() -> dict[str, Any]:
-    return http_json("GET", "/api/dag")
+def fetch_dag(*, desk_id: str | None = None) -> dict[str, Any]:
+    q = f"?desk_id={desk_id}" if desk_id else ""
+    return http_json("GET", f"/api/dag{q}")
+
+
+def resolve_dag_payload(
+    status: dict[str, Any] | None,
+    dag_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Prefer /api/dag; fall back to desk_session.dag / status.dag / CoS-on-blackboard."""
+    dag_payload = dag_payload if isinstance(dag_payload, dict) else {}
+    nodes = dag_payload.get("nodes") or dag_payload.get("items") or []
+    if nodes:
+        return dag_payload
+    st = status if isinstance(status, dict) else {}
+    ds = st.get("desk_session") if isinstance(st.get("desk_session"), dict) else {}
+    for cand in (
+        ds.get("dag") if isinstance(ds.get("dag"), dict) else None,
+        st.get("dag") if isinstance(st.get("dag"), dict) else None,
+        (st.get("cos") or {}).get("dag") if isinstance(st.get("cos"), dict) else None,
+    ):
+        if not isinstance(cand, dict):
+            continue
+        n = cand.get("nodes") or cand.get("items") or []
+        if n:
+            out = dict(cand)
+            out.setdefault("source", "desk_session-fallback")
+            return out
+    bb = st.get("blackboard") if isinstance(st.get("blackboard"), dict) else {}
+    entries = bb.get("entries") or bb.get("items") or bb.get("head") or []
+    cos_nodes: list[dict[str, Any]] = []
+    if isinstance(entries, list):
+        for e in entries[:12]:
+            if not isinstance(e, dict):
+                continue
+            author = str(e.get("author") or e.get("kind") or "")
+            text = str(e.get("text") or e.get("body") or e.get("content") or "")
+            low_a = author.lower()
+            if low_a in ("cos", "chief", "chief_of_staff", "plan") or text.lower().startswith("plan"):
+                cos_nodes.append(
+                    {
+                        "id": str(e.get("id") or f"bb-{len(cos_nodes)}"),
+                        "title": (text or author)[:80],
+                        "state": e.get("state") or "ready",
+                        "depends_on": [],
+                        "role": "cos",
+                    }
+                )
+    if cos_nodes:
+        return {"nodes": cos_nodes, "source": "blackboard-cos-fallback"}
+    return dag_payload or {"nodes": [], "source": "empty"}
 
 
 def fetch_blackboard(n: int = 8) -> dict[str, Any]:
@@ -68,14 +117,20 @@ def post_query(objective: str, *, kind: str | None = None) -> dict[str, Any]:
 
 
 def badge_for_state(state: str | None) -> str:
-    s = (state or "").lower()
+    """Map desk state → tab badge. Match Model.js deskStateLabel: empty → "".
+
+    working/running → Running; quiet → Idle; dismissed → Dismissed;
+    never-started (""), setup, legacy idle, unknown → "" (no [?] / no Idle suffix).
+    """
+    s = (state or "").strip().lower()
     if s in ("working", "running"):
         return "Running"
-    if s in ("quiet", "idle", "setup", ""):
+    if s == "quiet":
         return "Idle"
     if s == "dismissed":
         return "Dismissed"
-    return state or "?"
+    # empty / setup / legacy idle / unknown → no bracket content (tabs show "work" not "work[?]")
+    return ""
 
 
 def desk_rows(status: dict[str, Any]) -> list[dict[str, Any]]:
@@ -101,7 +156,9 @@ def desk_rows(status: dict[str, Any]) -> list[dict[str, Any]]:
     for d in rows:
         if not isinstance(d, dict):
             continue
-        state = d.get("state") or "?"
+        # Preserve "" for never-started placeholders (do not coerce to "?" → "[?]" badge)
+        raw = d.get("state")
+        state = "" if raw is None else str(raw)
         out.append(
             {
                 "id": d.get("id") or d.get("desk_id") or "?",
@@ -116,11 +173,15 @@ def desk_rows(status: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def desk_tab_line(rows: list[dict[str, Any]], *, active_id: str | None = None) -> str:
-    """Compact tab strip: work[Running] | curate[Idle] | …"""
+    """Compact tab strip: work[Running] | curate[Idle] | work (empty badge omits brackets)."""
     parts = []
     for r in rows:
         mark = "*" if active_id and r["id"] == active_id else ""
-        parts.append(f"{mark}{r['kind']}[{r['badge']}]")
+        badge = r.get("badge") or ""
+        if badge:
+            parts.append(f"{mark}{r['kind']}[{badge}]")
+        else:
+            parts.append(f"{mark}{r['kind']}")
     return " | ".join(parts) if parts else "(no desks)"
 
 
@@ -199,6 +260,30 @@ def merge_status_payloads(st: dict[str, Any], desk: dict[str, Any]) -> dict[str,
     return merged
 
 
+def _web_chip(status: dict[str, Any]) -> str:
+    we = status.get("web_egress") if isinstance(status.get("web_egress"), dict) else {}
+    if not we:
+        try:
+            from . import web_egress as we_mod
+
+            we = we_mod.status()
+        except Exception:  # noqa: BLE001
+            we = {"chip": "Web: Off", "mode": "off"}
+    chip = we.get("chip") or f"Web: {we.get('label') or we.get('mode') or 'Off'}"
+    if we.get("pending_approval"):
+        chip += " (needs approval)"
+    return str(chip)
+
+
+def _cwd_chip() -> str:
+    try:
+        from . import workspace
+
+        return f"cwd: {workspace.get_cwd()}"
+    except Exception:  # noqa: BLE001
+        return "cwd: ?"
+
+
 def render_snapshot(
     status: dict[str, Any] | None = None,
     dag_payload: dict[str, Any] | None = None,
@@ -206,27 +291,32 @@ def render_snapshot(
 ) -> str:
     """Plain-text snapshot (CI / --snapshot; no Textual interaction)."""
     status = status if status is not None else {}
-    dag_payload = dag_payload if dag_payload is not None else {}
     bb = bb if bb is not None else {}
+    # Attach blackboard onto status for CoS fallback synthesis
+    if bb and "blackboard" not in status:
+        status = {**status, "blackboard": bb}
+    dag_payload = resolve_dag_payload(status, dag_payload)
     rows = desk_rows(status)
     active = status.get("active_desk") or status.get("desk") or {}
     active_id = active.get("id") if isinstance(active, dict) else None
+    focus = status.get("focus_desk_id") or active_id
     lines = [
         f"okstratr tui — {running_label(status)} — {api_base()}",
+        f"  {_web_chip(status)}  |  {_cwd_chip()}",
         "",
         "## Desks (tabs)",
-        f"  {desk_tab_line(rows, active_id=active_id)}",
+        f"  {desk_tab_line(rows, active_id=active_id or focus)}",
         "",
-        "## Standing",
+        "## Standing (left pane)",
     ]
     if not rows:
         lines.append("  (none)")
     for r in rows:
-        lines.append(
-            f"  [{r['badge']}] {r['kind']} {r['id']} — {r['objective']}"
-        )
+        badge = r.get("badge") or ""
+        badge_s = f"[{badge}] " if badge else ""
+        lines.append(f"  {badge_s}{r['kind']} {r['id']} — {r['objective']}")
     lines.append("")
-    lines.append("## DAG (topo)")
+    lines.append(f"## DAG (topo) focus={focus or '-'}")
     for ln in dag_topo_lines(dag_payload) or ["(empty)"]:
         lines.append(f"  {ln}" if not ln.startswith(" ") else ln)
     lines.append("")
@@ -241,11 +331,20 @@ def render_snapshot(
 def render_live_snapshot() -> str:
     st = fetch_status()
     desk = fetch_desk_status()
-    return render_snapshot(merge_status_payloads(st, desk), fetch_dag(), fetch_blackboard())
+    merged = merge_status_payloads(st, desk)
+    focus = None
+    if isinstance(merged.get("active_desk"), dict):
+        focus = merged["active_desk"].get("id")
+    focus = focus or merged.get("focus_desk_id")
+    dag_p = fetch_dag(desk_id=str(focus) if focus else None)
+    return render_snapshot(merged, dag_p, fetch_blackboard())
 
 
 def apply_slash_env(text: str) -> tuple[str, str | None]:
-    """Parse slash line → set env overrides; return (objective, kind)."""
+    """Parse slash line → set env overrides; return (objective, kind).
+
+    Side effects: `/cd` updates workspace cwd; `/web` toggles web_egress gate.
+    """
     d = parse_slash_directives(text)
     obj = d.objective or text
     if d.harnesses:
@@ -258,6 +357,24 @@ def apply_slash_env(text: str) -> tuple[str, str | None]:
         os.environ["OKSTRATR_MODEL"] = d.model
     if d.rung:
         os.environ["OKSTRATR_RUNG"] = d.rung
+    if getattr(d, "cwd", None):
+        from . import workspace
+
+        workspace.set_cwd(d.cwd)
+    if getattr(d, "web", None):
+        from . import web_egress
+
+        mode = str(d.web).strip().lower()
+        if mode in ("status", "?", "show"):
+            pass  # status shown on next refresh chip
+        elif mode in ("off", "deny", "revoke"):
+            web_egress.revoke()
+        elif mode in ("on", "session"):
+            web_egress.set_mode("session")
+        elif mode == "once":
+            web_egress.set_mode("once")
+        else:
+            web_egress.set_mode(mode)
     return obj, d.kind
 
 
@@ -318,23 +435,28 @@ def run_textual(*, poll_sec: float | None = None) -> int:
             st = fetch_status()
             desk = fetch_desk_status()
             merged = merge_status_payloads(st, desk)
-            dag_p = fetch_dag()
-            bb = fetch_blackboard()
-            rows = desk_rows(merged) or desk_rows(desk)
             active = merged.get("active_desk") or merged.get("desk") or {}
             active_id = active.get("id") if isinstance(active, dict) else None
+            focus = active_id or merged.get("focus_desk_id")
+            bb = fetch_blackboard()
+            if bb and "blackboard" not in merged:
+                merged = {**merged, "blackboard": bb}
+            dag_p = resolve_dag_payload(
+                merged, fetch_dag(desk_id=str(focus) if focus else None)
+            )
+            rows = desk_rows(merged) or desk_rows(desk)
             self.query_one("#tabs", Static).update(
-                desk_tab_line(rows, active_id=active_id)
+                f"{desk_tab_line(rows, active_id=active_id)}  |  {_web_chip(merged)}  |  {_cwd_chip()}"
             )
             desks_w = self.query_one("#desks", Static)
+            desk_lines = []
+            for r in rows:
+                badge = r.get("badge") or ""
+                suffix = f" [{badge}]" if badge else ""
+                desk_lines.append(f"{r['kind']}{suffix}\n{r['id'][:14]}")
             desks_w.update(
-                f"{running_label(merged)}\n\n"
-                + (
-                    "\n".join(
-                        f"{r['kind']} [{r['badge']}]\n{r['id'][:14]}" for r in rows
-                    )
-                    or "(no desks)"
-                )
+                f"{running_label(merged)}\n{_web_chip(merged)}\n{_cwd_chip()}\n\n"
+                + ("\n".join(desk_lines) or "(no desks)")
             )
             self.query_one("#dag", Static).update(
                 "DAG\n" + "\n".join(dag_topo_lines(dag_p) or ["(empty)"])

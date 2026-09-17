@@ -1,4 +1,4 @@
-// Phase 4: Panel is a pure client of okstratr daemon (ADR-001). DeskSession SSOT via GET /api/status; status.json FileView is offline/compat only (never overwrites HTTP while open). Harness editor: ConfigHarnessEditor.qml + /api/harness*.
+// Phase 4: Panel is a pure client of okstratr daemon (ADR-001). DeskSession SSOT via GET /api/status; status.json FileView is offline/compat only (never overwrites HTTP while open). Harness editor: ConfigHarnessEditor.qml; standing rail: DeskRail.qml + /api/harness*.
 // Okstratr panel: full-size FloatingWindow desk UI (native toplevel — not Overlay).
 // Real xdg-shell window so it does NOT paint over lock/screensaver (unlike WlrLayer.Overlay).
 // LEFT rail: standing desks from status.desk.standing / focus_desk_id (POST /api/desk/focus).
@@ -641,134 +641,28 @@ Item {
           Layout.fillHeight: true
           spacing: 0
 
-          // Left rail — standing desks
-          Rectangle {
+          // Left rail — standing desks (extracted DeskRail.qml)
+          DeskRail {
             Layout.preferredWidth: 370
             Layout.fillHeight: true
-            color: root.themeBg
-
-            // Quiet right divider vs main column
-            Rectangle {
-              anchors.top: parent.top
-              anchors.bottom: parent.bottom
-              anchors.right: parent.right
-              width: 1
-              color: root.themeDivider
-              z: 2
-            }
-
-            ColumnLayout {
-              anchors.fill: parent
-              anchors.margins: 12
-              spacing: 8
-
-              Text {
-                text: "Standing desks"
-                color: root.themeMuted
-                font.pixelSize: 11
-                font.bold: true
-              }
-
-              ListView {
-                id: deskList
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-                spacing: 4
-                model: root.standingDesks
-
-                delegate: Rectangle {
-                  id: deskRow
-                  required property var modelData
-                  width: deskList.width
-                  height: 94
-                  radius: 8
-                  // empty placeholder (never started) — not dismissed, not quiet Idle
-                  property bool isEmpty: !!modelData.placeholder || (!String(modelData.state || "") && String(modelData.id || "").indexOf("kind:") === 0)
-                  property bool isDismissed: String(modelData.state || "") === "dismissed"
-                  // quiet = finished-kept (display Idle); working = active run (display Running)
-                  property bool isQuiet: String(modelData.state || "") === "quiet"
-                  property bool isBusy: String(modelData.state || "") === "working"
-                  property string stateLabel: Model.deskStateLabel(modelData.state)
-                  color: (String(modelData.id) === String(root.focusDeskId)) ? "#3344aa88" : "#22000000"
-                  border.color: (String(modelData.id) === String(root.focusDeskId) || String(modelData.kind) === root.selectedKind) ? root.themeAccent : root.themeBorder
-                  border.width: 1
-
-                  MouseArea {
-                    anchors.fill: parent
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: {
-                      root.selectedKind = String(modelData.kind || "work")
-                      if (!deskRow.isEmpty) root.focusDesk(modelData.id)
-                    }
-                  }
-
-                  Column {
-                    anchors.fill: parent
-                    anchors.margins: 8
-                    spacing: 7
-                    Row {
-                      width: parent.width
-                      spacing: 6
-                      Text {
-                        text: deskRow.stateLabel
-                              ? ((modelData.kind || "desk") + " · " + deskRow.stateLabel)
-                              : (modelData.kind || "desk")
-                        color: root.themeAccent
-                        font.pixelSize: 12
-                        font.bold: true
-                        width: Math.max(90, parent.width - deskObjective.width - 8)
-                        elide: Text.ElideRight
-                      }
-                      Text {
-                        id: deskObjective
-                        text: modelData.objective ? String(modelData.objective) : (deskRow.isEmpty ? "standing" : (deskRow.isDismissed ? "dismissed" : "standing"))
-                        color: root.themeMuted
-                        font.pixelSize: 10
-                        width: Math.min(150, implicitWidth)
-                        elide: Text.ElideRight
-                      }
-                    }
-                    Row {
-                      spacing: 5
-                      Chip {
-                        // empty / dismissed → Start (new run); quiet Idle / working Running → Continue
-                        label: (deskRow.isEmpty || deskRow.isDismissed) ? "Start" : "Continue"
-                        primary: root.selectedKind === String(modelData.kind)
-                        implicitWidth: 70
-                        onClicked: root.startDesk(modelData.kind)
-                      }
-                      Chip {
-                        label: "Stop"
-                        implicitWidth: 48
-                        // Dim unless actively Running
-                        opacity: deskRow.isBusy ? 1 : 0.35
-                        onClicked: root.stopDesk(modelData.id)
-                      }
-                      Chip {
-                        // dismissed: Delete (purge); empty: dim Dismiss; live: Dismiss
-                        visible: !deskRow.isDismissed
-                        label: "Dismiss"
-                        implicitWidth: 62
-                        opacity: deskRow.isEmpty ? 0.35 : 1
-                        onClicked: root.dismissDesk(modelData.id)
-                      }
-                      Chip {
-                        visible: deskRow.isDismissed
-                        label: "Delete"
-                        implicitWidth: 58
-                        onClicked: root.deleteDesk(modelData.id)
-                      }
-                      Chip {
-                        label: "Schedule…"
-                        implicitWidth: 76
-                        onClicked: root.openSchedule(modelData.id, modelData.kind)
-                      }
-                    }
-                  }
-                }
-              }
-            }
+            standingDesks: root.standingDesks
+            focusDeskId: String(root.focusDeskId || "")
+            selectedKind: root.selectedKind
+            modelHelpers: Model
+            themeFg: root.themeFg
+            themeMuted: root.themeMuted
+            themeAccent: root.themeAccent
+            themeBg: root.themeBg
+            themePanel: root.themePanel
+            themeBorder: root.themeBorder
+            themeDivider: root.themeDivider
+            onFocusRequested: (deskId) => root.focusDesk(deskId)
+            onKindSelected: (kind) => { root.selectedKind = kind }
+            onStartRequested: (kind) => root.startDesk(kind)
+            onStopRequested: (deskId) => root.stopDesk(deskId)
+            onDismissRequested: (deskId) => root.dismissDesk(deskId)
+            onDeleteRequested: (deskId) => root.deleteDesk(deskId)
+            onScheduleRequested: (deskId, kind) => root.openSchedule(deskId, kind)
           }
 
           // Main pane

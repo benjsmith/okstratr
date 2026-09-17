@@ -14,12 +14,14 @@ from .types import HarnessId, ModelSpec
 
 @dataclass
 class PerHarnessSettings:
-    """Per-harness model pool, default, and effort/rung map."""
+    """Per-harness model pool, default, effort/rung map, and free-form settings."""
 
     models: list[str] = field(default_factory=list)
     default_model: str | None = None
     # trivial|normal|hard → model id or {model, flags}
     effort: dict[str, Any] = field(default_factory=dict)
+    # e.g. {"reasoning": "low"} for grok-4.6
+    settings: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"models": list(self.models)}
@@ -27,6 +29,8 @@ class PerHarnessSettings:
             d["default_model"] = self.default_model
         if self.effort:
             d["effort"] = dict(self.effort)
+        if self.settings:
+            d["settings"] = dict(self.settings)
         return d
 
 
@@ -155,15 +159,16 @@ def default_config() -> HarnessConfig:
         enabled=["grok"],
         preference=list(registry.DEFAULT_PREFERENCE),
         models={
-            "grok": ["grok-4"],
+            "grok": ["grok-4.6", "grok-4"],
             "claude": ["claude-sonnet-4", "claude-opus-4"],
             "codex": ["gpt-5", "o3"],
         },
         harness={
             "grok": PerHarnessSettings(
-                models=["grok-4"],
-                default_model="grok-4",
-                effort={"trivial": "grok-4", "normal": "grok-4", "hard": "grok-4"},
+                models=["grok-4.6", "grok-4"],
+                default_model="grok-4.6",
+                effort={"trivial": "grok-4.6", "normal": "grok-4.6", "hard": "grok-4.6"},
+                settings={"reasoning": "low"},
             ),
             "claude": PerHarnessSettings(
                 models=["claude-sonnet-4", "claude-opus-4", "claude-haiku"],
@@ -206,6 +211,7 @@ def _parse_per_harness(raw: Any) -> dict[str, PerHarnessSettings]:
         if default_model is not None:
             default_model = str(default_model).strip() or None
         effort = body.get("effort") if isinstance(body.get("effort"), dict) else {}
+        settings = body.get("settings") if isinstance(body.get("settings"), dict) else {}
         # also accept effort_trivial style keys
         for rung in ("trivial", "normal", "hard"):
             alt = body.get(f"effort_{rung}") or body.get(rung)
@@ -215,6 +221,7 @@ def _parse_per_harness(raw: Any) -> dict[str, PerHarnessSettings]:
             models=models,
             default_model=default_model,
             effort=dict(effort or {}),
+            settings=dict(settings or {}),
         )
     return out
 
@@ -351,6 +358,16 @@ def _dump_toml(cfg: HarnessConfig) -> str:
             lines.append(f"[harnesses.harness.{hid}.effort]")
             for rung, val in s.effort.items():
                 lines.append(f"{rung} = {_dump_effort_val(val)}")
+        if s.settings:
+            lines.append("")
+            lines.append(f"[harnesses.harness.{hid}.settings]")
+            for sk, sv in s.settings.items():
+                if isinstance(sv, bool):
+                    lines.append(f"{sk} = {'true' if sv else 'false'}")
+                elif isinstance(sv, (int, float)):
+                    lines.append(f"{sk} = {sv}")
+                else:
+                    lines.append(f'{sk} = "{_toml_escape(str(sv))}"')
     if cfg.role_harness:
         lines.append("")
         lines.append("[harnesses.role_harness]")
@@ -453,6 +470,27 @@ def set_value(key: str, value: str, *, path: Path | None = None) -> HarnessConfi
             mods = [x.strip() for x in value.split(",") if x.strip()]
             s.models = mods
             cfg.models[hid] = mods
+        elif field == "settings":
+            # harness.grok.settings.reasoning low  OR harness.grok.settings {"reasoning":"low"}
+            if len(parts) >= 4:
+                sk = parts[3]
+                s.settings[sk] = value.strip()
+            else:
+                import json as _json
+                try:
+                    parsed = _json.loads(value)
+                    if isinstance(parsed, dict):
+                        s.settings.update({str(k): v for k, v in parsed.items()})
+                    else:
+                        raise ValueError("settings value must be object")
+                except _json.JSONDecodeError as e:
+                    if "=" in value:
+                        sk, _, sv = value.partition("=")
+                        s.settings[sk.strip()] = sv.strip()
+                    else:
+                        raise ValueError(
+                            "use harness.<id>.settings.<key> <value>"
+                        ) from e
         elif field == "effort" and len(parts) >= 4:
             rung = parts[3]
             s.effort[rung] = value.strip()
