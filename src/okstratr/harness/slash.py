@@ -22,6 +22,7 @@ class SlashDirectives:
     rung: str | None = None
     cwd: str | None = None
     web: str | None = None  # off|once|session|on|status
+    clear_blackboard: bool = False  # /bb clear | /blackboard clear | bare /clear
     objective: str = ""
     raw_tokens: list[str] = field(default_factory=list)
 
@@ -35,6 +36,7 @@ class SlashDirectives:
             "rung": self.rung,
             "cwd": self.cwd,
             "web": self.web,
+            "clear_blackboard": self.clear_blackboard,
             "objective": self.objective,
         }
 
@@ -55,6 +57,8 @@ def parse_slash_directives(text: str) -> SlashDirectives:
       /model grok-4                     — prefer model id
       /model claude:sonnet              — prefer harness + model
       /rung trivial|normal|hard         — effort rung for model select
+      /bb clear|/blackboard clear|/clear — hard-clear blackboard only
+        (bare /clear is blackboard-only, not a shell/history clear)
 
     Multiple slash tokens can be chained.
     """
@@ -71,6 +75,7 @@ def parse_slash_directives(text: str) -> SlashDirectives:
     rung: str | None = None
     cwd: str | None = None
     web: str | None = None
+    clear_blackboard = False
     i = 0
     consumed: list[str] = []
 
@@ -150,6 +155,19 @@ def parse_slash_directives(text: str) -> SlashDirectives:
             consumed.extend([tok, web])
             i += 2
             continue
+        if tok.lower() in ("/bb", "/blackboard"):
+            if i + 1 < len(parts) and parts[i + 1].strip().lower() == "clear":
+                clear_blackboard = True
+                consumed.extend([tok, parts[i + 1]])
+                i += 2
+                continue
+            break
+        if tok.lower() == "/clear":
+            # Bare /clear is blackboard-only (documented in SLASH_HELP).
+            clear_blackboard = True
+            consumed.append(tok)
+            i += 1
+            continue
         break
 
     objective = " ".join(parts[i:]).strip()
@@ -162,6 +180,7 @@ def parse_slash_directives(text: str) -> SlashDirectives:
         rung=rung,
         cwd=cwd,
         web=web,
+        clear_blackboard=clear_blackboard,
         objective=objective,
         raw_tokens=consumed,
     )
@@ -195,5 +214,6 @@ def apply_harness_slash_to_env(directives: SlashDirectives) -> dict[str, str]:
 SLASH_HELP = (
     "/work|/curate|/code|/deck|/auto  /harness id[,id…]  "
     "/model id|harness:model[,harness:model…]  /rung trivial|normal|hard  "
-    "/cd <path>  /web off|once|session|status"
+    "/cd <path>  /web off|once|session|status  "
+    "/bb clear|/blackboard clear|/clear (blackboard only)"
 )

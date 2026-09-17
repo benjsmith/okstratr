@@ -8,7 +8,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from .harness.slash import SLASH_HELP, parse_slash_directives
+from .harness.slash import SLASH_HELP, SlashDirectives, parse_slash_directives
 
 
 DEFAULT_BASE = "http://127.0.0.1:8767"
@@ -436,10 +436,35 @@ def render_live_snapshot() -> str:
     return render_snapshot(merged, dag_p, fetch_blackboard())
 
 
+def apply_slash_side_effects(directives: SlashDirectives) -> str | None:
+    """Apply non-env slash side effects (blackboard clear, etc.).
+
+    When ``clear_blackboard``, call ``POST /api/blackboard/clear`` so the
+    running serve process clears its singleton; fall back to local
+    ``blackboard.clear()`` if the API is unreachable. Returns a short toast
+    string for the TUI status line, or None when nothing ran.
+    """
+    if not directives.clear_blackboard:
+        return None
+    result = http_json("POST", "/api/blackboard/clear", {})
+    # Prefer API so the running serve process clears its singleton.
+    if isinstance(result, dict) and result.get("cleared") is True:
+        return "blackboard cleared"
+    try:
+        from . import blackboard, status as status_mod
+
+        blackboard.clear()
+        status_mod.write_status()
+    except Exception as e:  # noqa: BLE001
+        return f"blackboard clear failed: {e}"
+    return "blackboard cleared"
+
+
 def apply_slash_env(text: str) -> tuple[str, str | None]:
     """Parse slash line → set env overrides; return (objective, kind).
 
     Side effects: `/cd` updates workspace cwd; `/web` toggles web_egress gate.
+    Blackboard clear is handled by ``apply_slash_side_effects``.
     """
     d = parse_slash_directives(text)
     obj = d.objective or text
@@ -570,8 +595,23 @@ def run_textual(*, poll_sec: float | None = None) -> int:
                 self.action_help()
                 event.input.value = ""
                 return
+            d = parse_slash_directives(text)
+            toast = apply_slash_side_effects(d)
+            if d.clear_blackboard:
+                event.input.value = ""
+                self.action_refresh()
+                if toast:
+                    self.query_one("#help", Static).update(toast)
+                    try:
+                        self.notify(toast)
+                    except Exception:  # noqa: BLE001
+                        pass
+                # Clear-only line: do not seat/post a query.
+                if not (d.objective or d.kind or d.harnesses or d.model or d.rung):
+                    return
             obj, kind = apply_slash_env(text)
-            post_query(obj, kind=kind)
+            if obj.strip() or kind:
+                post_query(obj, kind=kind)
             event.input.value = ""
             self.action_refresh()
 

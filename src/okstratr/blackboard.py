@@ -60,6 +60,9 @@ class Blackboard:
             f.write(json.dumps(entry, default=str) + "\n")
         self._ensure_loaded().append(entry)
         self._write_index()
+        global _DEFAULT, _DEFAULT_MTIME
+        if _DEFAULT is self:
+            _DEFAULT_MTIME = _file_mtime(self.path)
 
     def _write_index(self) -> None:
         """Optional lightweight index for status / quick counts."""
@@ -138,7 +141,11 @@ class Blackboard:
         return [e for e in self._ensure_loaded() if str(e.get("kind") or "").lower() == k]
 
     def clear(self) -> dict[str, Any]:
-        """Archive the current JSONL and start fresh."""
+        """Archive the current JSONL and start fresh (live paths see 0 entries).
+
+        Archive files are never read by head/search/by_kind/summary — only the
+        live ``blackboard.jsonl`` path is loaded.
+        """
         entries = self._ensure_loaded()
         archived: str | None = None
         if self.path.is_file() and entries:
@@ -148,8 +155,18 @@ class Blackboard:
             archived = str(archived_path)
         elif self.path.is_file():
             self.path.unlink(missing_ok=True)
+        # Drop any leftover empty live file so readers see "absent"
+        if self.path.is_file():
+            try:
+                self.path.unlink(missing_ok=True)
+            except OSError:
+                pass
         self._entries = []
         self._write_index()
+        # Keep singleton mtime in sync when this instance is the default
+        global _DEFAULT, _DEFAULT_MTIME
+        if _DEFAULT is self:
+            _DEFAULT_MTIME = _file_mtime(self.path)
         return {"cleared": True, "archived": archived, "count_before": len(entries)}
 
     def summary(self) -> dict[str, Any]:
@@ -170,22 +187,57 @@ class Blackboard:
 
 _DEFAULT: Blackboard | None = None
 _DEFAULT_PATH: Path | None = None
+_DEFAULT_MTIME: float | None = None
+
+
+def _file_mtime(path: Path) -> float | None:
+    """Return mtime of live jsonl, or None if missing (treat as empty)."""
+    try:
+        if path.is_file():
+            return path.stat().st_mtime
+    except OSError:
+        return None
+    return None
 
 
 def default_blackboard(*, force_reload: bool = False) -> Blackboard:
-    global _DEFAULT, _DEFAULT_PATH
+    """Return process-wide blackboard, reloading when the live file changes.
+
+    Reload-on-read (mtime / missing file) keeps serve in sync when another
+    process (CLI ``okstratr bb clear``) archives the jsonl out from under us.
+    """
+    global _DEFAULT, _DEFAULT_PATH, _DEFAULT_MTIME
     path = _bb_path()
-    if _DEFAULT is None or force_reload or _DEFAULT_PATH != path:
+    mtime = _file_mtime(path)
+    stale = (
+        _DEFAULT is not None
+        and _DEFAULT_PATH == path
+        and not force_reload
+        and mtime != _DEFAULT_MTIME
+    )
+    if _DEFAULT is None or force_reload or _DEFAULT_PATH != path or stale:
         _DEFAULT = Blackboard(path).reload()
         _DEFAULT_PATH = path
+        _DEFAULT_MTIME = mtime
     return _DEFAULT
+
+
+def invalidate_default() -> None:
+    """Drop the singleton so the next read reloads from disk."""
+    global _DEFAULT, _DEFAULT_PATH, _DEFAULT_MTIME
+    _DEFAULT = None
+    _DEFAULT_PATH = None
+    _DEFAULT_MTIME = None
 
 
 # Module-level API matching prior stub (delegates to default instance)
 
 
 def clear() -> dict[str, Any]:
-    return default_blackboard().clear()
+    """Hard-clear live blackboard and invalidate the process singleton."""
+    result = default_blackboard().clear()
+    invalidate_default()
+    return result
 
 
 def post(

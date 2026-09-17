@@ -251,3 +251,173 @@ def test_http_dag_blackboard(state_dir: Path) -> None:
         assert snap["blackboard"]["count"] >= 1
     finally:
         httpd.shutdown()
+
+
+def test_blackboard_hard_clear_empties_live_ignores_archive(state_dir: Path) -> None:
+    """Post N → clear → live head/jsonl empty; archive exists but is ignored."""
+    from okstratr import blackboard
+    from okstratr.blackboard import Blackboard, default_blackboard, invalidate_default
+
+    secret = "VISIBLE_SECRET_NOTE"
+    for i in range(5):
+        blackboard.post(f"{secret}-{i}", kind="note", author="test")
+    assert blackboard.summary()["count"] == 5
+    assert (state_dir / "blackboard.jsonl").is_file()
+
+    cleared = blackboard.clear()
+    assert cleared["cleared"] is True
+    assert cleared["count_before"] == 5
+    assert cleared["archived"]
+    assert Path(cleared["archived"]).is_file()
+    assert secret in Path(cleared["archived"]).read_text(encoding="utf-8")
+
+    # Live paths must be empty / absent
+    live = state_dir / "blackboard.jsonl"
+    assert not live.is_file() or live.read_text(encoding="utf-8").strip() == ""
+    assert blackboard.head(20) == []
+    assert blackboard.texts(20) == []
+    assert blackboard.search(secret) == []
+    assert blackboard.by_kind("note") == []
+    assert blackboard.summary()["count"] == 0
+    assert blackboard.summary()["head"] == []
+
+    # Fresh instance must not merge archive
+    bb2 = Blackboard(live).reload()
+    assert bb2.head(50) == []
+    assert bb2.search(secret) == []
+
+    # Singleton invalidate + reload-on-read
+    invalidate_default()
+    assert default_blackboard().head(10) == []
+
+
+def test_blackboard_cli_clear_visible_to_default_reload(state_dir: Path) -> None:
+    """Simulate serve cache: post via default, clear via new Blackboard, next read empty."""
+    from okstratr import blackboard
+    from okstratr.blackboard import Blackboard, default_blackboard
+
+    secret = "VISIBLE_SECRET_NOTE"
+    blackboard.post(secret, kind="note")
+    cached = default_blackboard()
+    assert any(secret in str(e.get("text")) for e in cached.head(10))
+
+    # Other "process": clear by operating on the same path directly
+    other = Blackboard(state_dir / "blackboard.jsonl").reload()
+    other.clear()
+    # Mimic module-level clear invalidation from CLI
+    blackboard.invalidate_default()
+
+    # Without invalidate, mtime/missing still forces reload:
+    # re-fetch default after file gone
+    assert default_blackboard().head(10) == []
+    assert blackboard.search(secret) == []
+
+
+
+def test_blackboard_mtime_reload_without_invalidate(state_dir: Path) -> None:
+    """Serve-like cache: external archive of jsonl must empty next default_blackboard read."""
+    import time
+    from okstratr import blackboard
+    from okstratr.blackboard import Blackboard, default_blackboard
+
+    secret = "VISIBLE_SECRET_NOTE"
+    blackboard.post(secret, kind="note")
+    cached = default_blackboard()
+    assert cached.summary()["count"] == 1
+
+    # External clearer: move file away WITHOUT touching module singleton flags
+    live = state_dir / "blackboard.jsonl"
+    archived = state_dir / "blackboard.jsonl.archive.ext"
+    assert live.is_file()
+    live.rename(archived)
+    # Ensure mtime/existence differs; tiny sleep for coarse FS clocks
+    time.sleep(0.01)
+
+    # Do NOT call invalidate_default — mtime/missing check must reload
+    fresh = default_blackboard()
+    assert fresh.head(10) == []
+    assert fresh.search(secret) == []
+    assert fresh.summary()["count"] == 0
+
+
+def test_http_blackboard_clear_api(state_dir: Path) -> None:
+    """POST notes → POST/DELETE clear → API head [] and status bb count 0."""
+    from okstratr.server import Handler
+    from http.server import ThreadingHTTPServer
+    import threading
+    import urllib.request
+    import urllib.error
+
+    from okstratr import blackboard, status
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    port = httpd.server_address[1]
+    t = threading.Thread(target=httpd.serve_forever, daemon=True)
+    t.start()
+    try:
+        base = f"http://127.0.0.1:{port}"
+        secret = "VISIBLE_SECRET_NOTE"
+
+        def post_note(text: str) -> dict:
+            req = urllib.request.Request(
+                base + "/api/blackboard",
+                data=json.dumps({"text": text, "kind": "note", "author": "test"}).encode(),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req) as r:
+                return json.loads(r.read().decode())
+
+        for i in range(3):
+            post_note(f"{secret}-{i}")
+
+        with urllib.request.urlopen(base + "/api/blackboard?n=20") as r:
+            bb = json.loads(r.read().decode())
+        assert bb["summary"]["count"] == 3
+        assert any(secret in str(i.get("text")) for i in bb["items"])
+
+        req = urllib.request.Request(
+            base + "/api/blackboard/clear",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req) as r:
+            cleared = json.loads(r.read().decode())
+        assert cleared.get("ok") is True
+        assert cleared.get("cleared") is True
+
+        with urllib.request.urlopen(base + "/api/blackboard?n=20") as r:
+            bb = json.loads(r.read().decode())
+        assert bb["summary"]["count"] == 0
+        assert bb["items"] == []
+        assert not any(secret in str(i.get("text")) for i in bb.get("items") or [])
+
+        with urllib.request.urlopen(base + "/api/status") as r:
+            snap = json.loads(r.read().decode())
+        assert snap["blackboard"]["count"] == 0
+        assert snap["blackboard"].get("head") == []
+
+        # Post again, clear via DELETE /api/blackboard
+        post_note(secret)
+        req = urllib.request.Request(base + "/api/blackboard", method="DELETE")
+        with urllib.request.urlopen(req) as r:
+            deleted = json.loads(r.read().decode())
+        assert deleted.get("cleared") is True
+        with urllib.request.urlopen(base + "/api/blackboard") as r:
+            bb = json.loads(r.read().decode())
+        assert bb["summary"]["count"] == 0
+
+        # Post via API, clear via CLI module, next API read must be empty (mtime reload)
+        post_note(secret)
+        blackboard.clear()
+        status.write_status()
+        with urllib.request.urlopen(base + "/api/blackboard") as r:
+            bb = json.loads(r.read().decode())
+        assert bb["summary"]["count"] == 0
+        assert bb["items"] == []
+        with urllib.request.urlopen(base + "/api/status") as r:
+            snap = json.loads(r.read().decode())
+        assert snap["blackboard"]["count"] == 0
+    finally:
+        httpd.shutdown()
