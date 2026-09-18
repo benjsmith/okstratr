@@ -78,7 +78,10 @@ When serve is up: **http://127.0.0.1:8767/observer/**
 Dedicated static host (optional): **http://127.0.0.1:8768/** via
 `okstratr observer --serve` or `OKSTRATR_OBSERVER_DEDICATED=1`.
 
-The panel polls `/api/status`, `/api/dag`, desk list, `/api/lifecycle`.
+The panel is an Omarchy-style desk console (DeskRail left rail + DAG main +
+config strip). It polls `/api/status`, `/api/dag?desk_id=`, `/api/desk_session`,
+`/api/blackboard`, `/api/lifecycle` (~3s) and POSTs desk actions
+(`/api/desk/focus|start|stop|dismiss|delete`) like Panel.qml.
 It is **not** a chat UI.
 
 ## See also

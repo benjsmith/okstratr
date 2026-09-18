@@ -30,3 +30,18 @@ needs a visual desks/DAG control surface.
 - Kernel remains the SSOT for desks/DAG/blackboard/API.
 - Skill + CLI share one lifecycle module and pidfile under the state dir.
 - Omarchy displays the observer panel; Herdr keeps the conversation.
+
+## Observer panel layout (2026-09-18)
+
+The `/observer/` static UI mirrors Omarchy **Panel.qml + DeskRail.qml**:
+
+1. **Top bar** — brand, chips (bb duration, web, harness, Running/Idle), Refresh.
+2. **Left rail (~280px)** — standing desks (work/curate/code/deck/auto) with
+   Start/Continue, Stop, Dismiss/Delete posting to `/api/desk/*`.
+3. **Main** — objective query + Start (`drive_herdr`), cwd chip, **topo DAG**
+   columns (depth / tier from `depends_on` or graph tiers) via `/api/dag?desk_id=`,
+   blackboard head + Clear (`/api/blackboard/clear`).
+4. **Right strip** — config summary + optional web Off/Once/Session.
+
+Dark blue/black Omarchy theme; poll ~3s; **not** a chat surface. Name remains
+**observer panel** (not Butter). Routes: `/observer/` and `/panel/`.
