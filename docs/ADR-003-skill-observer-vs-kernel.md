@@ -24,12 +24,17 @@ needs a visual desks/DAG control surface.
 4. **Slash:** `/okstratr start|restart|shutdown|status` in harness/TUI.
 5. **URLs:** observer panel at `/observer/` on the kernel server (alias
    `/panel/` optional). Dedicated `:8768` host is optional fallback.
+6. **Primacy:** observer panel is the **primary cross-platform console**.
+   Omarchy `Panel.qml` is an optional native twin / thin client (kept for
+   guest). `okstratr tui` is legacy/optional — not the primary Mac path.
+   See [CLEANUP.md](CLEANUP.md).
 
 ## Consequences
 
 - Kernel remains the SSOT for desks/DAG/blackboard/API.
 - Skill + CLI share one lifecycle module and pidfile under the state dir.
-- Omarchy displays the observer panel; Herdr keeps the conversation.
+- Omarchy may display the observer panel (preferred) or the QML Panel twin;
+  Herdr / CLI keeps the conversation. TUI is not required on Mac.
 
 ## Observer panel layout (2026-09-18)
 

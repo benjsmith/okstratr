@@ -13,6 +13,20 @@ def state_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     d.mkdir()
     monkeypatch.setenv("OKSTRATR_STATE_DIR", str(d))
     monkeypatch.setenv("OKSTRATR_HERDR_DRY_RUN", "1")
+    # Isolate harness config: default_config enables grok+claude (fan-out).
+    # These tests assert the single-investigator Switchbay shape.
+    cfg = tmp_path / "okstratr-cfg"
+    cfg.mkdir()
+    monkeypatch.setenv("OKSTRATR_CONFIG_DIR", str(cfg))
+    monkeypatch.delenv("OKSTRATR_HARNESS_PREFER", raising=False)
+    monkeypatch.delenv("OKSTRATR_MODEL_BY_HARNESS", raising=False)
+    monkeypatch.delenv("OKSTRATR_HERDR_KIND", raising=False)
+    from okstratr.harness import config as hcfg
+
+    h = hcfg.default_config()
+    h.enabled = ["grok"]
+    h.preference = ["grok"]
+    hcfg.save(h)
     import okstratr.bandit as bandit
     import okstratr.blackboard as bb
     import okstratr.dag as dag

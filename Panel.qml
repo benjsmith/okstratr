@@ -1,9 +1,15 @@
-// Phase 4: Panel is a pure client of okstratr daemon (ADR-001). DeskSession SSOT via GET /api/status; status.json FileView is offline/compat only (never overwrites HTTP while open). Harness editor: ConfigHarnessEditor.qml; standing rail: DeskRail.qml + /api/harness*.
-// Okstratr panel: full-size FloatingWindow desk UI (native toplevel — not Overlay).
-// Real xdg-shell window so it does NOT paint over lock/screensaver (unlike WlrLayer.Overlay).
+// PRIMARY CONSOLE: the HTML observer panel (/observer/ on :8767) is the primary
+// cross-platform visual (ADR-003) — desks / AGENT SPACE / blackboard; no chat bar.
+// THIS FILE: Omarchy native twin / optional thin client of the same daemon. Kept for
+// guest Omarchy; do not treat as the main console. Prefer opening the observer.
+//
+// Phase 4: pure client of okstratr daemon (ADR-001). DeskSession SSOT via GET /api/status;
+// status.json FileView is offline/compat only (never overwrites HTTP while open).
+// Harness editor: ConfigHarnessEditor.qml; standing rail: DeskRail.qml + /api/harness*.
+// FloatingWindow desk UI (native toplevel — not Overlay / not over lock/screensaver).
 // LEFT rail: standing desks from status.desk.standing / focus_desk_id (POST /api/desk/focus).
-// Main: desk query input, workspace picker, config, DAG summary, blackboard, Herdr runtime.
-// okstratr owns desk objective input; Herdr remains the normal agent runtime.
+// Main: optional native query/workspace/config + DAG/blackboard (observer has no query bar).
+// Text I/O: Herdr / CLI harnesses — not this panel as chat.
 
 import QtQuick
 import QtQuick.Layouts
