@@ -104,7 +104,29 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="okstratr")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("status", help="Print and publish status.json")
+    st = sub.add_parser("status", help="Print lifecycle status box (services, desks, tokens, …)")
+    st.add_argument("--json", action="store_true", help="Machine-readable status payload + write status.json")
+    st.add_argument("--publish", action="store_true", help="Also refresh status.json (implied by --json)")
+
+    sub.add_parser("doctor", help="Skill helper: running? need consent? asset/port diagnostics")
+
+    start_p = sub.add_parser("start", help="Start serve (+ observer panel) with consent unless --yes")
+    start_p.add_argument("--yes", "-y", action="store_true", help="Skip consent prompt (automation)")
+    start_p.add_argument("--no-observer", action="store_true", help="Do not start/ensure observer panel")
+    start_p.add_argument("--host", default="127.0.0.1")
+    start_p.add_argument("--port", type=int, default=8767)
+
+    sub.add_parser("restart", help="Shutdown then start serve (+ observer panel)")
+
+    shut = sub.add_parser("shutdown", help="Stop serve, observer host, and okstratr seat children")
+    shut.add_argument("--keep-seats", action="store_true", help="Do not kill harness seat children")
+
+    obs = sub.add_parser("observer", help="Observer panel URL / optional dedicated :8768 host")
+    obs.add_argument("--serve", action="store_true", help="Start dedicated static host on :8768")
+    obs.add_argument("--json", action="store_true")
+    panel = sub.add_parser("panel", help="Alias for observer (observer panel)")
+    panel.add_argument("--serve", action="store_true")
+    panel.add_argument("--json", action="store_true")
 
     # --- desk (primary) ---
     desk_p = sub.add_parser("desk", help="Desk lifecycle: start|stop|dismiss|delete|status|schedule|hire|effort|retire|focus")
@@ -371,9 +393,59 @@ def main(argv=None) -> int:
 
 
     if args.cmd == "status":
-        from . import status
+        from . import lifecycle, status as status_mod
 
-        return _print(status.write_status())
+        if getattr(args, "json", False):
+            status_mod.write_status()
+            return _print(lifecycle.status_payload())
+        if getattr(args, "publish", False):
+            status_mod.write_status()
+        print(lifecycle.format_status_box())
+        return 0
+
+    if args.cmd == "doctor":
+        from . import lifecycle
+
+        return _print(lifecycle.doctor())
+
+    if args.cmd == "start":
+        from . import lifecycle
+
+        out = lifecycle.start(
+            yes=bool(getattr(args, "yes", False)),
+            prompt=not bool(getattr(args, "yes", False)),
+            observer=not bool(getattr(args, "no_observer", False)),
+            host=getattr(args, "host", "127.0.0.1"),
+            port=int(getattr(args, "port", 8767)),
+        )
+        return _print(out)
+
+    if args.cmd == "restart":
+        from . import lifecycle
+
+        return _print(lifecycle.restart(yes=True, observer=True))
+
+    if args.cmd == "shutdown":
+        from . import lifecycle
+
+        return _print(lifecycle.shutdown(kill_seats=not bool(getattr(args, "keep_seats", False))))
+
+    if args.cmd in ("observer", "panel"):
+        from . import lifecycle
+
+        if getattr(args, "serve", False):
+            spawned = lifecycle._spawn_observer_host()
+            out = {
+                "ok": bool(spawned.get("ok")),
+                "observer_url": spawned.get("url") or lifecycle.observer_url(),
+                "spawn": spawned,
+            }
+            return _print(out)
+        url = lifecycle.observer_url()
+        if getattr(args, "json", False):
+            return _print({"observer_url": url, "serve_running": lifecycle.is_serve_running()})
+        print(url)
+        return 0
 
     if args.cmd == "web":
         from . import status, web_egress
