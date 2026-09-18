@@ -4,9 +4,39 @@
  * when the query box is empty.
  */
 (function () {
-  const API = (window.OKSTRATR_API || "").replace(/\/$/, "") || "";
   const POLL_MS = 2500;
   const KIND_ORDER = ["work", "curate", "code", "deck", "auto"];
+  const HOSTED_SHELLS = { switchbay: true, okbay: true };
+
+  function detectApiBase() {
+    if (typeof window.OKSTRATR_API === "string" && window.OKSTRATR_API.length) {
+      return String(window.OKSTRATR_API).replace(/\/$/, "");
+    }
+    if (typeof window.OKSTRATR_PUBLIC_BASE === "string" && window.OKSTRATR_PUBLIC_BASE.length) {
+      return String(window.OKSTRATR_PUBLIC_BASE).replace(/\/$/, "");
+    }
+    // Infer proxy prefix from pathname (e.g. /embed/okstratr/observer/)
+    const path = String(location.pathname || "");
+    const m = path.match(/^(.*?\/embed\/okstratr)(?:\/|$)/);
+    if (m) return m[1];
+    return "";
+  }
+
+  function detectHosted() {
+    if (typeof window.OKSTRATR_HOSTED === "string" && window.OKSTRATR_HOSTED) {
+      const h = String(window.OKSTRATR_HOSTED).trim().toLowerCase();
+      if (HOSTED_SHELLS[h]) return h;
+    }
+    try {
+      const q = new URLSearchParams(location.search || "");
+      const h = String(q.get("host") || "").trim().toLowerCase();
+      if (HOSTED_SHELLS[h]) return h;
+    } catch (e) { /* ignore */ }
+    return "";
+  }
+
+  const API = detectApiBase();
+  const HOSTED = detectHosted();
 
   const state = {
     focusDeskId: "",
@@ -19,7 +49,35 @@
     layoutNodes: [],
     animT: 0,
     animRaf: 0,
+    hosted: HOSTED,
+    /** Phase 1b: desk list filter — all | working | quiet */
+    groupFilter: "all",
+    /** Optional kind chip filter (empty = all kinds) */
+    kindFilter: "",
   };
+
+  /** Hide/disable HTML settings chrome when hosted by Switchbay/okbay. */
+  function applyHostedMode() {
+    if (!HOSTED) return;
+    document.body.classList.add("hosted");
+    document.body.setAttribute("data-okstratr-host", HOSTED);
+    const config = document.querySelector("aside.config");
+    if (config) {
+      config.hidden = true;
+      config.setAttribute("aria-hidden", "true");
+      config.querySelectorAll("button, input, select, textarea").forEach(function (n) {
+        n.disabled = true;
+      });
+    }
+    document.querySelectorAll("[data-web]").forEach(function (b) {
+      b.disabled = true;
+    });
+    const brand = document.querySelector(".brand");
+    if (brand && !brand.dataset.hostedTagged) {
+      brand.dataset.hostedTagged = "1";
+      brand.textContent = brand.textContent + " · hosted:" + HOSTED;
+    }
+  }
 
   function api(path, opts) {
     const o = opts || {};
@@ -241,77 +299,301 @@
       });
   }
 
-  /* —— Render desks —— */
-  function renderDesks() {
-    const root = el("desks");
-    const list = ensureKindPlaceholders(state.desks);
-    if (!list.length) {
-      root.textContent = "No desks yet.";
+  function quietAll() {
+    setMsg("Quieting all working desks…");
+    api("/api/desk/quiet_standing", { method: "POST", body: {} })
+      .then(afterDeskAction)
+      .catch(function (e) {
+        setMsg(String(e.message || e));
+      });
+  }
+
+  /** Human schedule chip from desk.schedule payload (Switchbay DesksPanel parity). */
+  function scheduleLabel(sched) {
+    if (!sched || typeof sched !== "object") return "";
+    if (sched.label) return String(sched.label);
+    if (sched.description) return String(sched.description);
+    if (sched.name) return String(sched.name);
+    if (sched.kind === "named" && sched.name) return String(sched.name);
+    if (sched.every_seconds) {
+      const s = Number(sched.every_seconds);
+      if (s >= 86400) return "every " + Math.round(s / 86400) + "d";
+      if (s >= 3600) return "every " + Math.round(s / 3600) + "h";
+      if (s >= 60) return "every " + Math.round(s / 60) + "m";
+      return "every " + Math.round(s) + "s";
+    }
+    if (sched.raw) return String(sched.raw);
+    return "scheduled";
+  }
+
+  function countDesksByKind(list) {
+    const map = {};
+    (list || []).forEach(function (d) {
+      if (d.placeholder) return;
+      const k = String(d.kind || "?");
+      if (!map[k]) map[k] = { kind: k, n: 0, working: 0 };
+      map[k].n += 1;
+      if (String(d.state) === "working") map[k].working += 1;
+    });
+    return Object.keys(map)
+      .sort()
+      .map(function (k) { return map[k]; });
+  }
+
+  function renderKindSummary() {
+    const root = el("desk-kind-summary");
+    if (!root) return;
+    const rows = countDesksByKind(state.desks);
+    if (!rows.length) {
+      root.innerHTML = "";
       return;
     }
-    root.innerHTML = list
-      .map(function (d) {
-        const id = String(d.id || "");
-        const kind = String(d.kind || "desk");
-        const st = String(d.state || "");
-        const isEmpty = !!d.placeholder || (!st && id.indexOf("kind:") === 0);
-        const isDismissed = st === "dismissed";
-        const isBusy = st === "working";
-        const lab = deskStateLabel(st);
-        const head = lab ? kind + " · " + lab : kind;
-        const obj = d.objective
-          ? String(d.objective)
-          : isEmpty
-            ? "standing"
-            : isDismissed
-              ? "dismissed"
-              : "standing";
-        const focused = id && id === String(state.focusDeskId) && id.indexOf("kind:") !== 0;
-        const kindSel = kind === state.selectedKind;
-        const startLbl = isEmpty || isDismissed ? "Start" : "Continue";
-        const dismissOrDelete = isDismissed
-          ? '<button type="button" class="btn mini" data-act="delete" data-id="' +
-            esc(id) +
-            '">Delete</button>'
-          : '<button type="button" class="btn mini" data-act="dismiss" data-id="' +
-            esc(id) +
-            '"' +
-            (isEmpty ? " disabled" : "") +
-            ">Dismiss</button>";
+    root.innerHTML = rows
+      .map(function (r) {
+        const active = state.kindFilter === r.kind ? " active" : "";
+        const live = r.working > 0 ? " has-working" : "";
         return (
-          '<div class="desk-row' +
-          (focused ? " focused" : "") +
-          (kindSel ? " kind-selected" : "") +
-          '" data-id="' +
-          esc(id) +
-          '" data-kind="' +
-          esc(kind) +
-          '">' +
-          '<div class="desk-head"><span class="desk-kind">' +
-          esc(head) +
-          '</span><span class="desk-obj" title="' +
-          esc(obj) +
-          '">' +
-          esc(obj.slice(0, 48)) +
-          "</span></div>" +
-          '<div class="desk-actions">' +
-          '<button type="button" class="btn mini' +
-          (kindSel ? " active" : "") +
-          '" data-act="start" data-kind="' +
-          esc(kind) +
-          '">' +
-          startLbl +
-          "</button>" +
-          '<button type="button" class="btn mini" data-act="stop" data-id="' +
-          esc(id) +
-          '"' +
-          (isBusy ? "" : " disabled") +
-          ">Stop</button>" +
-          dismissOrDelete +
-          "</div></div>"
+          '<button type="button" class="kind-chip' +
+          active +
+          live +
+          '" data-kind-filter="' +
+          esc(r.kind) +
+          '" title="' +
+          esc(r.kind) +
+          ": " +
+          r.n +
+          " desk(s), " +
+          r.working +
+          ' working">' +
+          esc(r.kind) +
+          '<span class="n">' +
+          r.n +
+          "</span></button>"
         );
       })
       .join("");
+  }
+
+  function renderDeskDashboard(life) {
+    const desksInfo = (life && life.desks) || {};
+    const working = desksInfo.working != null
+      ? desksInfo.working
+      : state.desks.filter(function (d) { return String(d.state) === "working"; }).length;
+    const quiet = desksInfo.quiet != null
+      ? desksInfo.quiet
+      : state.desks.filter(function (d) {
+          return String(d.state) === "quiet" || String(d.state) === "idle";
+        }).length;
+    const total = desksInfo.total != null
+      ? desksInfo.total
+      : state.desks.filter(function (d) { return !d.placeholder; }).length;
+    const tok = (life && life.tokens) || {};
+    const files = (life && life.files) || {};
+    const tokStr = tok.n_a ? "n/a" : String(tok.tokens || 0);
+    const fileN = files.files || 0;
+    const lineN = files.lines || 0;
+
+    setText("dash-working", String(working));
+    setText("dash-quiet", String(quiet));
+    setText("dash-total", String(total));
+    setText("dash-tokens", tokStr);
+    setText("dash-files", String(fileN));
+    setText("dash-lines", String(lineN));
+
+    setText("chip-desks", "desks: " + working + " run / " + quiet + " idle");
+    setText("chip-tokens", "tok: " + tokStr);
+    setText("chip-files", "files: " + fileN + " / " + lineN + " ln");
+
+    const byKind = desksInfo.by_kind || {};
+    const byState = desksInfo.by_state || {};
+    function chipsFromMap(map, fallback) {
+      const keys = Object.keys(map || {});
+      if (!keys.length && fallback) return fallback;
+      if (!keys.length) return '<span class="muted">—</span>';
+      return keys
+        .sort()
+        .map(function (k) {
+          return (
+            '<span class="dash-chip">' +
+            esc(k) +
+            "<strong>" +
+            esc(String(map[k])) +
+            "</strong></span>"
+          );
+        })
+        .join("");
+    }
+    const kindFallback = countDesksByKind(state.desks)
+      .map(function (r) {
+        return (
+          '<span class="dash-chip">' +
+          esc(r.kind) +
+          "<strong>" +
+          r.n +
+          "</strong></span>"
+        );
+      })
+      .join("") || null;
+    const kindRoot = el("dash-by-kind");
+    const stateRoot = el("dash-by-state");
+    if (kindRoot) kindRoot.innerHTML = chipsFromMap(byKind, kindFallback);
+    if (stateRoot) {
+      let html = chipsFromMap(byState, null);
+      if (html.indexOf("—") >= 0 || html === '<span class="muted">—</span>') {
+        const local = {};
+        state.desks.forEach(function (d) {
+          if (d.placeholder) return;
+          const s = String(d.state || "?") || "?";
+          local[s] = (local[s] || 0) + 1;
+        });
+        html = chipsFromMap(local, null);
+      }
+      stateRoot.innerHTML = html;
+    }
+    const meta = el("desk-dash-meta");
+    if (meta) {
+      const up = life && life.time && life.time.process_uptime
+        ? " · up " + life.time.process_uptime
+        : "";
+      meta.textContent = "lifecycle stats" + up + " · no chat bar";
+    }
+  }
+
+  /* —— Render desks —— */
+  function renderDesks() {
+    const root = el("desks");
+    renderKindSummary();
+    let list = ensureKindPlaceholders(state.desks);
+    if (state.kindFilter) {
+      list = list.filter(function (d) {
+        return String(d.kind) === state.kindFilter;
+      });
+    }
+    if (state.groupFilter === "working") {
+      list = list.filter(function (d) {
+        return String(d.state) === "working";
+      });
+    } else if (state.groupFilter === "quiet") {
+      list = list.filter(function (d) {
+        const st = String(d.state || "");
+        return st === "quiet" || st === "idle";
+      });
+    }
+    if (!list.length) {
+      root.textContent =
+        state.groupFilter !== "all" || state.kindFilter
+          ? "No desks in this group."
+          : "No desks yet.";
+      return;
+    }
+
+    function rowHtml(d) {
+      const id = String(d.id || "");
+      const kind = String(d.kind || "desk");
+      const st = String(d.state || "");
+      const isEmpty = !!d.placeholder || (!st && id.indexOf("kind:") === 0);
+      const isDismissed = st === "dismissed";
+      const isBusy = st === "working";
+      const lab = deskStateLabel(st);
+      const stateCls = st
+        ? '<span class="desk-state desk-state--' +
+          esc(st === "idle" ? "quiet" : st) +
+          '">' +
+          esc(lab || st) +
+          "</span>"
+        : "";
+      const sched = scheduleLabel(d.schedule);
+      const schedHtml = sched
+        ? '<span class="desk-sched" title="Schedule">⏱ ' + esc(sched) + "</span>"
+        : "";
+      const head = kind;
+      const obj = d.objective
+        ? String(d.objective)
+        : isEmpty
+          ? "standing"
+          : isDismissed
+            ? "dismissed"
+            : "standing";
+      const focused = id && id === String(state.focusDeskId) && id.indexOf("kind:") !== 0;
+      const kindSel = kind === state.selectedKind;
+      const startLbl = isEmpty || isDismissed ? "Start" : "Continue";
+      const dismissOrDelete = isDismissed
+        ? '<button type="button" class="btn mini" data-act="delete" data-id="' +
+          esc(id) +
+          '">Delete</button>'
+        : '<button type="button" class="btn mini" data-act="dismiss" data-id="' +
+          esc(id) +
+          '"' +
+          (isEmpty ? " disabled" : "") +
+          ">Dismiss</button>";
+      return (
+        '<div class="desk-row' +
+        (focused ? " focused" : "") +
+        (kindSel ? " kind-selected" : "") +
+        '" data-id="' +
+        esc(id) +
+        '" data-kind="' +
+        esc(kind) +
+        '" data-state="' +
+        esc(st) +
+        '">' +
+        '<div class="desk-head"><span class="desk-kind">' +
+        esc(head) +
+        stateCls +
+        schedHtml +
+        '</span><span class="desk-obj" title="' +
+        esc(obj) +
+        '">' +
+        esc(obj.slice(0, 48)) +
+        "</span></div>" +
+        '<div class="desk-actions">' +
+        '<button type="button" class="btn mini' +
+        (kindSel ? " active" : "") +
+        '" data-act="start" data-kind="' +
+        esc(kind) +
+        '">' +
+        startLbl +
+        "</button>" +
+        '<button type="button" class="btn mini" data-act="stop" data-id="' +
+        esc(id) +
+        '"' +
+        (isBusy ? "" : " disabled") +
+        ">Stop</button>" +
+        dismissOrDelete +
+        "</div></div>"
+      );
+    }
+
+    // Group sections: Working → Idle → Standing/other (Switchbay Running/Desks feel)
+    const working = [];
+    const idle = [];
+    const other = [];
+    list.forEach(function (d) {
+      const st = String(d.state || "");
+      if (st === "working") working.push(d);
+      else if (st === "quiet" || st === "idle") idle.push(d);
+      else other.push(d);
+    });
+    const parts = [];
+    function section(title, rows) {
+      if (!rows.length) return;
+      if (state.groupFilter === "all" && (working.length || idle.length) && title) {
+        parts.push('<div class="desk-section-label">' + esc(title) + "</div>");
+      }
+      rows.forEach(function (d) {
+        parts.push(rowHtml(d));
+      });
+    }
+    if (state.groupFilter === "all") {
+      section("Working", working);
+      section("Idle", idle);
+      section(working.length || idle.length ? "Standing" : "", other);
+    } else {
+      list.forEach(function (d) {
+        parts.push(rowHtml(d));
+      });
+    }
+    root.innerHTML = parts.join("");
   }
 
   /* —— AGENT SPACE (Model.dagGraph + Panel.qml canvas) —— */
@@ -714,6 +996,7 @@
     setText("s-files", (files.files || 0) + " / " + (files.lines || 0) + " lines");
     const hp = el("harness-path");
     if (hp && life.cwd) hp.textContent = "harnesses.toml · " + life.cwd;
+    renderDeskDashboard(life);
   }
 
   function renderRunChip() {
@@ -768,6 +1051,7 @@
         renderAgentSpace(status, dag);
         renderBlackboard(bb);
         if (life) renderLifecycle(life);
+        else renderDeskDashboard(null);
         renderRunChip();
         setText("poll-status", "updated " + new Date().toLocaleTimeString());
       })
@@ -804,15 +1088,50 @@
   });
 
   el("btn-refresh").addEventListener("click", refresh);
+  const quietBtn = el("btn-quiet-all");
+  if (quietBtn) quietBtn.addEventListener("click", quietAll);
   el("btn-bb-clear").addEventListener("click", clearBlackboard);
+
+  const groupFilter = el("desk-group-filter");
+  if (groupFilter) {
+    groupFilter.addEventListener("click", function (ev) {
+      const t = ev.target;
+      if (!(t instanceof Element)) return;
+      const btn = t.closest("button[data-group]");
+      if (!btn) return;
+      state.groupFilter = btn.getAttribute("data-group") || "all";
+      groupFilter.querySelectorAll("button[data-group]").forEach(function (b) {
+        b.classList.toggle("active", b.getAttribute("data-group") === state.groupFilter);
+      });
+      renderDesks();
+    });
+  }
+  const kindSummary = el("desk-kind-summary");
+  if (kindSummary) {
+    kindSummary.addEventListener("click", function (ev) {
+      const t = ev.target;
+      if (!(t instanceof Element)) return;
+      const btn = t.closest("button[data-kind-filter]");
+      if (!btn) return;
+      const k = btn.getAttribute("data-kind-filter") || "";
+      state.kindFilter = state.kindFilter === k ? "" : k;
+      renderDesks();
+    });
+  }
+
   document.querySelectorAll("[data-web]").forEach(function (b) {
     b.addEventListener("click", function () {
+      if (HOSTED) return; // shell owns settings in hosted mode
       setWeb(b.getAttribute("data-web"));
     });
   });
   window.addEventListener("resize", function () {
     rebuildLayout();
   });
+
+  applyHostedMode();
+  const health = el("health-link");
+  if (health) health.setAttribute("href", API + "/health");
 
   refresh();
   setInterval(refresh, POLL_MS);

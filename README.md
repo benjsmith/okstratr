@@ -18,6 +18,8 @@ After three iterations (Omarchy QML plugin → CLI → skill + observer), the co
 
 Mac path: install skill + run lifecycle CLI + open the observer panel. Omarchy guest may still load the QML plugin; prefer opening the observer for the shared console.
 
+Hosted embeds (Switchbay/okbay): same-origin reverse proxy under `OKSTRATR_PUBLIC_BASE` (e.g. `/embed/okstratr`); `?host=switchbay|okbay` or `X-Okstratr-Host` hides HTML settings — see [docs/ADR-004-hosted-proxy-registry.md](docs/ADR-004-hosted-proxy-registry.md).
+
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (kept vs legacy surfaces), [docs/ADR-003-skill-observer-vs-kernel.md](docs/ADR-003-skill-observer-vs-kernel.md), and [docs/ADR-001-cli-tui-harness.md](docs/ADR-001-cli-tui-harness.md).
 
 ## Relationship

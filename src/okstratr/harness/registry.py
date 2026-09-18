@@ -1,4 +1,8 @@
-"""Built-in harness definitions aligned with Herdr --kind where possible."""
+"""Built-in harness definitions — okstratr registry SSOT for shells.
+
+Aligned with Herdr --kind where possible. Switchbay/okbay settings UIs
+configure this registry via the harness/model HTTP API (not a second allowlist).
+"""
 
 from __future__ import annotations
 
@@ -63,6 +67,20 @@ BUILTIN: dict[HarnessId, HarnessDef] = {
         default_models=(),
         notes="Cursor agent CLI when available.",
     ),
+    # Shell-owned seating surface: Switchbay rail UI configures this via the
+    # okstratr harness/model API (registry SSOT). Not a second allowlist.
+    "switchbay-rail": HarnessDef(
+        id="switchbay-rail",
+        herdr_kind="switchbay-rail",
+        bin_names=("switchbay-rail",),
+        label="Switchbay Rail",
+        default_models=(),
+        notes=(
+            "Registered harness backend for Switchbay rail UI. "
+            "Shells (Switchbay/okbay) configure enable/models via "
+            "POST /api/harness/* — okstratr owns the allowlist."
+        ),
+    ),
 }
 
 # Preference order when multiple harnesses are enabled + installed (P1 round-robin base).
@@ -74,6 +92,7 @@ DEFAULT_PREFERENCE: tuple[HarnessId, ...] = (
     "omp",
     "opencode",
     "cursor",
+    "switchbay-rail",
 )
 
 
