@@ -29,25 +29,19 @@
 
     <!-- Main column -->
     <main class="main">
-      <section class="query-row">
-        <input
-          id="query-input"
-          type="text"
-          class="query-input"
-          placeholder="Objective — defaults to auto; /curate /deck /work /code to override"
-          autocomplete="off"
-        />
-        <span class="chip cwd" id="cwd-chip" title="workspace / cwd">cwd: …</span>
-        <button type="button" id="btn-start" class="btn primary">Start auto</button>
-      </section>
       <div class="action-msg" id="action-msg" hidden></div>
+      <div class="status-line">
+        <span class="chip cwd" id="cwd-chip" title="workspace / cwd">cwd: …</span>
+      </div>
 
-      <section class="panel dag-panel">
-        <div class="panel-head">
-          <h2>DAG</h2>
-          <span class="muted" id="dag-meta">focus: —</span>
+      <section class="panel agent-space-panel" aria-label="Agent Space">
+        <div class="panel-head agent-space-head">
+          <h2 id="agent-space-title">AGENT SPACE</h2>
+          <span class="muted" id="dag-meta">nodes=0</span>
         </div>
-        <div id="dag-graph" class="dag-graph" aria-live="polite">Loading…</div>
+        <div id="dag-graph" class="agent-space" aria-live="polite">
+          <canvas id="agent-space-canvas" class="agent-space-canvas" width="640" height="248"></canvas>
+        </div>
       </section>
 
       <section class="panel bb-panel">
@@ -81,7 +75,7 @@
         </div>
       </div>
       <p class="hint harness-path" id="harness-path">harnesses.toml — see serve cwd</p>
-      <p class="hint">Chat stays in Herdr / CLI harnesses. This panel is desks + DAG only.</p>
+      <p class="hint">No chat/objective input here — Herdr / CLI harness only. Desk Start uses standing objective.</p>
     </aside>
   </div>
 

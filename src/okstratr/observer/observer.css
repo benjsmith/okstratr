@@ -184,33 +184,12 @@ body {
 .desk-actions { display: flex; flex-wrap: wrap; gap: 0.25rem; }
 .desk-actions .btn.mini { min-width: 3.2rem; }
 
-/* —— Query row —— */
-.query-row {
+/* —— Status line (cwd only; no query input) —— */
+.status-line {
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem;
   align-items: center;
-}
-.query-input {
-  flex: 1;
-  min-width: 12rem;
-  height: 2.4rem;
-  padding: 0 0.75rem;
-  border-radius: 9px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--fg);
-  font-size: 0.9rem;
-  outline: none;
-}
-.query-input:focus { border-color: var(--accent); border-width: 2px; padding: 0 calc(0.75rem - 1px); }
-.query-input::placeholder { color: var(--muted); }
-.action-msg {
-  color: var(--accent);
-  font-size: 0.75rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* —— Panels —— */
@@ -236,97 +215,27 @@ body {
 }
 .muted { color: var(--muted); font-size: 0.7rem; }
 
-/* —— DAG topo columns —— */
-.dag-graph { min-height: 10rem; }
-.dag-empty { color: var(--muted); font-size: 0.8rem; padding: 1rem 0; }
-.dag-cols {
-  display: flex;
-  gap: 0.75rem;
-  align-items: flex-start;
-  overflow-x: auto;
-  padding-bottom: 0.25rem;
+/* —— AGENT SPACE canvas (Panel.qml Agent Space) —— */
+.agent-space-panel { padding-bottom: 0.35rem; }
+.agent-space-head h2 {
+  letter-spacing: 0.08em;
+  font-size: 0.7rem;
 }
-.dag-col {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  min-width: 7.5rem;
-  flex: 0 0 auto;
-}
-.dag-col-label {
-  font-size: 0.65rem;
-  color: var(--muted);
-  text-align: center;
-  margin-bottom: 0.15rem;
-}
-.dag-node {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 0.4rem 0.5rem;
-  background: var(--panel);
-  font-size: 0.75rem;
-  max-width: 11rem;
-}
-.dag-node .nid {
-  font-weight: 700;
-  color: var(--fg);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.dag-node .ntitle {
-  color: var(--muted);
-  font-size: 0.65rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  margin-top: 0.15rem;
-}
-.dag-node .nstate {
-  display: inline-block;
-  margin-top: 0.25rem;
-  font-size: 0.65rem;
-  padding: 0.05rem 0.35rem;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  color: var(--muted);
-}
-.dag-node.state-working .nstate,
-.dag-node.state-running .nstate,
-.dag-node.state-ready .nstate { color: var(--ok); border-color: #3d5a3a; }
-.dag-node.state-done .nstate { color: var(--accent); }
-.dag-node.state-pending .nstate,
-.dag-node.state-quiet .nstate { color: var(--warn); }
-.dag-node.state-failed .nstate,
-.dag-node.state-error .nstate { color: var(--bad); }
-.dag-node.role-cos { border-color: var(--accent); }
-.dag-node.role-blackboard { border-color: var(--purple); }
-.dag-node.virtual { opacity: 0.85; }
-
-.dag-edges {
-  margin-top: 0.5rem;
-  font-size: 0.65rem;
-  color: var(--muted);
-  max-height: 3.5rem;
-  overflow-y: auto;
-}
-.dag-edges code { color: var(--text); }
-
-/* SVG overlay optional */
-.dag-svg-wrap {
+.agent-space {
   position: relative;
   width: 100%;
-  min-height: 12rem;
+  min-height: 14rem;
+  height: 15.5rem;
+  border-radius: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  overflow: hidden;
 }
-.dag-svg-wrap svg {
-  position: absolute;
-  inset: 0;
+.agent-space-canvas {
+  display: block;
   width: 100%;
   height: 100%;
-  pointer-events: none;
-  overflow: visible;
 }
-.dag-svg-wrap .dag-cols { position: relative; z-index: 1; }
 
 /* —— Blackboard —— */
 .bb-list { font-size: 0.8rem; max-height: 14rem; overflow-y: auto; }

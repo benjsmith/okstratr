@@ -38,10 +38,16 @@ The `/observer/` static UI mirrors Omarchy **Panel.qml + DeskRail.qml**:
 1. **Top bar** — brand, chips (bb duration, web, harness, Running/Idle), Refresh.
 2. **Left rail (~280px)** — standing desks (work/curate/code/deck/auto) with
    Start/Continue, Stop, Dismiss/Delete posting to `/api/desk/*`.
-3. **Main** — objective query + Start (`drive_herdr`), cwd chip, **topo DAG**
-   columns (depth / tier from `depends_on` or graph tiers) via `/api/dag?desk_id=`,
-   blackboard head + Clear (`/api/blackboard/clear`).
+   Start on an empty desk POSTs kind only (or reuses the standing objective via
+   API) — same as Omarchy Start when the query is empty.
+3. **Main** — cwd chip, **AGENT SPACE** canvas (nodes + edges like Panel.qml
+   Agent Space; token-flow animation on active edges), blackboard head + Clear
+   (`/api/blackboard/clear`). Graph from `/api/status` `dagGraph` when present,
+   else synthesized like `Model.dagGraph` from `/api/dag`.
 4. **Right strip** — config summary + optional web Off/Once/Session.
 
-Dark blue/black Omarchy theme; poll ~3s; **not** a chat surface. Name remains
+**No chat / objective / query text input** in the observer — Herdr / CLI harness
+is the only text input surface.
+
+Dark blue/black Omarchy theme; poll ~2–3s; rebuild layout on resize. Name remains
 **observer panel** (not Butter). Routes: `/observer/` and `/panel/`.

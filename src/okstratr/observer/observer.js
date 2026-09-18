@@ -1,7 +1,11 @@
-/* okstratr observer panel — DeskRail/Panel-style desks + DAG; not a chat UI */
+/* okstratr observer panel — DeskRail + AGENT SPACE canvas; not a chat UI.
+ * No objective/query text input — Herdr / CLI harness is the only text surface.
+ * Desk Start POSTs kind (+ standing objective when present), like Omarchy Start
+ * when the query box is empty.
+ */
 (function () {
   const API = (window.OKSTRATR_API || "").replace(/\/$/, "") || "";
-  const POLL_MS = 3000;
+  const POLL_MS = 2500;
   const KIND_ORDER = ["work", "curate", "code", "deck", "auto"];
 
   const state = {
@@ -11,6 +15,10 @@
     life: null,
     status: null,
     cwd: "",
+    graph: null,
+    layoutNodes: [],
+    animT: 0,
+    animRaf: 0,
   };
 
   function api(path, opts) {
@@ -23,14 +31,17 @@
       },
       body: o.body ? JSON.stringify(o.body) : undefined,
     }).then(function (r) {
-      return r.json().catch(function () {
-        return { ok: false, error: path + " " + r.status };
-      }).then(function (j) {
-        if (!r.ok && (!j || j.ok !== false)) {
-          throw new Error(path + " " + r.status);
-        }
-        return j;
-      });
+      return r
+        .json()
+        .catch(function () {
+          return { ok: false, error: path + " " + r.status };
+        })
+        .then(function (j) {
+          if (!r.ok && (!j || j.ok !== false)) {
+            throw new Error(path + " " + r.status);
+          }
+          return j;
+        });
     });
   }
 
@@ -69,15 +80,6 @@
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;");
-  }
-
-  function parseDeskQuery(text) {
-    const raw = String(text || "").trim();
-    const m = raw.match(/^\/(work|curate|code|deck|auto)\b\s*([\s\S]*)$/i);
-    if (m) {
-      return { kind: m[1].toLowerCase(), objective: String(m[2] || "").trim(), slash: true };
-    }
-    return { kind: null, objective: raw, slash: false };
   }
 
   function standingObjectiveForKind(kind) {
@@ -130,6 +132,16 @@
     });
   }
 
+  function isActiveState(st) {
+    const s = String(st || "").toLowerCase();
+    return s === "working" || s === "running" || s === "active" || s === "busy";
+  }
+
+  function isReadyState(st) {
+    const s = String(st || "").toLowerCase();
+    return s === "ready" || s === "pending" || s === "queued";
+  }
+
   /* —— Desk actions (POST mirrors Panel.qml) —— */
   function afterDeskAction(parsed) {
     if (parsed && parsed.ok === false) {
@@ -153,16 +165,11 @@
     const row = state.desks.find(function (d) {
       return String(d.id) === String(deskId);
     });
-    if (row) {
-      if (row.kind) state.selectedKind = String(row.kind);
-      if (row.objective) el("query-input").value = String(row.objective);
-    }
-    updateStartLabel();
+    if (row && row.kind) state.selectedKind = String(row.kind);
     renderDesks();
     api("/api/desk/focus", { method: "POST", body: { desk_id: String(deskId) } })
       .then(function (parsed) {
         if (parsed && parsed.ok === false) return;
-        if (parsed && parsed.objective) el("query-input").value = String(parsed.objective);
         refresh();
       })
       .catch(function (e) {
@@ -171,11 +178,9 @@
   }
 
   function startDesk(kind) {
-    const parsed = parseDeskQuery(el("query-input").value);
-    const k = parsed.slash ? parsed.kind : String(kind || state.selectedKind || "auto");
+    const k = String(kind || state.selectedKind || "auto");
     state.selectedKind = k;
-    let objective = parsed.objective;
-    if (!String(objective || "").trim()) objective = standingObjectiveForKind(k);
+    const objective = standingObjectiveForKind(k);
     setMsg("Starting " + k + " desk…");
     const payload = { kind: k, objective: objective };
     if (String(objective || "").trim()) payload.drive_herdr = true;
@@ -234,12 +239,6 @@
       .catch(function (e) {
         setMsg(String(e.message || e));
       });
-  }
-
-  function updateStartLabel() {
-    const parsed = parseDeskQuery(el("query-input").value);
-    const k = parsed.kind || state.selectedKind || "auto";
-    el("btn-start").textContent = "Start " + k;
   }
 
   /* —— Render desks —— */
@@ -315,150 +314,356 @@
       .join("");
   }
 
-  /* —— DAG topo by depth from depends_on —— */
-  function nodesFromDag(payload) {
-    if (!payload) return [];
-    if (payload.graph && Array.isArray(payload.graph.nodes)) return payload.graph.nodes;
-    if (Array.isArray(payload.nodes) && payload.nodes.length && typeof payload.nodes[0] === "object") {
-      return payload.nodes;
-    }
-    if (Array.isArray(payload.items)) return payload.items;
-    return [];
+  /* —— AGENT SPACE (Model.dagGraph + Panel.qml canvas) —— */
+  function nodeColorForRole(role) {
+    const r = String(role || "").toLowerCase();
+    if (r === "cos" || r === "root") return "#2dd4bf";
+    if (r === "blackboard") return "#a78bfa";
+    if (r === "investigator" || r === "researcher") return "#60a5fa";
+    if (r === "verifier") return "#fbbf24";
+    if (r === "synthesizer") return "#4ade80";
+    if (r === "planner" || r.indexOf("curator") === 0) return "#94a3b8";
+    return "#7dd3fc";
   }
 
-  function edgesFromDag(payload, nodes) {
-    if (payload && payload.graph && Array.isArray(payload.graph.edges)) return payload.graph.edges;
-    if (payload && Array.isArray(payload.edges)) return payload.edges;
+  function dagSummaryText(status, graph) {
+    const d = (status && status.dag) || {};
+    const nodes = (graph && graph.nodes) || [];
+    let n = nodes.length;
+    if (status && status.dag_nodes != null) n = status.dag_nodes;
+    else if (d.nodes != null && typeof d.nodes === "number") n = d.nodes;
+    const by = d.by_state || {};
+    const parts = [];
+    Object.keys(by).forEach(function (k) {
+      parts.push(k + "=" + by[k]);
+    });
+    if (!parts.length && nodes.length) {
+      const counts = {};
+      nodes.forEach(function (nd) {
+        const s = String(nd.state || "?");
+        counts[s] = (counts[s] || 0) + 1;
+      });
+      Object.keys(counts).forEach(function (k) {
+        parts.push(k + "=" + counts[k]);
+      });
+    }
+    const ready = d.ready || [];
+    const readyN = Array.isArray(ready) ? ready.length : 0;
+    let line = "nodes=" + n;
+    if (parts.length) line += " · " + parts.join(" ");
+    line += " · ready=" + readyN;
+    if (state.focusDeskId) line += " · focus=" + state.focusDeskId;
+    if (d.cycle) line += " · CYCLE: " + d.cycle;
+    return line;
+  }
+
+  function normalizeEdge(e) {
+    if (!e) return null;
+    const from = e.from != null ? e.from : e.source;
+    const to = e.to != null ? e.to : e.target;
+    if (from == null || to == null) return null;
+    return { from: String(from), to: String(to) };
+  }
+
+  /** Prefer status.dagGraph; else synthesize like Model.dagGraph from /api/dag nodes. */
+  function synthesizeDagGraph(status, dagPayload) {
+    const idleNodes = [
+      {
+        id: "cos",
+        label: "chief of staff",
+        title: "Chief of Staff",
+        role: "cos",
+        kind: "cos",
+        state: "ready",
+        tier: 0,
+        virtual: true,
+      },
+      {
+        id: "blackboard",
+        label: "blackboard",
+        title: "Blackboard",
+        role: "blackboard",
+        kind: "blackboard",
+        state: "ready",
+        tier: 2,
+        virtual: true,
+      },
+    ];
+    const idleEdges = [{ from: "cos", to: "blackboard" }];
+
+    const candidates = [
+      status && status.dagGraph,
+      status && status.dag && status.dag.graph,
+      status && status.graph,
+      dagPayload && dagPayload.graph,
+      dagPayload && dagPayload.dagGraph,
+    ];
+    for (let i = 0; i < candidates.length; i++) {
+      const g = candidates[i];
+      if (g && Array.isArray(g.nodes) && g.nodes.length >= 2) {
+        return {
+          nodes: g.nodes,
+          edges: (g.edges || []).map(normalizeEdge).filter(Boolean),
+          idle: !!g.idle,
+          label: g.label || "AGENT SPACE",
+        };
+      }
+    }
+
+    const items =
+      (dagPayload && (dagPayload.items || (Array.isArray(dagPayload.nodes) ? dagPayload.nodes : null))) ||
+      (status && status.dag && status.dag.items) ||
+      [];
+    const list = Array.isArray(items) ? items : [];
+    if (!list.length) {
+      return { nodes: idleNodes, edges: idleEdges, idle: true, label: "AGENT SPACE" };
+    }
+
+    const nodes = idleNodes.slice();
     const edges = [];
-    nodes.forEach(function (n) {
-      const deps = n.depends_on || n.deps || [];
-      deps.forEach(function (d) {
-        edges.push({ from: String(d), to: String(n.id) });
+    const workers = [];
+    const terminals = [];
+
+    list.forEach(function (it) {
+      if (!it || !it.id || it.id === "root" || it.kind === "root") return;
+      const role = String(it.role || it.kind || "worker").toLowerCase();
+      if (role === "cos" || role === "blackboard") return;
+      let tier = it.tier != null ? Number(it.tier) : 1;
+      if (role === "verifier" || role === "synthesizer") tier = 3;
+      const id = String(it.id);
+      nodes.push({
+        id: id,
+        label: id.length > 18 ? id.slice(0, 16) + "…" : id,
+        title: it.title || it.id,
+        role: role,
+        kind: it.kind || role,
+        state: it.state || "pending",
+        tier: tier,
+        virtual: false,
+      });
+      if (tier === 1) workers.push(id);
+      else if (tier === 3) terminals.push(id);
+      const deps = it.depends_on || it.deps || [];
+      if (!deps.length) edges.push({ from: "cos", to: id });
+      deps.forEach(function (dep) {
+        edges.push({ from: dep === "root" ? "cos" : String(dep), to: id });
       });
     });
-    return edges;
+
+    workers.forEach(function (w) {
+      edges.push({ from: w, to: "blackboard" });
+    });
+    if (terminals.length) {
+      edges.push({ from: "cos", to: "blackboard" });
+      terminals.forEach(function (t) {
+        edges.push({ from: "blackboard", to: t });
+      });
+    } else if (!workers.length) {
+      edges.push({ from: "cos", to: "blackboard" });
+    }
+
+    return {
+      nodes: nodes,
+      edges: edges,
+      idle: workers.length + terminals.length === 0,
+      label: "AGENT SPACE",
+    };
   }
 
-  function depthColumns(nodes) {
-    const byId = {};
+  function rebuildLayout() {
+    const g = state.graph || { nodes: [], edges: [] };
+    const nodes = g.nodes || [];
+    const canvas = el("agent-space-canvas");
+    const wrap = el("dag-graph");
+    if (!canvas || !wrap) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = Math.max(wrap.clientWidth || 200, 200);
+    const cssH = Math.max(wrap.clientHeight || 220, 200);
+    canvas.width = Math.floor(cssW * dpr);
+    canvas.height = Math.floor(cssH * dpr);
+    canvas.style.width = cssW + "px";
+    canvas.style.height = cssH + "px";
+    const ctx = canvas.getContext("2d");
+    if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    const padX = 36;
+    const padY = 36;
+    const w = cssW - padX * 2;
+    const h = cssH - padY * 2;
+    const tiers = {};
     nodes.forEach(function (n) {
-      byId[String(n.id)] = n;
+      const t = n.tier !== undefined ? Number(n.tier) : 1;
+      if (!tiers[t]) tiers[t] = [];
+      tiers[t].push(n);
     });
-    const depth = {};
-    function depList(n) {
-      return (n.depends_on || n.deps || []).map(String).filter(function (d) {
-        return byId[d];
-      });
-    }
-    function depthOf(id, stack) {
-      if (depth[id] != null) return depth[id];
-      if (stack[id]) return 0;
-      stack[id] = true;
-      const n = byId[id];
-      const deps = n ? depList(n) : [];
-      let d = 0;
-      deps.forEach(function (dep) {
-        d = Math.max(d, depthOf(dep, stack) + 1);
-      });
-      // Prefer explicit tier from graph_view when present
-      if (n && n.tier != null && deps.length === 0) d = Number(n.tier) || 0;
-      else if (n && n.tier != null) d = Math.max(d, Number(n.tier) || 0);
-      depth[id] = d;
-      delete stack[id];
-      return d;
-    }
-    nodes.forEach(function (n) {
-      depthOf(String(n.id), {});
-    });
-    // If all have tier, prefer tier columns
-    const allTier = nodes.every(function (n) {
-      return n.tier != null;
-    });
-    const cols = {};
-    nodes.forEach(function (n) {
-      const id = String(n.id);
-      const col = allTier ? Number(n.tier) || 0 : depth[id] || 0;
-      if (!cols[col]) cols[col] = [];
-      cols[col].push(n);
-    });
-    const keys = Object.keys(cols)
+    const tierKeys = Object.keys(tiers)
       .map(Number)
       .sort(function (a, b) {
         return a - b;
       });
-    return keys.map(function (k) {
-      return { depth: k, nodes: cols[k] };
+    const tierCount = Math.max(tierKeys.length, 1);
+    const out = [];
+    tierKeys.forEach(function (key, ti) {
+      const row = tiers[key];
+      const y = padY + (ti + 0.5) * (h / tierCount);
+      row.forEach(function (node, j) {
+        const x = row.length === 1 ? padX + w / 2 : padX + (j + 0.5) * (w / row.length);
+        out.push({
+          id: String(node.id),
+          label: node.label || node.id,
+          role: node.role || node.kind || "",
+          state: node.state || "",
+          virtual: !!node.virtual,
+          x: x,
+          y: y,
+          color: nodeColorForRole(node.role || node.kind),
+        });
+      });
+    });
+    state.layoutNodes = out;
+    paintAgentSpace();
+  }
+
+  function edgeFlowing(edge, pos) {
+    const a = pos[edge.from];
+    const b = pos[edge.to];
+    if (!a || !b) return false;
+    if (isActiveState(a.state) || isActiveState(b.state)) return true;
+    if (isActiveState(a.state) && isReadyState(b.state)) return true;
+    return false;
+  }
+
+  function paintAgentSpace() {
+    const canvas = el("agent-space-canvas");
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.width / dpr;
+    const h = canvas.height / dpr;
+    ctx.clearRect(0, 0, w, h);
+
+    const g = state.graph || { edges: [] };
+    const edges = g.edges || [];
+    const layout = state.layoutNodes || [];
+    const pos = {};
+    layout.forEach(function (n) {
+      pos[n.id] = n;
+    });
+    const t = state.animT;
+
+    edges.forEach(function (e) {
+      const a = pos[e.from];
+      const b = pos[e.to];
+      if (!a || !b) return;
+      const flowing = edgeFlowing(e, pos);
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      if (flowing) {
+        ctx.strokeStyle = "rgba(122, 162, 247, 0.8)";
+        ctx.lineWidth = 1.6;
+        ctx.setLineDash([5, 7]);
+        ctx.lineDashOffset = -((t * 48) % 12);
+      } else {
+        ctx.strokeStyle = "rgba(41, 46, 66, 0.95)";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([]);
+        ctx.lineDashOffset = 0;
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      if (flowing) {
+        // token-flow particles along active edges
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        for (let p = 0; p < 3; p++) {
+          const u = (t * 0.6 + p / 3) % 1;
+          ctx.beginPath();
+          ctx.arc(a.x + dx * u, a.y + dy * u, 2.5, 0, Math.PI * 2);
+          ctx.fillStyle = "rgba(158, 206, 106, 0.95)";
+          ctx.fill();
+        }
+      }
+    });
+
+    layout.forEach(function (n) {
+      const done = String(n.state).toLowerCase() === "done";
+      const active = isActiveState(n.state);
+      const isCos = String(n.role) === "cos";
+
+      if (isCos) {
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, 26, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(45, 212, 191, 0.12)";
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, 22, 0, Math.PI * 2);
+        ctx.strokeStyle = "rgba(45, 212, 191, 0.4)";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+
+      ctx.globalAlpha = done ? 0.55 : 1;
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, 11, 0, Math.PI * 2);
+      ctx.fillStyle = n.color;
+      ctx.fill();
+      ctx.lineWidth = isCos ? 2 : 1;
+      ctx.strokeStyle = isCos ? "#99f6e4" : "#1f2937";
+      ctx.stroke();
+
+      if (active) {
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, 14 + Math.sin(t * 6) * 1.5, 0, Math.PI * 2);
+        ctx.strokeStyle = "rgba(158, 206, 106, 0.7)";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+
+      ctx.fillStyle = "#c0caf5";
+      ctx.font =
+        (isCos || String(n.role) === "blackboard" ? "bold " : "") +
+        "10px IBM Plex Sans, system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      ctx.fillText(String(n.label || n.id), n.x, n.y + 14);
     });
   }
 
-  function renderDag(payload) {
-    const root = el("dag-graph");
-    const nodes = nodesFromDag(payload);
-    const edges = edgesFromDag(payload, nodes);
-    const focus = state.focusDeskId || "—";
-    setText("dag-meta", "focus: " + focus + (nodes.length ? " · " + nodes.length + " nodes" : ""));
-
-    if (!nodes.length) {
-      root.innerHTML = '<div class="dag-empty">DAG empty — start a desk to populate Agent Space.</div>';
-      return;
+  function ensureAnimLoop() {
+    if (state.animRaf) return;
+    function tick(ts) {
+      state.animT = (ts || 0) / 1000;
+      const pos = {};
+      (state.layoutNodes || []).forEach(function (n) {
+        pos[n.id] = n;
+      });
+      const g = state.graph || { edges: [] };
+      const needs =
+        (state.layoutNodes || []).some(function (n) {
+          return isActiveState(n.state);
+        }) ||
+        (g.edges || []).some(function (e) {
+          return edgeFlowing(e, pos);
+        });
+      paintAgentSpace();
+      if (needs) state.animRaf = requestAnimationFrame(tick);
+      else state.animRaf = 0;
     }
+    state.animRaf = requestAnimationFrame(tick);
+  }
 
-    const columns = depthColumns(nodes);
-    const colsHtml = columns
-      .map(function (col) {
-        const cards = col.nodes
-          .map(function (n) {
-            const id = String(n.id || "?");
-            const title = String(n.title || n.objective || n.label || "").slice(0, 64);
-            const st = String(n.state || "?");
-            const role = String(n.role || n.kind || "");
-            const virt = n.virtual ? " virtual" : "";
-            return (
-              '<div class="dag-node state-' +
-              esc(st) +
-              " role-" +
-              esc(role) +
-              virt +
-              '" data-node="' +
-              esc(id) +
-              '">' +
-              '<div class="nid">' +
-              esc(n.label || id) +
-              "</div>" +
-              (title && title !== id
-                ? '<div class="ntitle">' + esc(title) + "</div>"
-                : "") +
-              '<span class="nstate">' +
-              esc(st) +
-              "</span></div>"
-            );
-          })
-          .join("");
-        return (
-          '<div class="dag-col"><div class="dag-col-label">depth ' +
-          col.depth +
-          "</div>" +
-          cards +
-          "</div>"
-        );
-      })
-      .join("");
-
-    let edgeHtml = "";
-    if (edges.length) {
-      edgeHtml =
-        '<div class="dag-edges">edges: ' +
-        edges
-          .slice(0, 40)
-          .map(function (e) {
-            return "<code>" + esc(e.from) + "→" + esc(e.to) + "</code>";
-          })
-          .join(" · ") +
-        (edges.length > 40 ? " …" : "") +
-        "</div>";
-    }
-
-    root.innerHTML = '<div class="dag-cols">' + colsHtml + "</div>" + edgeHtml;
+  function renderAgentSpace(status, dagPayload) {
+    const graph = synthesizeDagGraph(status, dagPayload);
+    state.graph = graph;
+    setText("agent-space-title", graph.label || "AGENT SPACE");
+    setText("dag-meta", dagSummaryText(status, graph));
+    rebuildLayout();
+    ensureAnimLoop();
   }
 
   function renderBlackboard(payload) {
@@ -508,9 +713,7 @@
     const files = life.files || {};
     setText("s-files", (files.files || 0) + " / " + (files.lines || 0) + " lines");
     const hp = el("harness-path");
-    if (hp && life.cwd) {
-      hp.textContent = "harnesses.toml · " + life.cwd;
-    }
+    if (hp && life.cwd) hp.textContent = "harnesses.toml · " + life.cwd;
   }
 
   function renderRunChip() {
@@ -531,24 +734,12 @@
       ? "/api/dag?desk_id=" + encodeURIComponent(state.focusDeskId)
       : "/api/dag";
     Promise.all([
-      api("/api/status").catch(function () {
-        return {};
-      }),
-      api(dagPath).catch(function () {
-        return {};
-      }),
-      api("/api/desk/status").catch(function () {
-        return {};
-      }),
-      api("/api/desk_session").catch(function () {
-        return {};
-      }),
-      api("/api/lifecycle").catch(function () {
-        return null;
-      }),
-      api("/api/blackboard?n=12").catch(function () {
-        return {};
-      }),
+      api("/api/status").catch(function () { return {}; }),
+      api(dagPath).catch(function () { return {}; }),
+      api("/api/desk/status").catch(function () { return {}; }),
+      api("/api/desk_session").catch(function () { return {}; }),
+      api("/api/lifecycle").catch(function () { return null; }),
+      api("/api/blackboard?n=12").catch(function () { return {}; }),
     ])
       .then(function (parts) {
         const status = parts[0];
@@ -574,11 +765,10 @@
         }
 
         renderDesks();
-        renderDag(dag);
+        renderAgentSpace(status, dag);
         renderBlackboard(bb);
         if (life) renderLifecycle(life);
         renderRunChip();
-        updateStartLabel();
         setText("poll-status", "updated " + new Date().toLocaleTimeString());
       })
       .catch(function (e) {
@@ -609,28 +799,19 @@
     const kind = row.getAttribute("data-kind") || "auto";
     const id = row.getAttribute("data-id") || "";
     state.selectedKind = kind;
-    updateStartLabel();
     if (id && id.indexOf("kind:") !== 0) focusDesk(id);
     else renderDesks();
   });
 
   el("btn-refresh").addEventListener("click", refresh);
-  el("btn-start").addEventListener("click", function () {
-    const parsed = parseDeskQuery(el("query-input").value);
-    startDesk(parsed.kind || state.selectedKind || "auto");
-  });
-  el("query-input").addEventListener("input", updateStartLabel);
-  el("query-input").addEventListener("keydown", function (ev) {
-    if (ev.key === "Enter") {
-      const parsed = parseDeskQuery(el("query-input").value);
-      startDesk(parsed.kind || state.selectedKind || "auto");
-    }
-  });
   el("btn-bb-clear").addEventListener("click", clearBlackboard);
   document.querySelectorAll("[data-web]").forEach(function (b) {
     b.addEventListener("click", function () {
       setWeb(b.getAttribute("data-web"));
     });
+  });
+  window.addEventListener("resize", function () {
+    rebuildLayout();
   });
 
   refresh();
