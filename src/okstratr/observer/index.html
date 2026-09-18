@@ -10,38 +10,80 @@
   <header class="top">
     <div class="brand">okstratr · observer panel</div>
     <div class="chips" id="chips">
-      <span class="chip" id="chip-board">board: …</span>
+      <span class="chip" id="chip-board">bb: …</span>
       <span class="chip" id="chip-web">web: …</span>
       <span class="chip" id="chip-harness">harness: …</span>
-      <span class="chip" id="chip-dur">up: …</span>
+      <span class="chip" id="chip-run">Idle</span>
     </div>
     <div class="actions">
-      <button type="button" id="btn-refresh">Refresh</button>
-      <button type="button" id="btn-docs">Open docs</button>
+      <button type="button" id="btn-refresh" class="btn primary">Refresh</button>
     </div>
   </header>
 
-  <main class="grid">
-    <section class="card" id="desks-card">
-      <h2>Desks</h2>
-      <div id="desks" class="list">Loading…</div>
-    </section>
-    <section class="card" id="dag-card">
-      <h2>DAG</h2>
-      <div id="dag" class="list">Loading…</div>
-    </section>
-    <section class="card" id="settings-card">
-      <h2>Settings</h2>
-      <dl id="settings" class="settings">
+  <div class="shell">
+    <!-- Left rail: standing desks (DeskRail.qml) -->
+    <aside class="rail" id="desk-rail" aria-label="Standing desks">
+      <div class="rail-title">Standing desks</div>
+      <div id="desks" class="desk-list">Loading…</div>
+    </aside>
+
+    <!-- Main column -->
+    <main class="main">
+      <section class="query-row">
+        <input
+          id="query-input"
+          type="text"
+          class="query-input"
+          placeholder="Objective — defaults to auto; /curate /deck /work /code to override"
+          autocomplete="off"
+        />
+        <span class="chip cwd" id="cwd-chip" title="workspace / cwd">cwd: …</span>
+        <button type="button" id="btn-start" class="btn primary">Start auto</button>
+      </section>
+      <div class="action-msg" id="action-msg" hidden></div>
+
+      <section class="panel dag-panel">
+        <div class="panel-head">
+          <h2>DAG</h2>
+          <span class="muted" id="dag-meta">focus: —</span>
+        </div>
+        <div id="dag-graph" class="dag-graph" aria-live="polite">Loading…</div>
+      </section>
+
+      <section class="panel bb-panel">
+        <div class="panel-head">
+          <h2>Blackboard</h2>
+          <button type="button" id="btn-bb-clear" class="btn ghost">Clear</button>
+        </div>
+        <div id="blackboard" class="bb-list">Loading…</div>
+      </section>
+    </main>
+
+    <!-- Right strip: config -->
+    <aside class="config" aria-label="Settings">
+      <div class="rail-title">Config</div>
+      <dl class="settings" id="settings">
+        <dt>bb duration</dt><dd id="s-board">…</dd>
+        <dt>web</dt><dd id="s-web">…</dd>
+        <dt>harness</dt><dd id="s-harness">…</dd>
         <dt>serve</dt><dd id="s-serve">…</dd>
-        <dt>observer</dt><dd id="s-observer">…</dd>
-        <dt>cwd / backend</dt><dd id="s-cwd">…</dd>
+        <dt>cwd</dt><dd id="s-cwd">…</dd>
+        <dt>backend</dt><dd id="s-backend">…</dd>
         <dt>tokens</dt><dd id="s-tokens">n/a</dd>
-        <dt>files / lines</dt><dd id="s-files">…</dd>
+        <dt>files</dt><dd id="s-files">…</dd>
       </dl>
+      <div class="web-btns">
+        <span class="muted">Web egress</span>
+        <div class="btn-row">
+          <button type="button" class="btn mini" data-web="off">Off</button>
+          <button type="button" class="btn mini" data-web="once">Once</button>
+          <button type="button" class="btn mini" data-web="session">Session</button>
+        </div>
+      </div>
+      <p class="hint harness-path" id="harness-path">harnesses.toml — see serve cwd</p>
       <p class="hint">Chat stays in Herdr / CLI harnesses. This panel is desks + DAG only.</p>
-    </section>
-  </main>
+    </aside>
+  </div>
 
   <footer class="foot">
     <span id="poll-status">polling…</span>

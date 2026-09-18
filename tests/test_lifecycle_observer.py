@@ -111,3 +111,27 @@ def test_observer_assets_exist() -> None:
     html = (root / "index.html").read_text(encoding="utf-8")
     assert "observer panel" in html.lower()
     assert "butter" not in html.lower()
+
+
+def test_observer_js_has_desk_action_hooks() -> None:
+    """Light contract: observer JS wires Panel/DeskRail desk POSTs."""
+    from okstratr.lifecycle import observer_asset_dir
+
+    root = observer_asset_dir()
+    js = (root / "observer.js").read_text(encoding="utf-8")
+    html = (root / "index.html").read_text(encoding="utf-8")
+    assert "Standing desks" in html or "standing desks" in html.lower()
+    assert 'id="desk-rail"' in html or "desk-rail" in html
+    assert 'id="dag-graph"' in html
+    for path in (
+        "/api/desk/focus",
+        "/api/desk/start",
+        "/api/desk/stop",
+        "/api/desk/dismiss",
+        "/api/desk/delete",
+        "/api/blackboard/clear",
+    ):
+        assert path in js, path
+    assert "drive_herdr" in js
+    assert "depends_on" in js or "depth" in js
+    assert "butter" not in js.lower()
