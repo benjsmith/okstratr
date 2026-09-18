@@ -16,8 +16,9 @@ okstratr began as an Omarchy desk panel paired with a **grok-only** Herdr
    cursor, …), aligned with Herdr `--kind` values where possible.
 4. Config (Switchbay-inspired, **no LiteLLM**) controls which harnesses +
    models + settings may be fanned out.
-5. On Mac (no Omarchy): `herdr` + `okstratr serve` + `okstratr tui` should
-   give the same desk/thread grouping labels as today.
+5. On Mac (no Omarchy): `okstratr start` + **observer panel** is the primary
+   path; `okstratr tui` remains optional/legacy. Desk/thread grouping labels
+   unchanged. (Superseded UI primacy: ADR-003.)
 6. Herdr remains the multiplexer when present; a **direct CLI adapter**
    (subprocess without Herdr) is required for environments without Herdr.
 
@@ -67,19 +68,21 @@ are unchanged until they `harness enable` others.
 
 - `okstratr harness list|detect|enable|disable`
 - `okstratr config show|set …`
-- `okstratr tui` — minimal Textual UI (optional extra `[tui]`); `--snapshot`
-  plain fallback; talks to `http://127.0.0.1:8767` (same as Panel)
+- `okstratr tui` — **legacy/optional** Textual UI (extra `[tui]`); `--snapshot`
+  plain fallback; talks to `http://127.0.0.1:8767` (same API as observer/Panel).
+  Primary visual is the HTML **observer panel** (ADR-003), not the TUI.
 - `okstratr agents` — desk/thread filtered agent list stub
 
 ### Observability
 
 Every seat still carries **desk_id + thread_id** labels for Herdr grouping.
-Mac workflow:
+Mac workflow (primary — see ADR-003):
 
 ```text
-herdr          # multiplexer (optional)
-okstratr serve # daemon :8767
-okstratr tui   # desk brain UI (Ghostty / any terminal)
+okstratr start --yes              # daemon + observer :8767
+open http://127.0.0.1:8767/observer/   # primary visual console
+# herdr          # multiplexer (optional)
+# okstratr tui   # legacy/optional Textual / --snapshot
 ```
 
 **No Herdr on Mac?** Point seating at the direct CLI adapter (uses `grok` etc.):
@@ -206,3 +209,9 @@ CLI today: `okstratr harness list|enable|disable`, `okstratr config show|set`.
 - `drive_herdr` / `drive_seats` means drive seats; with `backend=direct` never
   starts Herdr panes (even if a broken `herdr` shim is on PATH).
 - Mac without Herdr: `okstratr config set backend direct`.
+
+### Product-shape cleanup (2026-09-18)
+
+- Document observer panel as primary visual; TUI marked legacy/optional.
+- Omarchy Panel remains optional thin client (not deleted).
+- See `docs/CLEANUP.md` and ADR-003.

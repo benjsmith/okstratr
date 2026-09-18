@@ -1,7 +1,7 @@
 [project]
 name = "okstratr"
 version = "0.1.0"
-description = "CLI/TUI desk-brain orchestrator — harness-agnostic seating, DAG, CoS, blackboard; pairs with Herdr (Omarchy Panel is a client)"
+description = "Desk-brain kernel + skill: observer panel (primary visual), harness-agnostic seating, DAG, CoS, blackboard; Herdr/CLI = text I/O; Omarchy QML optional"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }

@@ -203,7 +203,7 @@ def main(argv=None) -> int:
     # Deprecated alias — one release
     seat = sub.add_parser(
         "seat",
-        help="DEPRECATED: alias for 'desk start auto …' (warns once)",
+        help="DEPRECATED — use 'desk start [kind] …'; thin alias for 'desk start auto …' (warns)",
     )
     seat.add_argument("objective", nargs="*", default=[])
     seat.add_argument("--herdr", action="store_true", help="Also launch/focus Herdr")
@@ -377,7 +377,7 @@ def main(argv=None) -> int:
     cd_p = sub.add_parser("cd", help="Set/show operating workspace directory (seat sandbox root)")
     cd_p.add_argument("path", nargs="?", default=None, help="Directory to set; omit to show current")
 
-    tui_p = sub.add_parser("tui", help="Minimal desk TUI (Textual optional extra [tui])")
+    tui_p = sub.add_parser("tui", help="LEGACY/OPTIONAL desk TUI (Textual [tui]); prefer observer panel — not primary Mac path")
     tui_p.add_argument("--snapshot", action="store_true", help="One-shot text snapshot")
     tui_p.add_argument("--plain", action="store_true", help="Force plain snapshot")
 
@@ -500,8 +500,8 @@ def main(argv=None) -> int:
     if args.cmd == "seat":
         # Deprecated thin alias → desk start auto …
         print(
-            "warning: 'seat' is deprecated; use 'desk start [kind] [objective…]' "
-            "(alias calls desk start auto for one release)",
+            "DEPRECATED: 'okstratr seat' — use 'okstratr desk start [kind] [objective…]'. "
+            "This alias still calls desk start auto; it will be removed in a future release.",
             file=sys.stderr,
         )
         from . import desks, herdr, status
@@ -803,9 +803,9 @@ def main(argv=None) -> int:
                 "grouped": grouped,
                 "label_convention": herdr.LABEL_CONVENTION,
                 "mac_howto": (
-                    "herdr &  # multiplexer\n"
-                    "okstratr serve  # daemon :8767\n"
-                    "okstratr tui    # desk brain UI\n"
+                    "okstratr start --yes  # daemon + observer :8767\n"
+                    "open http://127.0.0.1:8767/observer/  # primary visual\n"
+                    "# okstratr tui  # legacy/optional\n"
                     "okstratr agents  # desk_id/thread_id groupings"
                 ),
             }

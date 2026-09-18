@@ -1,6 +1,8 @@
 # Okstratr architecture
 
-> **Product vision:** **[ADR-001-cli-tui-harness.md](ADR-001-cli-tui-harness.md)** — CLI/TUI-first; Omarchy Panel = thin client of this daemon; harness-agnostic seating.
+> **Product vision:** **[ADR-003-skill-observer-vs-kernel.md](ADR-003-skill-observer-vs-kernel.md)** — skill ships kernel + **observer panel** (primary visual; no chat/query bar); Herdr/CLI = text I/O; Omarchy QML = optional thin client; TUI = optional/legacy.
+>
+> Historical seating ADR: **[ADR-001-cli-tui-harness.md](ADR-001-cli-tui-harness.md)** — harness-agnostic seating + thin Omarchy client.
 >
 
 > Desk / kernel design authority: **[DESK-KERNEL.md](DESK-KERNEL.md)**.
@@ -41,11 +43,11 @@ ingest — those stay in **okbay**. Desks bind the **active okbay workspace / th
 |-------|--------|----------------|
 | **Knowledge / coverage** | **okbay** | Graph, Atlas, ingest, reviews land path, workspaces |
 | **Runtime / multiplexer** | **Herdr** | Panes, workspaces, agent lifecycle (`working` / `blocked` / `idle`), socket/CLI to start / prompt / wait / stop agents |
-| **Plan + memory of the desk** | **okstratr** | Kernel + desks, durable product DAG, CoS, human blackboard, schedule, harness registry, CLI/TUI; Omarchy bar/panel is a **client** of the daemon (ADR-001) |
+| **Plan + memory of the desk** | **okstratr** | Kernel + desks, durable product DAG, CoS, human blackboard, schedule, harness registry, CLI; **observer panel** = primary visual (ADR-003); Omarchy QML + TUI = optional/legacy clients (ADR-001) |
 
 **okstratr** owns the plan + memory; **Herdr** owns live agent terminals. Neither replaces the other.
 
-Text input lives in **Herdr**; okstratr UI is left-pane desk switch + DAG/blackboard (**no free text**). Close warns / suspends kernel. See [DESK-KERNEL.md](DESK-KERNEL.md#herdr-interaction).
+Text input lives in **Herdr / CLI harnesses**; the **observer panel** is desks + AGENT SPACE + blackboard (**no chat / objective query bar**). Omarchy Panel.qml may still expose a native query box for guest — prefer observer. Close warns / suspends kernel. See [DESK-KERNEL.md](DESK-KERNEL.md#herdr-interaction).
 
 ## Desk verbs (CLI)
 
@@ -180,7 +182,7 @@ okstratr bb post|head|search|clear
 
 - `service` — keep-loaded headless
 - `bar-widget` — chip: desk **kind · state** (working|quiet) + DAG count / SETUP / STALE — not “seated”
-- `panel` — fullscreen FloatingWindow desk UI (not Overlay): standing-desk rail, AGENT SPACE DAG canvas + blackboard, “Open in Herdr” (no text input)
+- `panel` — optional Omarchy FloatingWindow twin of the HTML observer (not Overlay): rail + AGENT SPACE + blackboard; **observer panel is primary** cross-platform console
 
 No overlay kind in v0 (okbay owns Atlas overlay).
 
@@ -226,6 +228,24 @@ src/okstratr/
   cli.py             status | desk | seat(deprecated) | …
   status.py          status.json publisher
 ```
+
+
+## Kept vs legacy surfaces
+
+| Surface | Status | Notes |
+|---------|--------|-------|
+| **Kernel daemon** (`serve` / `start`) | **Kept — core** | SSOT; HTTP `:8767` |
+| **Skill** (`skills/okstratr/`) | **Kept — core** | Ships server + observer assets |
+| **Observer panel** (`/observer/`, `/panel/`) | **Kept — primary visual** | No chat/query bar (ADR-003) |
+| **CLI lifecycle** (`doctor/start/status/…`) | **Kept — core** | Consent-first; `--yes` for automation |
+| **Herdr / direct harness seating** | **Kept — core** | Text I/O + finite jobs |
+| **Omarchy QML** (`Panel.qml`, `DeskRail.qml`, `BarWidget.qml`) | **Kept — optional** | Native twin / bar; do not delete while guest uses them |
+| **TUI** (`okstratr tui`) | **Legacy / optional** | `--snapshot` / Textual; not primary Mac path |
+| **`okstratr seat` / `POST /api/seat`** | **Deprecated** | Alias → `desk start auto`; prefer `desk` |
+| **`contrib/guest-apply-main.sh` + `setup.sh`** | **Kept** | Omarchy guest apply / install |
+| **One-shot `guest-apply-phase*.sh` / misc apply scripts** | **Removed** | Superseded by `guest-apply-main.sh` |
+
+See also [CLEANUP.md](CLEANUP.md).
 
 ## Separation from okbay
 
