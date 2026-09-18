@@ -133,5 +133,30 @@ def test_observer_js_has_desk_action_hooks() -> None:
     ):
         assert path in js, path
     assert "drive_herdr" in js
-    assert "depends_on" in js or "depth" in js
     assert "butter" not in js.lower()
+
+
+def test_observer_has_agent_space_no_query_input() -> None:
+    """Observer is desks + AGENT SPACE canvas; no chat/objective text input."""
+    from okstratr.lifecycle import observer_asset_dir
+
+    root = observer_asset_dir()
+    html = (root / "index.html").read_text(encoding="utf-8")
+    js = (root / "observer.js").read_text(encoding="utf-8")
+    css = (root / "observer.css").read_text(encoding="utf-8")
+
+    # No query / start-from-query form
+    assert "query-input" not in html
+    assert "btn-start" not in html
+    assert "<textarea" not in html.lower()
+    assert "query-input" not in js
+    assert "parseDeskQuery" not in js
+
+    # AGENT SPACE canvas + token-flow markers
+    assert "AGENT SPACE" in html or "agent-space" in html
+    assert "agent-space-canvas" in html
+    assert "agent-space" in js.lower() or "AGENT SPACE" in js
+    assert "token-flow" in js
+    assert "requestAnimationFrame" in js
+    assert "synthesizeDagGraph" in js or "dagGraph" in js
+    assert "agent-space-canvas" in css or ".agent-space" in css
