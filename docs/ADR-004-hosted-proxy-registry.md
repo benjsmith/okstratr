@@ -59,3 +59,11 @@ curl -s 'http://127.0.0.1:8767/embed/okstratr/observer/' | grep OKSTRATR_PUBLIC_
 # Registry API (shells configure okstratr)
 curl -s http://127.0.0.1:8767/api/harness | jq '.harnesses[].id'
 ```
+
+## Follow-on (Phase 1b)
+
+Desk-dashboard **stats and groupings** (tokens, working/idle, files/lines, by-kind /
+by-state, Quiet all, schedule badge) live on the observer and remain visible in
+hosted mode. Inventory + remaining gaps:
+[`MIGRATION-AGENT-DASHBOARD.md`](./MIGRATION-AGENT-DASHBOARD.md). No chat bar.
+

@@ -14,8 +14,12 @@
       <span class="chip" id="chip-web">web: …</span>
       <span class="chip" id="chip-harness">harness: …</span>
       <span class="chip" id="chip-run">Idle</span>
+      <span class="chip desk-stat" id="chip-desks" title="Standing desks working / idle">desks: …</span>
+      <span class="chip desk-stat" id="chip-tokens" title="Tokens from lifecycle (n/a when unknown)">tok: …</span>
+      <span class="chip desk-stat" id="chip-files" title="Files / lines from lifecycle">files: …</span>
     </div>
     <div class="actions">
+      <button type="button" id="btn-quiet-all" class="btn ghost" title="Quiet every working standing desk">Quiet all</button>
       <button type="button" id="btn-refresh" class="btn primary">Refresh</button>
     </div>
   </header>
@@ -23,7 +27,15 @@
   <div class="shell">
     <!-- Left rail: standing desks (DeskRail.qml) -->
     <aside class="rail" id="desk-rail" aria-label="Standing desks">
-      <div class="rail-title">Standing desks</div>
+      <div class="rail-title-row">
+        <div class="rail-title">Standing desks</div>
+        <div class="rail-group-filter" id="desk-group-filter" role="group" aria-label="Desk grouping">
+          <button type="button" class="btn mini active" data-group="all" title="Show all kinds">All</button>
+          <button type="button" class="btn mini" data-group="working" title="Working only">Run</button>
+          <button type="button" class="btn mini" data-group="quiet" title="Idle / quiet only">Idle</button>
+        </div>
+      </div>
+      <div id="desk-kind-summary" class="desk-kind-summary" aria-label="Desks by kind"></div>
       <div id="desks" class="desk-list">Loading…</div>
     </aside>
 
@@ -33,6 +45,32 @@
       <div class="status-line">
         <span class="chip cwd" id="cwd-chip" title="workspace / cwd">cwd: …</span>
       </div>
+
+      <!-- Desk dashboard stats (Switchbay Agents parity) — visible in hosted mode -->
+      <section class="panel desk-dash-panel" id="desk-dashboard" aria-label="Desk dashboard">
+        <div class="panel-head">
+          <h2>Desk dashboard</h2>
+          <span class="muted" id="desk-dash-meta">stats from /api/lifecycle</span>
+        </div>
+        <div class="desk-dash-grid" id="desk-dash-stats">
+          <div class="dash-stat"><span class="dash-label">Working</span><span class="dash-val" id="dash-working">0</span></div>
+          <div class="dash-stat"><span class="dash-label">Idle</span><span class="dash-val" id="dash-quiet">0</span></div>
+          <div class="dash-stat"><span class="dash-label">Total</span><span class="dash-val" id="dash-total">0</span></div>
+          <div class="dash-stat"><span class="dash-label">Tokens</span><span class="dash-val" id="dash-tokens">n/a</span></div>
+          <div class="dash-stat"><span class="dash-label">Files</span><span class="dash-val" id="dash-files">0</span></div>
+          <div class="dash-stat"><span class="dash-label">Lines</span><span class="dash-val" id="dash-lines">0</span></div>
+        </div>
+        <div class="desk-dash-groups">
+          <div class="dash-group">
+            <div class="dash-group-title">By kind</div>
+            <div id="dash-by-kind" class="dash-chips">—</div>
+          </div>
+          <div class="dash-group">
+            <div class="dash-group-title">By state</div>
+            <div id="dash-by-state" class="dash-chips">—</div>
+          </div>
+        </div>
+      </section>
 
       <section class="panel agent-space-panel" aria-label="Agent Space">
         <div class="panel-head agent-space-head">
