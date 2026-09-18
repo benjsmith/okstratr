@@ -830,7 +830,7 @@ class DeskRegistry:
         """Prefer the live global DAG when this desk is active; else desk file.
 
         Seating (run_one / maybe_quiet) mutates the process-global ``dag.json``.
-        HTTP/TUI should use :func:`load_dag_for_api`, which prefers the desk file
+        HTTP clients should use :func:`load_dag_for_api`, which prefers the desk file
         when the global copy is empty.
         """
         if self.active_id == desk.id:
@@ -865,7 +865,7 @@ def load_dag_for_api(desk_id: str | None = None) -> dict[str, Any]:
     """Resolve DAG payload for GET /api/dag (desk file first).
 
     Returns a client-friendly summary where ``nodes`` is a **list** of node
-    dicts (TUI/Panel), plus ``node_count``, ``items``, ``desk_id``, ``source``.
+    dicts (observer/Panel), plus ``node_count``, ``items``, ``desk_id``, ``source``.
     """
     reg = default_registry(force_reload=True)
     desk = None
@@ -920,7 +920,7 @@ def load_dag_for_api(desk_id: str | None = None) -> dict[str, Any]:
     items = list(summary.get("items") or [])
 
     out = dict(summary) if isinstance(summary, dict) else {}
-    out["nodes"] = items  # list for TUI / Panel (not the integer count)
+    out["nodes"] = items  # list for observer / Panel (not the integer count)
     out["items"] = items
     out["node_count"] = len(items)
     out["source"] = source

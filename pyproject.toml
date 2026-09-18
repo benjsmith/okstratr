@@ -9,7 +9,6 @@ authors = [{ name = "Ben Smith" }]
 dependencies = []
 
 [project.optional-dependencies]
-tui = ["textual>=0.80"]
 dev = ["pytest>=8"]
 
 [project.scripts]

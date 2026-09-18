@@ -57,7 +57,7 @@ _KIND_RE = re.compile(
 
 
 def parse_slash_directives(text: str) -> SlashDirectives:
-    """Parse leading slash directives from a query / TUI input line.
+    """Parse leading slash directives from a query / harness input line.
 
     Supported:
       /work|/curate|/code|/deck|/auto   — desk kind

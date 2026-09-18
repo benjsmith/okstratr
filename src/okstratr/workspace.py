@@ -1,4 +1,4 @@
-"""Operating workspace directory for seats + TUI `/cd`.
+"""Operating workspace directory for seats + `/cd`.
 
 Seats MUST run inside a strict sandbox rooted at the operating directory:
 chdir into the resolved path; reject path escapes (symlinks that leave the

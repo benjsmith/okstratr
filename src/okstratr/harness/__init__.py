@@ -17,6 +17,7 @@ from .registry import BUILTIN, DEFAULT_PREFERENCE, detect_all, detect_installed,
 from .rungs import RUNGS, effort_to_rung, parse_model_token, resolve_model_for_rung
 from .select import choose_harness, list_models, reset_rr, resolve_herdr_kind
 from .slash import SLASH_HELP, SlashDirectives, apply_harness_slash_to_env, parse_slash_directives
+from .slash_actions import apply_slash_env, apply_slash_side_effects, slash_is_bb_control_only
 from .types import HarnessDef, HarnessId, ModelSpec, SeatRequest, SeatResult
 
 __all__ = [
@@ -48,6 +49,9 @@ __all__ = [
     "load",
     "parse_model_token",
     "parse_slash_directives",
+    "apply_slash_env",
+    "apply_slash_side_effects",
+    "slash_is_bb_control_only",
     "reset_rr",
     "resolve_herdr_kind",
     "resolve_model_for_rung",

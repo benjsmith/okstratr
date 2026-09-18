@@ -26,7 +26,7 @@ description: >-
 From a checkout (editable install):
 
 ```bash
-pip install -e '.[tui]'   # or: uv pip install -e '.[tui]'
+pip install -e '.[dev]'   # or: uv pip install -e '.[dev]'
 # Optional: copy/link this skill into the harness skill dir
 #   skills/okstratr/SKILL.md  →  <harness-skills>/okstratr/SKILL.md
 ```
@@ -60,7 +60,7 @@ okstratr observer       # print observer URL; --serve hosts :8768 dedicated
 okstratr panel          # alias of observer
 ```
 
-## Slash (in-harness / TUI)
+## Slash (in-harness)
 
 ```
 /okstratr start
@@ -69,7 +69,7 @@ okstratr panel          # alias of observer
 /okstratr status
 ```
 
-Wired in TUI `apply_slash_side_effects`. Same consent rules as CLI (no silent start).
+Wired via `harness.slash_actions.apply_slash_side_effects`. Same consent rules as CLI (no silent start).
 
 ## Observer panel URL
 

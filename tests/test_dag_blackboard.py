@@ -191,7 +191,7 @@ def test_http_dag_blackboard(state_dir: Path) -> None:
 
         with urllib.request.urlopen(base + "/api/dag") as r:
             body = json.loads(r.read().decode())
-        # /api/dag returns nodes as a list (TUI); node_count is the integer
+        # /api/dag returns nodes as a list (observer/Panel); node_count is the integer
         n = body.get("node_count")
         if n is None:
             nodes = body.get("nodes")

@@ -1,6 +1,6 @@
 # Okstratr architecture
 
-> **Product vision:** **[ADR-003-skill-observer-vs-kernel.md](ADR-003-skill-observer-vs-kernel.md)** — skill ships kernel + **observer panel** (primary visual; no chat/query bar); Herdr/CLI = text I/O; Omarchy QML = optional thin client; TUI = optional/legacy.
+> **Product vision:** **[ADR-003-skill-observer-vs-kernel.md](ADR-003-skill-observer-vs-kernel.md)** — skill ships kernel + **observer panel** (primary visual; no chat/query bar); Herdr/CLI = text I/O; Omarchy QML = optional thin client; TUI removed — observer only.
 >
 > Historical seating ADR: **[ADR-001-cli-tui-harness.md](ADR-001-cli-tui-harness.md)** — harness-agnostic seating + thin Omarchy client.
 >
@@ -43,7 +43,7 @@ ingest — those stay in **okbay**. Desks bind the **active okbay workspace / th
 |-------|--------|----------------|
 | **Knowledge / coverage** | **okbay** | Graph, Atlas, ingest, reviews land path, workspaces |
 | **Runtime / multiplexer** | **Herdr** | Panes, workspaces, agent lifecycle (`working` / `blocked` / `idle`), socket/CLI to start / prompt / wait / stop agents |
-| **Plan + memory of the desk** | **okstratr** | Kernel + desks, durable product DAG, CoS, human blackboard, schedule, harness registry, CLI; **observer panel** = primary visual (ADR-003); Omarchy QML + TUI = optional/legacy clients (ADR-001) |
+| **Plan + memory of the desk** | **okstratr** | Kernel + desks, durable product DAG, CoS, human blackboard, schedule, harness registry, CLI; **observer panel** = primary visual (ADR-003); Omarchy QML = optional thin client (ADR-001); TUI removed |
 
 **okstratr** owns the plan + memory; **Herdr** owns live agent terminals. Neither replaces the other.
 
@@ -240,7 +240,6 @@ src/okstratr/
 | **CLI lifecycle** (`doctor/start/status/…`) | **Kept — core** | Consent-first; `--yes` for automation |
 | **Herdr / direct harness seating** | **Kept — core** | Text I/O + finite jobs |
 | **Omarchy QML** (`Panel.qml`, `DeskRail.qml`, `BarWidget.qml`) | **Kept — optional** | Native twin / bar; do not delete while guest uses them |
-| **TUI** (`okstratr tui`) | **Legacy / optional** | `--snapshot` / Textual; not primary Mac path |
 | **`okstratr seat` / `POST /api/seat`** | **Deprecated** | Alias → `desk start auto`; prefer `desk` |
 | **`contrib/guest-apply-main.sh` + `setup.sh`** | **Kept** | Omarchy guest apply / install |
 | **One-shot `guest-apply-phase*.sh` / misc apply scripts** | **Removed** | Superseded by `guest-apply-main.sh` |

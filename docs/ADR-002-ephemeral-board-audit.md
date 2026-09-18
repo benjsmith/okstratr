@@ -29,7 +29,7 @@ wants retention to work.
 - CoS / agent posts clear **as soon as possible** (prune on post/read,
   desk quiet/stop/dismiss, serve start).
 - Hard max age for **all** entries: **60 minutes** (never retain >60m).
-- TUI chip: `bb: ephemeral(≤60m)` vs `bb: 3d`.
+- Status/observer chip: `bb: ephemeral(≤60m)` vs `bb: 3d`.
 
 ### 3. Clear = hard wipe, no archives
 

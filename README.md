@@ -6,7 +6,7 @@ Plugin id: `benjsmith.okstratr` · HTTP: **127.0.0.1:8767** (okbay keeps **8766*
 
 ## Product story
 
-After three iterations (Omarchy QML plugin → CLI/TUI → skill + observer), the coherent shape is:
+After three iterations (Omarchy QML plugin → CLI → skill + observer), the coherent shape is:
 
 | Surface | Role |
 |---------|------|
@@ -15,7 +15,6 @@ After three iterations (Omarchy QML plugin → CLI/TUI → skill + observer), th
 | **Observer panel** (`/observer/`) | **Primary visual console** — desks / AGENT SPACE / blackboard / settings; **no chat or objective query bar** |
 | **Herdr / CLI harnesses** | **Text I/O** (prompts, conversation, agent terminals) |
 | **Omarchy QML** (`Panel.qml`, bar, DeskRail) | **Optional thin client** — bar chip + can open observer; **not** the main console anymore |
-| **TUI** (`okstratr tui`) | **Optional / legacy** (`--snapshot` / Textual); not the primary Mac path |
 
 Mac path: install skill + run lifecycle CLI + open the observer panel. Omarchy guest may still load the QML plugin; prefer opening the observer for the shared console.
 
@@ -39,7 +38,7 @@ Work-coverage default lives in **okbay** (magical all-`~/Work`). **Biocure** is 
 
 ```bash
 # Install (editable) + optional skill copy into your harness skills dir
-uv pip install -e '.[dev,tui]'   # or: pip install -e '.[dev,tui]'
+uv pip install -e '.[dev]'   # or: pip install -e '.[dev]'
 
 # Lifecycle (consent on start unless --yes)
 okstratr doctor
@@ -73,9 +72,6 @@ okstratr start --yes          # daemon + observer on :8767
 open http://127.0.0.1:8767/observer/
 
 # Text I/O: your harness CLI (grok / claude / …) or Herdr if installed
-# Optional legacy TUI (not primary Mac path):
-#   okstratr tui --snapshot
-#   okstratr tui              # needs [tui] extra / Textual
 
 okstratr agents
 okstratr agents --desk <desk_id>
@@ -109,7 +105,7 @@ Every seat (Herdr + direct) labels with `desk_id` + `thread_id`. Config file:
 - **Schedule parse**: named cadences + intervals
 - **Persistent DAG** + **blackboard**
 - **Planner** kind-aware templates; **Herdr** `herdr run-ready` finite jobs
-- CLI: `status | start|restart|shutdown | desk … | web | seat (deprecated) | cos | herdr | dag | bb | serve | observer | tui (legacy)`
+- CLI: `status | start|restart|shutdown | desk … | web | seat (deprecated) | cos | herdr | dag | bb | serve | observer`
 - HTTP: `/health`, `/api/status`, `/api/desk/*`, `/observer/`, `/api/seat` (deprecated alias), …
 - **Observer panel** is the primary visual: standing rail, AGENT SPACE canvas, blackboard — **no query bar**
 - Omarchy **Panel.qml** remains a native twin / optional client (may still show a query box for guest; prefer observer)
@@ -141,7 +137,7 @@ contrib/setup.sh       Omarchy visible installer
 contrib/guest-apply-main.sh  Omarchy guest pull+restart
 contrib/hypr-bindings.lua    optional Super+Shift+O
 docs/ARCHITECTURE.md   package map + kept vs legacy surfaces
-docs/ADR-001… / ADR-003…     CLI/TUI harness + skill/observer decisions
+docs/ADR-001… / ADR-003…     CLI harness + skill/observer decisions
 tests/
 ```
 
@@ -157,7 +153,7 @@ Panel open/close persists in `~/.local/state/okstratr/ui.json`. Theme colors fro
 
 ```sh
 cd /path/to/okstratr
-uv pip install -e '.[dev,tui]'
+uv pip install -e '.[dev]'
 okstratr start --yes
 okstratr desk start work "Ship desk brain"
 okstratr desk status
