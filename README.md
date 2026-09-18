@@ -31,6 +31,41 @@ Work-coverage default lives in **okbay** (magical all-`~/Work`). **Biocure** is 
 
 See [docs/ADR-001-cli-tui-harness.md](docs/ADR-001-cli-tui-harness.md) for the CLI/TUI-first + harness-agnostic vision, and [docs/DESK-KERNEL.md](docs/DESK-KERNEL.md) for the hiring-manager / desk / Herdr design, and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for package map + APIs.
 
+
+
+## Skill + observer panel
+
+okstratr ships as an **in-harness skill** (`skills/okstratr/SKILL.md`) that bundles
+the desk-kernel server and the **observer panel** (HTML desks/DAG/settings surface —
+not a second chat). Text I/O stays in Herdr / other CLI harnesses; Omarchy may display
+the observer panel.
+
+```bash
+# Install (editable) + optional skill copy into your harness skills dir
+pip install -e '.[tui]'
+
+# Lifecycle (consent on start unless --yes)
+okstratr doctor
+okstratr start            # prompts if serve is down
+okstratr start --yes      # automation / already consented
+okstratr status           # status box
+okstratr restart
+okstratr shutdown
+
+# Observer panel (when serve is up)
+open http://127.0.0.1:8767/observer/   # also /panel/
+okstratr observer                     # prints URL
+okstratr panel --serve                # optional dedicated :8768 host
+```
+
+In-harness slash:
+
+```
+/okstratr start | restart | shutdown | status
+```
+
+See [docs/ADR-003-skill-observer-vs-kernel.md](docs/ADR-003-skill-observer-vs-kernel.md).
+
 ### Mac CLI workflow (no Omarchy)
 
 ```bash

@@ -449,8 +449,26 @@ def render_live_snapshot() -> str:
 
 
 def apply_slash_side_effects(directives: SlashDirectives) -> str | None:
-    """Apply non-env slash side effects (bb clear/duration/prune/audit)."""
+    """Apply non-env slash side effects (bb clear/duration/prune/audit + /okstratr)."""
     toasts: list[str] = []
+    oc = getattr(directives, "okstratr_cmd", None)
+    if oc:
+        from . import lifecycle
+
+        if oc == "status":
+            toasts.append(lifecycle.format_status_box())
+        elif oc == "start":
+            out = lifecycle.start(prompt=True, yes=False, observer=True)
+            if out.get("need_consent"):
+                toasts.append(out.get("message") or lifecycle.CONSENT_PROMPT)
+            else:
+                toasts.append(out.get("message") or ("started" if out.get("ok") else "start failed"))
+        elif oc == "restart":
+            out = lifecycle.restart(yes=True, observer=True)
+            toasts.append(out.get("message") or "restarted")
+        elif oc == "shutdown":
+            out = lifecycle.shutdown()
+            toasts.append(out.get("message") or "shutdown")
     if getattr(directives, "prune_board", False):
         result = http_json("POST", "/api/blackboard/prune", {})
         if not isinstance(result, dict) or not result.get("ok"):
@@ -500,7 +518,7 @@ def apply_slash_side_effects(directives: SlashDirectives) -> str | None:
 
 
 def _slash_is_bb_control_only(directives: SlashDirectives) -> bool:
-    """True when the line is only bb/audit control (no seating objective)."""
+    """True when the line is only bb/audit/okstratr control (no seating objective)."""
     if directives.objective or directives.kind or directives.harnesses or directives.model or directives.rung:
         return False
     return bool(
@@ -508,6 +526,7 @@ def _slash_is_bb_control_only(directives: SlashDirectives) -> bool:
         or getattr(directives, "duration_value", None) is not None
         or getattr(directives, "prune_board", False)
         or getattr(directives, "show_audit", False)
+        or getattr(directives, "okstratr_cmd", None)
     )
 
 

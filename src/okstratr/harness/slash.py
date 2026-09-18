@@ -26,6 +26,7 @@ class SlashDirectives:
     duration_value: str | None = None  # /bb duration <value>
     prune_board: bool = False  # /bb prune
     show_audit: bool = False  # /audit
+    okstratr_cmd: str | None = None  # /okstratr start|restart|shutdown|status
     objective: str = ""
     raw_tokens: list[str] = field(default_factory=list)
 
@@ -43,6 +44,7 @@ class SlashDirectives:
             "duration_value": self.duration_value,
             "prune_board": self.prune_board,
             "show_audit": self.show_audit,
+            "okstratr_cmd": self.okstratr_cmd,
             "objective": self.objective,
         }
 
@@ -65,6 +67,7 @@ def parse_slash_directives(text: str) -> SlashDirectives:
       /rung trivial|normal|hard         — effort rung for model select
       /bb clear|/blackboard clear|/clear — hard-clear blackboard only
         (bare /clear is blackboard-only, not a shell/history clear)
+      /okstratr start|restart|shutdown|status — lifecycle (consent on start)
 
     Multiple slash tokens can be chained.
     """
@@ -85,6 +88,7 @@ def parse_slash_directives(text: str) -> SlashDirectives:
     duration_value = None
     prune_board = False
     show_audit = False
+    okstratr_cmd = None
     i = 0
     consumed: list[str] = []
 
@@ -197,6 +201,21 @@ def parse_slash_directives(text: str) -> SlashDirectives:
             consumed.append(tok)
             i += 1
             continue
+        if tok.lower() in ("/okstratr", "/oks"):
+            if i + 1 >= len(parts):
+                okstratr_cmd = "status"
+                consumed.append(tok)
+                i += 1
+                continue
+            sub = parts[i + 1].strip().lower()
+            if sub in ("start", "restart", "shutdown", "status", "stop"):
+                if sub == "stop":
+                    sub = "shutdown"
+                okstratr_cmd = sub
+                consumed.extend([tok, parts[i + 1]])
+                i += 2
+                continue
+            break
         break
 
     objective = " ".join(parts[i:]).strip()
@@ -213,6 +232,7 @@ def parse_slash_directives(text: str) -> SlashDirectives:
         duration_value=duration_value,
         prune_board=prune_board,
         show_audit=show_audit,
+        okstratr_cmd=okstratr_cmd,
         objective=objective,
         raw_tokens=consumed,
     )
@@ -247,5 +267,6 @@ SLASH_HELP = (
     "/work|/curate|/code|/deck|/auto  /harness id[,id…]  "
     "/model id|harness:model[,harness:model…]  /rung trivial|normal|hard  "
     "/cd <path>  /web off|once|session|status  "
-    "/bb clear|/blackboard clear|/clear (blackboard only)  /bb duration <3|3d|60m|0>  /bb prune  /audit"
+    "/bb clear|/blackboard clear|/clear (blackboard only)  /bb duration <3|3d|60m|0>  /bb prune  /audit  "
+    "/okstratr start|restart|shutdown|status"
 )

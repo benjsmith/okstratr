@@ -10,6 +10,9 @@ from urllib.parse import parse_qs, urlparse
 
 from . import PORT
 from . import blackboard, cos, dag, desks, herdr, herdr_jobs, okbay, roles, status, web_egress
+from .lifecycle import observer_asset_dir, status_payload as lifecycle_status_payload
+from pathlib import Path as _Path
+import mimetypes
 
 _NODE_STATE_RE = re.compile(r"^/api/dag/nodes/([^/]+)/state$")
 
@@ -46,6 +49,36 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/health":
             code, body, ct = _json_bytes({"ok": True, "service": "okstratr", "port": PORT})
             return self._send(code, body, ct)
+
+        if path == "/api/lifecycle":
+            code, body, ct = _json_bytes(lifecycle_status_payload())
+            return self._send(code, body, ct)
+
+        # Observer panel static assets (/observer/ and /panel/ alias)
+        if path in ("/observer", "/panel") or path.startswith("/observer/") or path.startswith("/panel/"):
+            rel = path
+            for prefix in ("/observer", "/panel"):
+                if rel == prefix or rel.startswith(prefix + "/"):
+                    rel = rel[len(prefix):]
+                    break
+            rel = rel.lstrip("/") or "index.html"
+            # prevent path escape
+            rel = rel.replace("..", "")
+            root = observer_asset_dir()
+            file_path = (root / rel).resolve()
+            try:
+                file_path.relative_to(root.resolve())
+            except ValueError:
+                return self._send(404, b"not found\n", "text/plain; charset=utf-8")
+            if not file_path.is_file():
+                # SPA-ish: directory → index.html
+                if (root / "index.html").is_file() and (not rel or rel.endswith("/")):
+                    file_path = root / "index.html"
+                else:
+                    return self._send(404, b"not found\n", "text/plain; charset=utf-8")
+            data = file_path.read_bytes()
+            ctype, _ = mimetypes.guess_type(str(file_path))
+            return self._send(200, data, ctype or "application/octet-stream")
 
         if path == "/api/status":
             snap = status.write_status()
@@ -616,7 +649,7 @@ def serve(host: str = "127.0.0.1", port: int = PORT) -> int:
     httpd = ThreadingHTTPServer((host, port), Handler)
     print(
         f"okstratr listening on http://{host}:{port}  "
-        "(/health /api/status /api/desk/* /api/web /api/workspaces /api/config/roles /api/harness /api/desk_session "
+        "(/health /observer/ /panel/ /api/lifecycle /api/status /api/desk/* /api/web /api/workspaces /api/config/roles /api/harness /api/desk_session "
         "/api/seat /api/dag /api/blackboard /api/blackboard/clear /api/blackboard/prune /api/audit "
         "/api/cos/break /api/herdr/launch /api/herdr/run-ready)"
     )

@@ -1,0 +1,90 @@
+:root {
+  --bg: #0f1419;
+  --panel: #1a2332;
+  --border: #2d3a4d;
+  --text: #e7ecf3;
+  --muted: #8b9bb4;
+  --accent: #6cb6ff;
+  --ok: #3dd68c;
+  --warn: #f5a524;
+  --bad: #f76d6d;
+  --chip: #243044;
+  font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+.top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+.brand { font-weight: 600; letter-spacing: 0.02em; }
+.chips { display: flex; flex-wrap: wrap; gap: 0.4rem; flex: 1; }
+.chip {
+  background: var(--chip);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.2rem 0.65rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.actions button {
+  background: var(--accent);
+  color: #0b1220;
+  border: 0;
+  border-radius: 6px;
+  padding: 0.35rem 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.actions button + button { margin-left: 0.35rem; background: #3a4a63; color: var(--text); }
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 0.75rem;
+  padding: 0.75rem;
+  flex: 1;
+}
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.75rem 1rem;
+}
+.card h2 { margin: 0 0 0.5rem; font-size: 0.95rem; color: var(--accent); }
+.list { font-size: 0.85rem; line-height: 1.45; }
+.row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.row:last-child { border-bottom: 0; }
+.tag { color: var(--muted); font-size: 0.75rem; }
+.tag.working { color: var(--ok); }
+.tag.quiet, .tag.idle { color: var(--warn); }
+.tag.dismissed, .tag.failed { color: var(--bad); }
+.settings { display: grid; grid-template-columns: 7rem 1fr; gap: 0.35rem 0.75rem; margin: 0; font-size: 0.85rem; }
+.settings dt { color: var(--muted); }
+.hint { color: var(--muted); font-size: 0.75rem; margin-top: 0.75rem; }
+.foot {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.5rem 1rem;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.foot a { color: var(--accent); }
