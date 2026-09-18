@@ -151,6 +151,8 @@ def test_herdr_always_stops_in_live_path(state_dir: Path, monkeypatch: pytest.Mo
     monkeypatch.delenv("OKSTRATR_HERDR_DRY_RUN", raising=False)
     monkeypatch.setenv("OKSTRATR_HERDR_TIMEOUT", "5")
     monkeypatch.setattr(herdr, "PANE_SHELL_WAIT_SEC", 0)
+    # Isolate from user ~/.config/okstratr (backend=direct would skip Herdr panes).
+    monkeypatch.setattr(herdr, "prefer_direct_adapter", lambda **kwargs: False)
 
     fake = tmp_path / "herdr"
     log = tmp_path / "herdr-log.txt"
@@ -195,6 +197,7 @@ def test_herdr_live_split_start_pane_success(
     monkeypatch.delenv("OKSTRATR_HERDR_DRY_RUN", raising=False)
     monkeypatch.setenv("OKSTRATR_HERDR_TIMEOUT", "5")
     monkeypatch.setattr(herdr, "PANE_SHELL_WAIT_SEC", 0)
+    monkeypatch.setattr(herdr, "prefer_direct_adapter", lambda **kwargs: False)
 
     fake = tmp_path / "herdr"
     log = tmp_path / "herdr-log.txt"
