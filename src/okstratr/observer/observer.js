@@ -4,9 +4,39 @@
  * when the query box is empty.
  */
 (function () {
-  const API = (window.OKSTRATR_API || "").replace(/\/$/, "") || "";
   const POLL_MS = 2500;
   const KIND_ORDER = ["work", "curate", "code", "deck", "auto"];
+  const HOSTED_SHELLS = { switchbay: true, okbay: true };
+
+  function detectApiBase() {
+    if (typeof window.OKSTRATR_API === "string" && window.OKSTRATR_API.length) {
+      return String(window.OKSTRATR_API).replace(/\/$/, "");
+    }
+    if (typeof window.OKSTRATR_PUBLIC_BASE === "string" && window.OKSTRATR_PUBLIC_BASE.length) {
+      return String(window.OKSTRATR_PUBLIC_BASE).replace(/\/$/, "");
+    }
+    // Infer proxy prefix from pathname (e.g. /embed/okstratr/observer/)
+    const path = String(location.pathname || "");
+    const m = path.match(/^(.*?\/embed\/okstratr)(?:\/|$)/);
+    if (m) return m[1];
+    return "";
+  }
+
+  function detectHosted() {
+    if (typeof window.OKSTRATR_HOSTED === "string" && window.OKSTRATR_HOSTED) {
+      const h = String(window.OKSTRATR_HOSTED).trim().toLowerCase();
+      if (HOSTED_SHELLS[h]) return h;
+    }
+    try {
+      const q = new URLSearchParams(location.search || "");
+      const h = String(q.get("host") || "").trim().toLowerCase();
+      if (HOSTED_SHELLS[h]) return h;
+    } catch (e) { /* ignore */ }
+    return "";
+  }
+
+  const API = detectApiBase();
+  const HOSTED = detectHosted();
 
   const state = {
     focusDeskId: "",
@@ -19,7 +49,31 @@
     layoutNodes: [],
     animT: 0,
     animRaf: 0,
+    hosted: HOSTED,
   };
+
+  /** Hide/disable HTML settings chrome when hosted by Switchbay/okbay. */
+  function applyHostedMode() {
+    if (!HOSTED) return;
+    document.body.classList.add("hosted");
+    document.body.setAttribute("data-okstratr-host", HOSTED);
+    const config = document.querySelector("aside.config");
+    if (config) {
+      config.hidden = true;
+      config.setAttribute("aria-hidden", "true");
+      config.querySelectorAll("button, input, select, textarea").forEach(function (n) {
+        n.disabled = true;
+      });
+    }
+    document.querySelectorAll("[data-web]").forEach(function (b) {
+      b.disabled = true;
+    });
+    const brand = document.querySelector(".brand");
+    if (brand && !brand.dataset.hostedTagged) {
+      brand.dataset.hostedTagged = "1";
+      brand.textContent = brand.textContent + " · hosted:" + HOSTED;
+    }
+  }
 
   function api(path, opts) {
     const o = opts || {};
@@ -807,12 +861,17 @@
   el("btn-bb-clear").addEventListener("click", clearBlackboard);
   document.querySelectorAll("[data-web]").forEach(function (b) {
     b.addEventListener("click", function () {
+      if (HOSTED) return; // shell owns settings in hosted mode
       setWeb(b.getAttribute("data-web"));
     });
   });
   window.addEventListener("resize", function () {
     rebuildLayout();
   });
+
+  applyHostedMode();
+  const health = el("health-link");
+  if (health) health.setAttribute("href", API + "/health");
 
   refresh();
   setInterval(refresh, POLL_MS);

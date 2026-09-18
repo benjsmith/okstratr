@@ -293,3 +293,18 @@ body {
   background: var(--panel);
 }
 .foot a { color: var(--accent); }
+
+
+/* —— Hosted mode (Switchbay/okbay): settings chrome off —— */
+body.hosted .config {
+  display: none !important;
+}
+body.hosted .shell {
+  grid-template-columns: 280px minmax(0, 1fr);
+}
+@media (max-width: 960px) {
+  body.hosted .shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto;
+  }
+}

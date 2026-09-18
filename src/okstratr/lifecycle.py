@@ -20,6 +20,7 @@ from typing import Any
 
 from . import PORT
 from .paths import state_dir
+from .public_base import public_base
 
 OBSERVER_PORT = int(os.environ.get("OKSTRATR_OBSERVER_PORT") or "8768")
 SERVE_HOST = "127.0.0.1"
@@ -36,9 +37,13 @@ def serve_url(host: str = SERVE_HOST, port: int = PORT) -> str:
 
 
 def observer_url(host: str = SERVE_HOST, port: int | None = None) -> str:
-    """Prefer same-server /observer/ when serve is up; else dedicated observer port."""
+    """Prefer same-server /observer/ when serve is up; else dedicated observer port.
+
+    Honors ``OKSTRATR_PUBLIC_BASE`` (e.g. ``/embed/okstratr``) for reverse-proxy embeds.
+    """
+    base = public_base()  # "" or "/embed/okstratr"
     if health_ok():
-        return f"{serve_url()}/observer/"
+        return f"{serve_url()}{base}/observer/"
     p = OBSERVER_PORT if port is None else port
     return f"http://{host}:{p}/"
 
@@ -115,7 +120,10 @@ def health_ok(base: str | None = None, *, timeout: float = 0.8) -> bool:
 
 def observer_reachable(*, timeout: float = 0.6) -> bool:
     """True if the observer panel is served (same-origin /observer/ or :8768)."""
+    base = public_base()
     candidates = [
+        f"{serve_url()}{base}/observer/",
+        f"{serve_url()}{base}/observer/index.html",
         f"{serve_url()}/observer/",
         f"{serve_url()}/observer/index.html",
         f"http://{SERVE_HOST}:{OBSERVER_PORT}/",
