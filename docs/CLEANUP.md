@@ -1,6 +1,6 @@
 # Cleanup — kept vs legacy surfaces
 
-Product shape after three iterations (Omarchy plugin → CLI/TUI → skill + observer).
+Product shape after three iterations (Omarchy plugin → CLI → skill + observer).
 Authoritative product lock: [ADR-003](ADR-003-skill-observer-vs-kernel.md).
 Harness seating history: [ADR-001](ADR-001-cli-tui-harness.md).
 Package map: [ARCHITECTURE.md](ARCHITECTURE.md#kept-vs-legacy-surfaces).
@@ -21,7 +21,6 @@ Package map: [ARCHITECTURE.md](ARCHITECTURE.md#kept-vs-legacy-surfaces).
 
 ## Legacy / deprecated
 
-- **`okstratr tui`** — optional Textual / `--snapshot`; not the primary Mac path
   (prefer observer panel)
 - **`okstratr seat`** and **`POST /api/seat`** — deprecated aliases for
   `desk start auto`

@@ -70,7 +70,7 @@ def test_slash_help_documents_bare_clear_is_bb_only() -> None:
 def test_apply_slash_side_effects_local_fallback(state_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from okstratr import blackboard
     from okstratr.harness.slash import parse_slash_directives
-    from okstratr import tui
+    from okstratr.harness.slash_actions import apply_slash_side_effects
 
     blackboard.post("VISIBLE_SECRET_NOTE", kind="note")
     assert blackboard.summary()["count"] == 1
@@ -78,7 +78,7 @@ def test_apply_slash_side_effects_local_fallback(state_dir: Path, monkeypatch: p
     # Force API miss → local clear
     monkeypatch.setenv("OKSTRATR_API", "http://127.0.0.1:1")
     d = parse_slash_directives("/bb clear")
-    toast = tui.apply_slash_side_effects(d)
+    toast = apply_slash_side_effects(d)
     assert toast == "blackboard cleared"
     assert blackboard.head(10) == []
     assert blackboard.summary()["count"] == 0

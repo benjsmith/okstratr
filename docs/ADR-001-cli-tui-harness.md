@@ -1,4 +1,4 @@
-# ADR-001: CLI/TUI-first desk brain + harness-agnostic seating
+# ADR-001: CLI harness-agnostic seating (observer supersedes any desk TUI)
 
 - **Status:** Accepted (Phase 1–4) · Vision complete for ADR-001 scope
 - **Date:** 2026-09-17
@@ -9,7 +9,7 @@
 okstratr began as an Omarchy desk panel paired with a **grok-only** Herdr
 `--kind` (`DEFAULT_KIND = "grok"`). The product vision is broader:
 
-1. **okstratr = CLI/TUI-first desk brain** (Herdr-shaped observability).
+1. **okstratr = CLI-first desk brain** (Herdr-shaped observability).
 2. The Omarchy plugin becomes a **thin client** of the same local daemon.
 3. Seating must be **harness- and model-agnostic** — orchestrate seats across
    any CLI harness the user has (claude, grok, pi, codex, omp, opencode,
@@ -17,7 +17,6 @@ okstratr began as an Omarchy desk panel paired with a **grok-only** Herdr
 4. Config (Switchbay-inspired, **no LiteLLM**) controls which harnesses +
    models + settings may be fanned out.
 5. On Mac (no Omarchy): `okstratr start` + **observer panel** is the primary
-   path; `okstratr tui` remains optional/legacy. Desk/thread grouping labels
    unchanged. (Superseded UI primacy: ADR-003.)
 6. Herdr remains the multiplexer when present; a **direct CLI adapter**
    (subprocess without Herdr) is required for environments without Herdr.
@@ -31,7 +30,7 @@ llmgateway provider registry, routing_status provider+model effort.
 
 | Piece | Owns |
 |-------|------|
-| **okstratr** | Desk brain: kernel, desks, DAG, CoS, blackboard, schedule, **harness registry + config**, seating policy, CLI/TUI, HTTP daemon |
+| **okstratr** | Desk brain: kernel, desks, DAG, CoS, blackboard, schedule, **harness registry + config**, seating policy, CLI, HTTP daemon |
 | **Herdr** | Multiplexer / runtime when present: panes, agent lifecycle, `--kind` seating |
 | **okbay** | Knowledge / Atlas / work-coverage ingest (unchanged) |
 | **Omarchy Panel** | **Client** of okstratr daemon (Phase 1: keep Panel; document path to thin client) |
@@ -64,13 +63,12 @@ are unchanged until they `harness enable` others.
 | **Herdr multi-kind** | Implemented — seating uses registry `herdr_kind` |
 | **Direct CLI** | Real subprocess adapter (`harness.direct`) + dry-run; PID track/kill on quiet |
 
-### CLI / TUI
+### CLI + observer
 
 - `okstratr harness list|detect|enable|disable`
 - `okstratr config show|set …`
-- `okstratr tui` — **legacy/optional** Textual UI (extra `[tui]`); `--snapshot`
   plain fallback; talks to `http://127.0.0.1:8767` (same API as observer/Panel).
-  Primary visual is the HTML **observer panel** (ADR-003), not the TUI.
+  Primary visual is the HTML **observer panel** (ADR-003), not a separate desk TUI (removed).
 - `okstratr agents` — desk/thread filtered agent list stub
 
 ### Observability
@@ -82,7 +80,6 @@ Mac workflow (primary — see ADR-003):
 okstratr start --yes              # daemon + observer :8767
 open http://127.0.0.1:8767/observer/   # primary visual console
 # herdr          # multiplexer (optional)
-# okstratr tui   # legacy/optional Textual / --snapshot
 ```
 
 **No Herdr on Mac?** Point seating at the direct CLI adapter (uses `grok` etc.):
@@ -96,7 +93,7 @@ okstratr config set harness.grok.settings.reasoning low
 ```
 
 Desks appear grouped by labels; `okstratr agents --desk …` lists them.
-`GET /api/dag` (and TUI `## DAG`) load the focused desk's `desks/<id>/dag.json`.
+`GET /api/dag` (and observer DAG) load the focused desk's `desks/<id>/dag.json`.
 
 ### Omarchy
 
@@ -108,13 +105,12 @@ API. Config UI may read/write `harnesses.toml` later; docs note the path.
 - Seating is no longer hardcoded grok-only.
 - Users must enable + install harnesses they want fan-out across.
 - Clear error when no enabled harness is installed.
-- TUI depends on optional `textual` for interactive mode; snapshot works
   without it.
 - Tests use `OKSTRATR_STATE_DIR` + `OKSTRATR_CONFIG_DIR` + dry-run.
 
 ## Later phases
 
-- **P2:** richer TUI; real direct-CLI adapters; model rungs / effort;
+- **P2:** real direct-CLI adapters; model rungs / effort;
   agents groupings; Panel Config path stub
 - **P3 (this PR):** thin Omarchy plugin (Panel pure client); DeskSession module;
   fuller QML harness editor via `/api/harness*`
@@ -148,7 +144,7 @@ CLI today: `okstratr harness list|enable|disable`, `okstratr config show|set`.
 - `harnesses.toml`: per-harness `default_model`, `effort` rung map
   (trivial|normal|hard); `okstratr config set harness.claude.default_model …`;
   `okstratr model list`; `/model claude:sonnet` + `/rung` wired into select.
-- TUI: desk tabs with Running/Idle badges, DAG topo+status, blackboard head,
+- ~~removed TUI~~ was: desk tabs with Running/Idle badges, DAG topo+status, blackboard head,
   slash help, optional `/api/status` poll; `--snapshot` unchanged for CI.
 - `okstratr agents` groups by `desk_id`/`thread_id` (Herdr list + desks);
   same label keys on Herdr + direct paths; label convention documented.
@@ -167,7 +163,7 @@ CLI today: `okstratr harness list|enable|disable`, `okstratr config show|set`.
 - **Panel**: Config harness editor lists enable toggles, default_model, effort
   rungs; Reload button; Start/focus/dismiss UX unchanged (still `/api/desk/*`).
   Prefers `GET /api/status` while open; FileView `status.json` marked compat.
-- **TUI**: `desk_rows()` prefers `desk_session` when present.
+- ~~removed TUI~~ was: `desk_rows()` prefers `desk_session` when present.
 - **Status channel hygiene**: `status_channel` documents primary HTTP vs
   FileView dual-source; P4 drops remaining dual-write.
 - Tests: unit DeskSession + harness API; e2e harness toggle via HTTP.
@@ -175,7 +171,7 @@ CLI today: `okstratr harness list|enable|disable`, `okstratr config show|set`.
 
 ### Phase 4 (complete)
 
-- **DeskSession full SSOT**: Panel, TUI, CLI, BarWidget, and Service prefer
+- **DeskSession full SSOT**: Panel, CLI, observer, BarWidget, and Service prefer
   `desk_session` from `GET /api/status` / `GET /api/desk_session`.
 - **status.json**: daemon write-through **compat mirror** only
   (`status_channel.dual_source=false`, `mirror=true`). Clients must not treat
@@ -187,7 +183,7 @@ CLI today: `okstratr harness list|enable|disable`, `okstratr config show|set`.
   (`harness.<id>.default_model`).
 - **Tests**: status channel primary=http; FileView mirror matches desk_session;
   Panel/Model helper contracts; harness set e2e. Pytest green.
-- **ADR-001 vision**: complete for stated scope (CLI/TUI-first desk brain +
+- **ADR-001 vision**: complete for stated scope (CLI-first desk brain +
   harness-agnostic seating + thin Omarchy client).
 
 ### Residual hygiene (honest, out of ADR-001 scope)
@@ -197,21 +193,25 @@ CLI today: `okstratr harness list|enable|disable`, `okstratr config show|set`.
 - **status.json write-through mirror kept** for offline bar chips. Opt out with
   `OKSTRATR_STATUS_MIRROR=0` (skips disk write; HTTP SSOT unchanged). Eventual
   removal still TBD once all bar hosts are HTTP-only.
-- Workspace sandbox (`okstratr cd` / TUI `/cd`): seats chdir into operating dir;
+- Workspace sandbox (`okstratr cd`  / `/cd`): seats chdir into operating dir;
   path escapes rejected — see `okstratr.workspace` policy string.
-- Web egress remains deny-by-default (`web_egress`); TUI shows Web chip + `/web`.
+- Web egress remains deny-by-default (`web_egress`); `/web` via slash + observer/web API.
 - No LiteLLM / no Cloud Agents (unchanged boundary).
 
 ### Smoke: desk-file DAG + direct backend
 
 - `GET /api/dag` loads focused/active desk `desks/<id>/dag.json` (CoS graph);
-  response `nodes` is a **list** (TUI no longer sees empty topo when count>0).
+  response `nodes` is a **list** (clients receive list nodes when count>0).
 - `drive_herdr` / `drive_seats` means drive seats; with `backend=direct` never
   starts Herdr panes (even if a broken `herdr` shim is on PATH).
 - Mac without Herdr: `okstratr config set backend direct`.
 
 ### Product-shape cleanup (2026-09-18)
 
-- Document observer panel as primary visual; TUI marked legacy/optional.
 - Omarchy Panel remains optional thin client (not deleted).
 - See `docs/CLEANUP.md` and ADR-003.
+
+
+## Status note (2026-09-18)
+
+The Textual `okstratr tui` surface was **removed**. Observer panel + lifecycle CLI are the only console path. This ADR remains for harness registry / seating history.

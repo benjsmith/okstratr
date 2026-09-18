@@ -309,7 +309,7 @@ def snapshot() -> dict[str, Any]:
         },
         "version": __version__,
         "message": msg,
-        # Phase 3: canonical DeskSession + harness allowlist (Panel/TUI/HTTP SSOT path)
+        # Phase 3: canonical DeskSession + harness allowlist (Panel/HTTP SSOT path)
         "desk_session": desk_session_snap,
         "desks": (desk_session_snap or {}).get("desks") or [],
         "standing": (desk_session_snap or {}).get("standing")

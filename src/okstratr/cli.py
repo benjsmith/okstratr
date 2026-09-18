@@ -372,14 +372,6 @@ def main(argv=None) -> int:
     model_sub = model_p.add_subparsers(dest="model_cmd", required=True)
     model_sub.add_parser("list", help="List models per enabled harness + effort rungs")
 
-    # --- tui ---
-    # --- cd (operating workspace / seat sandbox root) ---
-    cd_p = sub.add_parser("cd", help="Set/show operating workspace directory (seat sandbox root)")
-    cd_p.add_argument("path", nargs="?", default=None, help="Directory to set; omit to show current")
-
-    tui_p = sub.add_parser("tui", help="LEGACY/OPTIONAL desk TUI (Textual [tui]); prefer observer panel — not primary Mac path")
-    tui_p.add_argument("--snapshot", action="store_true", help="One-shot text snapshot")
-    tui_p.add_argument("--plain", action="store_true", help="Force plain snapshot")
 
     # --- agents (Herdr grouping stub) ---
     agents_p = sub.add_parser(
@@ -720,15 +712,6 @@ def main(argv=None) -> int:
             return _print(workspace.set_cwd(args.path))
         return _print(workspace.status())
 
-    if args.cmd == "tui":
-        from . import tui as tui_mod
-
-        argv = []
-        if getattr(args, "snapshot", False):
-            argv.append("--snapshot")
-        if getattr(args, "plain", False):
-            argv.append("--plain")
-        return tui_mod.main(argv)
 
     if args.cmd == "model":
         from . import harness as harness_mod
@@ -805,7 +788,6 @@ def main(argv=None) -> int:
                 "mac_howto": (
                     "okstratr start --yes  # daemon + observer :8767\n"
                     "open http://127.0.0.1:8767/observer/  # primary visual\n"
-                    "# okstratr tui  # legacy/optional\n"
                     "okstratr agents  # desk_id/thread_id groupings"
                 ),
             }

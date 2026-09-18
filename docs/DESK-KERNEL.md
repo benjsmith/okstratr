@@ -1,6 +1,6 @@
 # Desk kernel (Switchbay-style)
 
-> **Product vision (locked):** see **[ADR-001-cli-tui-harness.md](ADR-001-cli-tui-harness.md)** — CLI/TUI-first desk brain, harness-agnostic seating, Omarchy Panel as client.
+> **Product vision (locked):** see **[ADR-001-cli-tui-harness.md](ADR-001-cli-tui-harness.md)** — CLI-first desk brain, harness-agnostic seating, Omarchy Panel as client.
 >
 
 > Design authority for okstratr’s hiring manager, desk lifecycle, roles, and Herdr pairing.
@@ -18,7 +18,7 @@
 | Piece | Owns |
 |-------|------|
 | **okbay** | Knowledge graph, Atlas, Nautilus reveal, **work-coverage ingest**, reviews / commit land path |
-| **okstratr** | CLI/TUI desk brain + kernel, desks, workspace bind, DAG, CoS, blackboard, schedule, **harness registry**, Herdr pairing; Omarchy **Panel is a client** (see ADR-001) |
+| **okstratr** | CLI desk brain + kernel, desks, workspace bind, DAG, CoS, blackboard, schedule, **harness registry**, Herdr pairing; Omarchy **Panel is a client** (see ADR-001) |
 | **Herdr** | Normal live agent runtime / multiplexer; grouping lens later (not this slice) |
 
 Either half should remain useful alone; side-by-side is the composed desk.

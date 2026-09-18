@@ -523,7 +523,7 @@ def set_value(key: str, value: str, *, path: Path | None = None) -> HarnessConfi
 
 
 def list_for_api(cfg: HarnessConfig | None = None) -> dict[str, Any]:
-    """Public harness rows for Panel/TUI/HTTP (enable flags, models, effort rungs)."""
+    """Public harness rows for Panel/HTTP (enable flags, models, effort rungs)."""
     from . import registry
 
     cfg = cfg or load()

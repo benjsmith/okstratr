@@ -1,6 +1,6 @@
 """DeskSession — single logical view of standing desks + DAG + objective + seats.
 
-Phase 4 (ADR-001): DeskSession is the SSOT for Panel, TUI, CLI, and bar widgets
+Phase 4 (ADR-001): DeskSession is the SSOT for Panel, CLI, observer, and bar widgets
 via GET /api/status and GET /api/desk_session. status.json is an optional
 daemon write-through compat mirror only (not authoritative when HTTP is up).
 """
@@ -67,7 +67,7 @@ class DeskRow:
             "thread_id": self.thread_id,
             "dag_nodes": self.dag_nodes,
             "seats": [s.to_dict() for s in self.seats],
-            # Compat aliases used by older Panel/TUI bindings
+            # Compat aliases used by older Panel bindings
             "desk_id": self.id,
         }
 
@@ -95,7 +95,7 @@ class DeskSession:
             "active_desk_id": self.active_desk_id,
             "objective": self.objective,
             "desks": [d.to_dict() for d in self.desks],
-            "standing": [d.to_dict() for d in self.desks],  # TUI alias
+            "standing": [d.to_dict() for d in self.desks],  # standing alias
             "dag": dict(self.dag),
             "herdr_labels": dict(self.herdr_labels),
             "notes": self.notes,

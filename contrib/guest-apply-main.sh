@@ -34,4 +34,4 @@ fi
 echo "guest-apply-main: $BRANCH @ $(git rev-parse --short HEAD)"
 curl -sS http://127.0.0.1:8767/api/status | head -c 200 || true
 echo
-okstratr tui --snapshot 2>/dev/null | head -40 || true
+okstratr status 2>/dev/null | head -40 || true
