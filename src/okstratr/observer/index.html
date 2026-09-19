@@ -122,6 +122,40 @@
     <span id="poll-status">polling…</span>
     <a href="/health" id="health-link">/health</a>
   </footer>
+
+  <div id="schedule-modal" class="modal" hidden>
+    <div class="modal-backdrop" data-close="schedule"></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="schedule-modal-title">
+      <h3 id="schedule-modal-title">Schedule desk</h3>
+      <p class="modal-hint">Cadence: daily, hourly, weekly, 90m, 1h30m…</p>
+      <label class="modal-label" for="schedule-spec">Spec</label>
+      <input id="schedule-spec" class="modal-input" type="text" placeholder="daily" autocomplete="off" />
+      <input type="hidden" id="schedule-desk-id" value="" />
+      <input type="hidden" id="schedule-kind" value="" />
+      <div class="modal-actions">
+        <button type="button" class="btn primary" id="schedule-save">Save schedule</button>
+        <button type="button" class="btn ghost" id="schedule-clear" title="Remove schedule">Clear</button>
+        <button type="button" class="btn ghost" id="schedule-cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="edit-modal" class="modal" hidden>
+    <div class="modal-backdrop" data-close="edit"></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="edit-modal-title">
+      <h3 id="edit-modal-title">Edit objective</h3>
+      <p class="modal-hint">Updates the standing desk brief. Not a chat bar (ADR-003).</p>
+      <label class="modal-label" for="edit-objective">Objective</label>
+      <textarea id="edit-objective" class="modal-textarea" rows="4" placeholder="Desk objective…"></textarea>
+      <input type="hidden" id="edit-desk-id" value="" />
+      <input type="hidden" id="edit-kind" value="" />
+      <div class="modal-actions">
+        <button type="button" class="btn primary" id="edit-save">Save</button>
+        <button type="button" class="btn ghost" id="edit-cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <script src="observer.js"></script>
 </body>
 </html>

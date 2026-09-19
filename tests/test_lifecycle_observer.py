@@ -148,7 +148,9 @@ def test_observer_has_agent_space_no_query_input() -> None:
     # No query / start-from-query form
     assert "query-input" not in html
     assert "btn-start" not in html
-    assert "<textarea" not in html.lower()
+    # Modal edit textarea allowed; no persistent objective/query bar
+    assert 'id="objective"' not in html
+    assert 'id="edit-objective"' in html or "<textarea" in html.lower()
     assert "query-input" not in js
     assert "parseDeskQuery" not in js
 

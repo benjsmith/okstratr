@@ -1,12 +1,13 @@
 """Desk-rail control → okstratr API mapping (observer + DeskRail.qml contract).
 
-Single lifecycle surface: Start / Stop / Dismiss / Delete (+ Quiet all).
-Does not invent a second desk model — payloads hit existing ``/api/desk/*``
-handlers and ``desks.*`` kernel methods.
+Single lifecycle surface: Start / Stop / Dismiss / Delete / Schedule / Edit
+(+ Quiet all). Does not invent a second desk model — payloads hit existing
+``/api/desk/*`` handlers and ``desks.*`` kernel methods.
 
-Switchbay Agents tab still owns residual chrome (Edit→rail, Schedule dialog,
-run transcript/cancel/bg, workspace switcher, Tools/Rules/Skills panels,
-interrupted-orchestration resume). Thin those only after umbrella parity ✓.
+Switchbay Agents tab still owns residual chrome (active-run transcript/cancel/bg,
+workspace switcher, Tools/Rules/Skills panels, interrupted-orchestration resume).
+Observer now has Schedule create/edit dialog + cheap objective Edit dialog.
+Thin remaining SB chrome only after umbrella parity ✓.
 """
 
 from __future__ import annotations
@@ -52,6 +53,28 @@ DESK_RAIL_ACTIONS: dict[str, dict[str, Any]] = {
         "label": "Quiet all",
         "aliases": ("/api/desk/quiet-all",),
     },
+    "schedule": {
+        "method": "POST",
+        "path": "/api/desk/schedule",
+        "body_keys": ("desk_id", "spec", "schedule", "args", "clear"),
+        "required": ("desk_id",),
+        "label": "Schedule",
+    },
+    "clear_schedule": {
+        "method": "POST",
+        "path": "/api/desk/schedule",
+        "body_keys": ("desk_id", "clear"),
+        "required": ("desk_id",),
+        "label": "Clear schedule",
+    },
+    "edit": {
+        "method": "POST",
+        "path": "/api/desk/start",
+        "body_keys": ("desk_id", "kind", "objective", "drive_herdr"),
+        "required": ("desk_id",),
+        "label": "Edit",
+        "note": "Cheap objective edit via start(desk_id)+objective; no chat bar (ADR-003).",
+    },
 }
 
 # Hosted shells: HTML settings strip off; desk rail controls stay enabled.
@@ -59,12 +82,11 @@ HOSTED_SHELLS = frozenset({"switchbay", "okbay"})
 
 # Still Switchbay-only (do not delete SB UI until these move or are waived).
 SWITCHBAY_ONLY_CHROME = (
-    "Edit brief → rail composer (sy:rail-set-input)",
-    "Schedule create/edit dialog (sy:schedule-new; observer has badge only)",
-    "Active-run transcript / cancel / background (/api/runs/active)",
+    "Active-run transcript / cancel / background (/api/runs/active — not in okstratr)",
     "Workspace switcher + open-Agents nav",
     "Tools / Rules / Command palettes / Providers / Skills panels",
     "Interrupted-orchestration resume list (/api/orchestration/interrupted)",
+    "Edit→rail composer (sy:rail-set-input) when hosted — observer Edit updates desk.objective via dialog",
 )
 
 
@@ -91,17 +113,17 @@ def row_actions(
     """Which rail buttons a desk row shows (Switchbay DesksPanel + DeskRail parity).
 
     - Placeholder / empty kind row: Start (+ disabled Stop/Dismiss visually)
-    - working: Continue, Stop, Dismiss
-    - quiet/idle: Continue, Stop(disabled), Dismiss
-    - dismissed: Start, Delete (no Dismiss)
+    - working: Continue, Stop, Dismiss, Schedule, Edit
+    - quiet/idle: Continue, Stop(disabled), Dismiss, Schedule, Edit
+    - dismissed: Start, Delete (no Dismiss/Schedule/Edit)
     """
     st = str(state or "").strip().lower()
     if placeholder or (not st and placeholder):
-        return ["start", "stop", "dismiss"]
+        return ["start", "stop", "dismiss", "schedule"]
     if st == "dismissed":
         return ["start", "stop", "delete"]
     # working, quiet, idle, or unknown standing
-    return ["start", "stop", "dismiss"]
+    return ["start", "stop", "dismiss", "schedule", "edit"]
 
 
 def start_label(state: str | None, *, placeholder: bool = False) -> str:
@@ -122,6 +144,8 @@ def request_for(action: str, **fields: Any) -> dict[str, Any]:
     act = str(action or "").strip().lower()
     if act in ("quiet", "quiet_standing", "quiet-all"):
         act = "quiet_all"
+    if act in ("unschedule", "schedule_clear"):
+        act = "clear_schedule"
     spec = DESK_RAIL_ACTIONS.get(act)
     if spec is None:
         raise ValueError(f"unknown desk-rail action: {action!r}")
@@ -142,10 +166,15 @@ def request_for(action: str, **fields: Any) -> dict[str, Any]:
             body[key] = str(val)
         elif key == "drive_herdr":
             body[key] = bool(val)
-        elif key in ("force", "cleanup"):
+        elif key in ("force", "cleanup", "clear"):
             body[key] = bool(val)
+        elif key in ("spec", "schedule", "args"):
+            body[key] = val
         else:
             body[key] = val
+
+    if act == "clear_schedule":
+        body["clear"] = True
 
     for req in spec["required"]:
         if req not in body or body[req] in ("", None):
@@ -160,6 +189,22 @@ def request_for(action: str, **fields: Any) -> dict[str, Any]:
             body["drive_herdr"] = True
         if "kind" not in body:
             body["kind"] = "auto"
+
+    # Edit: update objective without driving herdr (dialog save)
+    if act == "edit":
+        body["drive_herdr"] = False
+        if "kind" not in body:
+            body["kind"] = "auto"
+        if "objective" not in body:
+            raise ValueError("edit requires objective")
+
+    # Schedule attach needs a non-empty spec unless clear
+    if act == "schedule" and not body.get("clear"):
+        has_spec = any(
+            body.get(k) not in (None, "", []) for k in ("spec", "schedule", "args")
+        )
+        if not has_spec:
+            raise ValueError("schedule requires spec")
 
     return {
         "action": act,

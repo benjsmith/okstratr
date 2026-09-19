@@ -713,7 +713,7 @@ class DeskRegistry:
         *,
         desk_id: str | None = None,
     ) -> dict[str, Any]:
-        """Parse schedule args and attach to the desk (dialog UI is future)."""
+        """Parse schedule args and attach to the desk (observer Schedule dialog)."""
         desk = self._resolve(desk_id)
         if desk is None:
             return {"ok": False, "error": "no desk for schedule (start a desk first)"}
@@ -734,7 +734,25 @@ class DeskRegistry:
             "action": "schedule",
             "desk_id": desk.id,
             "schedule": payload,
-            "message": "Schedule attached (dialog UI later)",
+            "message": f"Schedule attached: {payload['describe']}",
+        }
+
+    def clear_schedule(self, *, desk_id: str | None = None) -> dict[str, Any]:
+        """Remove schedule from a standing desk (observer Schedule dialog Clear)."""
+        desk = self._resolve(desk_id)
+        if desk is None:
+            return {"ok": False, "error": "no desk for clear_schedule"}
+        had = desk.schedule is not None
+        desk.schedule = None
+        desk.updated_at = time()
+        self.save()
+        status.write_status()
+        return {
+            "ok": True,
+            "action": "clear_schedule",
+            "desk_id": desk.id,
+            "cleared": had,
+            "message": "Schedule cleared" if had else "No schedule to clear",
         }
 
     def status_snapshot(self) -> dict[str, Any]:
@@ -1063,6 +1081,10 @@ def purge(
 
 def schedule(args: list[str] | str, **kwargs: Any) -> dict[str, Any]:
     return default_registry().schedule(args, **kwargs)
+
+
+def clear_schedule(*, desk_id: str | None = None) -> dict[str, Any]:
+    return default_registry().clear_schedule(desk_id=desk_id)
 
 
 def status_snapshot() -> dict[str, Any]:

@@ -392,6 +392,17 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/desk/schedule":
             desk_id = payload.get("desk_id") or payload.get("id")
+            clear = bool(
+                payload.get("clear")
+                or payload.get("clear_schedule")
+                or str(payload.get("action") or "").strip().lower()
+                in ("clear", "clear_schedule", "unschedule")
+            )
+            if clear:
+                code, body, ct = _json_bytes(
+                    desks.clear_schedule(desk_id=str(desk_id) if desk_id else None)
+                )
+                return self._send(code, body, ct)
             spec = payload.get("spec") or payload.get("schedule") or payload.get("args")
             if isinstance(spec, list):
                 args = [str(x) for x in spec]

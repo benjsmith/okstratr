@@ -87,9 +87,10 @@ def test_observer_includes_desk_dashboard_markup(http_server: str) -> None:
     assert 'id="desk-group-filter"' in text
     assert 'id="dash-by-kind"' in text
     assert 'id="dash-by-state"' in text
-    # Still no chat/query bar
+    # Still no persistent chat/query bar (modal edit textarea is OK)
     assert 'id="objective"' not in text
-    assert '<textarea' not in text.lower()
+    assert 'id="edit-objective"' in text  # schedule/edit dialogs
+    assert 'id="schedule-modal"' in text
     assert 'chat/objective input' in text or 'No chat' in text or 'Herdr' in text
 
 

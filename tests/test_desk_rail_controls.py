@@ -114,10 +114,11 @@ def test_request_for_rejects_placeholder_desk_id() -> None:
 def test_row_actions_and_labels() -> None:
     from okstratr.desk_rail import row_actions, start_label
 
-    assert row_actions("working") == ["start", "stop", "dismiss"]
-    assert row_actions("quiet") == ["start", "stop", "dismiss"]
+    assert row_actions("working") == ["start", "stop", "dismiss", "schedule", "edit"]
+    assert row_actions("quiet") == ["start", "stop", "dismiss", "schedule", "edit"]
     assert row_actions("dismissed") == ["start", "stop", "delete"]
     assert "start" in row_actions(None, placeholder=True)
+    assert "schedule" in row_actions(None, placeholder=True)
     assert start_label("quiet") == "Continue"
     assert start_label("dismissed") == "Start"
     assert start_label(None, placeholder=True) == "Start"
@@ -130,7 +131,8 @@ def test_hosted_shell_helpers() -> None:
     assert is_hosted_shell("okbay")
     assert not is_hosted_shell("bare")
     assert "switchbay" in HOSTED_SHELLS
-    assert any("Schedule" in s for s in SWITCHBAY_ONLY_CHROME)
+    # Schedule create/edit dialog moved to observer; transcript still SB-only
+    assert not any("Schedule create" in s or "badge only" in s for s in SWITCHBAY_ONLY_CHROME)
     assert any("transcript" in s.lower() or "Active-run" in s for s in SWITCHBAY_ONLY_CHROME)
 
 
@@ -149,9 +151,14 @@ def test_observer_js_matches_desk_rail_paths() -> None:
     assert 'data-act="stop"' in js
     assert 'data-act="dismiss"' in js
     assert 'data-act="delete"' in js
+    assert 'data-act="schedule"' in js
+    assert 'data-act="edit"' in js
+    assert "/api/desk/schedule" in js
     assert "desk_id" in js
     assert 'id="btn-quiet-all"' in html
     assert 'id="desk-rail"' in html
+    assert 'id="schedule-modal"' in html
+    assert 'id="edit-modal"' in html
 
 
 # —— HTTP handlers (reuse desks lifecycle) ——
@@ -251,3 +258,54 @@ def test_start_by_desk_id_resumes_same_desk(env: Path) -> None:
     second = reg.start(objective="", kind="code", desk_id=desk_id, drive_herdr=False)
     assert second["action"] == "resume"
     assert second["desk"]["id"] == desk_id
+
+
+def test_request_for_schedule_edit_clear() -> None:
+    from okstratr.desk_rail import request_for
+
+    sched = request_for("schedule", desk_id="desk-1", spec="daily")
+    assert sched["path"] == "/api/desk/schedule"
+    assert sched["body"]["desk_id"] == "desk-1"
+    assert sched["body"]["spec"] == "daily"
+
+    cleared = request_for("clear_schedule", desk_id="desk-1")
+    assert cleared["path"] == "/api/desk/schedule"
+    assert cleared["body"]["clear"] is True
+
+    edit = request_for("edit", desk_id="desk-1", objective="new brief", kind="work")
+    assert edit["path"] == "/api/desk/start"
+    assert edit["body"]["objective"] == "new brief"
+    assert edit["body"]["drive_herdr"] is False
+
+
+def test_http_desk_schedule_and_clear(http_server: str, env: Path) -> None:
+    started = _json(
+        http_server,
+        "/api/desk/start",
+        method="POST",
+        body={"kind": "work", "objective": "schedule me"},
+    )
+    desk = (started.get("desk") or {}).get("desk") or started.get("desk") or {}
+    if "id" not in desk and isinstance(started.get("desk"), dict):
+        desk = started["desk"].get("desk") or started["desk"]
+    desk_id = desk.get("id")
+    assert desk_id, started
+
+    attached = _json(
+        http_server,
+        "/api/desk/schedule",
+        method="POST",
+        body={"desk_id": desk_id, "spec": "1h30m"},
+    )
+    assert attached.get("ok") is not False
+    assert attached.get("action") == "schedule"
+    assert (attached.get("schedule") or {}).get("every_seconds") == 5400
+
+    cleared = _json(
+        http_server,
+        "/api/desk/schedule",
+        method="POST",
+        body={"desk_id": desk_id, "clear": True},
+    )
+    assert cleared.get("ok") is not False
+    assert cleared.get("action") == "clear_schedule"

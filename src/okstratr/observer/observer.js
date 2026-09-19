@@ -1,6 +1,6 @@
 /* okstratr observer panel — DeskRail + AGENT SPACE canvas; not a chat UI.
  * No objective/query text input — Herdr / CLI harness is the only text surface.
- * Desk rail Start/Stop/Dismiss/Delete (+ Quiet all) → /api/desk/* (see desk_rail.py).
+ * Desk rail Start/Stop/Dismiss/Delete/Schedule/Edit (+ Quiet all) → /api/desk/* (see desk_rail.py).
  * Start POSTs kind (+ optional desk_id + standing objective), like Omarchy Start
  * when the query box is empty.
  */
@@ -314,6 +314,7 @@
   /** Human schedule chip from desk.schedule payload (Switchbay DesksPanel parity). */
   function scheduleLabel(sched) {
     if (!sched || typeof sched !== "object") return "";
+    if (sched.describe) return String(sched.describe);
     if (sched.label) return String(sched.label);
     if (sched.description) return String(sched.description);
     if (sched.name) return String(sched.name);
@@ -327,6 +328,156 @@
     }
     if (sched.raw) return String(sched.raw);
     return "scheduled";
+  }
+
+  function scheduleSpecPrefill(sched) {
+    if (!sched || typeof sched !== "object") return "";
+    if (sched.raw) return String(sched.raw);
+    if (sched.name) return String(sched.name);
+    if (sched.describe) return String(sched.describe);
+    return "";
+  }
+
+  function closeModal(which) {
+    const m = el(which === "edit" ? "edit-modal" : "schedule-modal");
+    if (m) m.hidden = true;
+  }
+
+  function openScheduleDialog(deskId, kind, existingSpec) {
+    const modal = el("schedule-modal");
+    if (!modal) return;
+    const title = el("schedule-modal-title");
+    if (title) title.textContent = "Schedule " + (kind || "desk") + " desk";
+    const realId = deskId && String(deskId).indexOf("kind:") !== 0 ? String(deskId) : "";
+    el("schedule-desk-id").value = realId;
+    el("schedule-kind").value = String(kind || "auto");
+    el("schedule-spec").value = existingSpec || "daily";
+    const clearBtn = el("schedule-clear");
+    if (clearBtn) clearBtn.disabled = !realId || !existingSpec;
+    modal.hidden = false;
+    setTimeout(function () {
+      const inp = el("schedule-spec");
+      if (inp) { inp.focus(); inp.select(); }
+    }, 0);
+  }
+
+  function saveSchedule() {
+    const deskId = (el("schedule-desk-id").value || "").trim();
+    const kind = (el("schedule-kind").value || "auto").trim() || "auto";
+    const spec = (el("schedule-spec").value || "").trim();
+    if (!spec) {
+      setMsg("Enter a schedule cadence (daily, 1h30m, …)");
+      return;
+    }
+    function postSchedule(id) {
+      setMsg("Saving schedule…");
+      api("/api/desk/schedule", {
+        method: "POST",
+        body: { desk_id: id, spec: spec },
+      })
+        .then(function (parsed) {
+          closeModal("schedule");
+          afterDeskAction(parsed);
+        })
+        .catch(function (e) {
+          setMsg(String(e.message || e));
+        });
+    }
+    if (!deskId) {
+      setMsg("Starting " + kind + " desk for schedule…");
+      const objective = standingObjectiveForKind(kind);
+      const payload = { kind: kind, objective: objective };
+      if (String(objective || "").trim()) payload.drive_herdr = true;
+      api("/api/desk/start", { method: "POST", body: payload })
+        .then(function (parsed) {
+          if (parsed && parsed.ok === false) {
+            afterDeskAction(parsed);
+            return;
+          }
+          let desk = (parsed && parsed.desk) || {};
+          if (desk.desk && typeof desk.desk === "object") desk = desk.desk;
+          const id = desk.id || desk.desk_id;
+          if (!id) {
+            setMsg("Desk started but no id for schedule");
+            refresh();
+            return;
+          }
+          postSchedule(String(id));
+        })
+        .catch(function (e) {
+          setMsg(String(e.message || e));
+        });
+      return;
+    }
+    postSchedule(deskId);
+  }
+
+  function clearSchedule() {
+    const deskId = (el("schedule-desk-id").value || "").trim();
+    if (!deskId) return;
+    setMsg("Clearing schedule…");
+    api("/api/desk/schedule", {
+      method: "POST",
+      body: { desk_id: deskId, clear: true },
+    })
+      .then(function (parsed) {
+        closeModal("schedule");
+        afterDeskAction(parsed);
+      })
+      .catch(function (e) {
+        setMsg(String(e.message || e));
+      });
+  }
+
+  function openEditDialog(deskId, kind, objective) {
+    if (!deskId || String(deskId).indexOf("kind:") === 0) return;
+    const modal = el("edit-modal");
+    if (!modal) return;
+    el("edit-desk-id").value = String(deskId);
+    el("edit-kind").value = String(kind || "auto");
+    el("edit-objective").value = objective || "";
+    if (HOSTED === "switchbay") {
+      try {
+        window.dispatchEvent(
+          new CustomEvent("sy:rail-set-input", {
+            detail: { text: objective || "", focus: true },
+          })
+        );
+      } catch (e) { /* ignore */ }
+    }
+    modal.hidden = false;
+    setTimeout(function () {
+      const ta = el("edit-objective");
+      if (ta) ta.focus();
+    }, 0);
+  }
+
+  function saveEdit() {
+    const deskId = (el("edit-desk-id").value || "").trim();
+    const kind = (el("edit-kind").value || "auto").trim() || "auto";
+    const objective = (el("edit-objective").value || "").trim();
+    if (!deskId) return;
+    if (!objective) {
+      setMsg("Objective cannot be empty");
+      return;
+    }
+    setMsg("Updating objective…");
+    api("/api/desk/start", {
+      method: "POST",
+      body: {
+        desk_id: deskId,
+        kind: kind,
+        objective: objective,
+        drive_herdr: false,
+      },
+    })
+      .then(function (parsed) {
+        closeModal("edit");
+        afterDeskAction(parsed);
+      })
+      .catch(function (e) {
+        setMsg(String(e.message || e));
+      });
   }
 
   function countDesksByKind(list) {
@@ -529,6 +680,21 @@
           '"' +
           (isEmpty ? " disabled" : "") +
           ">Dismiss</button>";
+      const scheduleBtn = isDismissed
+        ? ""
+        : '<button type="button" class="btn mini" data-act="schedule" data-id="' +
+          esc(id) +
+          '" data-kind="' +
+          esc(kind) +
+          '" title="Create or edit schedule">Schedule</button>';
+      const editBtn =
+        isEmpty || isDismissed
+          ? ""
+          : '<button type="button" class="btn mini" data-act="edit" data-id="' +
+            esc(id) +
+            '" data-kind="' +
+            esc(kind) +
+            '" title="Edit standing objective">Edit</button>';
       return (
         '<div class="desk-row' +
         (focused ? " focused" : "") +
@@ -539,6 +705,10 @@
         esc(kind) +
         '" data-state="' +
         esc(st) +
+        '" data-objective="' +
+        esc(obj) +
+        '" data-sched-spec="' +
+        esc(scheduleSpecPrefill(d.schedule)) +
         '">' +
         '<div class="desk-head"><span class="desk-kind">' +
         esc(head) +
@@ -565,6 +735,8 @@
         (isBusy ? "" : " disabled") +
         ">Stop</button>" +
         dismissOrDelete +
+        scheduleBtn +
+        editBtn +
         "</div></div>"
       );
     }
@@ -1081,6 +1253,15 @@
       } else if (act === "stop") stopDesk(id);
       else if (act === "dismiss") dismissDesk(id);
       else if (act === "delete") deleteDesk(id);
+      else if (act === "schedule") {
+        const row = btn.closest(".desk-row");
+        const existing = row ? row.getAttribute("data-sched-spec") || "" : "";
+        openScheduleDialog(id, kind, existing);
+      } else if (act === "edit") {
+        const row = btn.closest(".desk-row");
+        const objective = row ? row.getAttribute("data-objective") || "" : "";
+        openEditDialog(id, kind, objective);
+      }
       return;
     }
     const row = t.closest(".desk-row");
@@ -1137,6 +1318,44 @@
   applyHostedMode();
   const health = el("health-link");
   if (health) health.setAttribute("href", API + "/health");
+
+  const schedSave = el("schedule-save");
+  if (schedSave) schedSave.addEventListener("click", saveSchedule);
+  const schedClear = el("schedule-clear");
+  if (schedClear) schedClear.addEventListener("click", clearSchedule);
+  const schedCancel = el("schedule-cancel");
+  if (schedCancel) {
+    schedCancel.addEventListener("click", function () { closeModal("schedule"); });
+  }
+  const schedSpec = el("schedule-spec");
+  if (schedSpec) {
+    schedSpec.addEventListener("keydown", function (ev) {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        saveSchedule();
+      } else if (ev.key === "Escape") {
+        closeModal("schedule");
+      }
+    });
+  }
+  const editSave = el("edit-save");
+  if (editSave) editSave.addEventListener("click", saveEdit);
+  const editCancel = el("edit-cancel");
+  if (editCancel) {
+    editCancel.addEventListener("click", function () { closeModal("edit"); });
+  }
+  document.querySelectorAll(".modal-backdrop[data-close]").forEach(function (b) {
+    b.addEventListener("click", function () {
+      closeModal(b.getAttribute("data-close"));
+    });
+  });
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key !== "Escape") return;
+    const sm = el("schedule-modal");
+    const em = el("edit-modal");
+    if (sm && !sm.hidden) closeModal("schedule");
+    if (em && !em.hidden) closeModal("edit");
+  });
 
   refresh();
   setInterval(refresh, POLL_MS);
