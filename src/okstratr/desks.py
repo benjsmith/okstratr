@@ -714,6 +714,7 @@ class DeskRegistry:
         payload = parsed.to_dict()
         payload["describe"] = describe(parsed)
         payload["attached_at"] = time()
+        payload["schedule_id"] = f"{desk.id}:{payload['attached_at']}"
         desk.schedule = payload
         desk.updated_at = time()
         self.save()
@@ -824,6 +825,34 @@ class DeskRegistry:
         stopped = self.stop(desk.id)
         stopped["action"] = "auto_quiet"
         stopped["reason"] = "dag_fully_terminal"
+        # Cheap path-native notify (desk.done); schedule.done if desk has a schedule
+        try:
+            from . import host_notify
+
+            sid = None
+            if isinstance(desk.schedule, dict):
+                sid = desk.schedule.get("schedule_id") or desk.schedule.get("id")
+            host_notify.emit(
+                "desk.done",
+                title=f"Desk done · {desk.kind or 'desk'}",
+                body=(desk.objective or "").strip() or f"desk {desk.id} quiet (DAG terminal)",
+                desk=desk.kind,
+                schedule_id=str(sid) if sid else None,
+                progress={"pct": 100, "phase": "done", "detail": "auto_quiet"},
+            )
+            if sid:
+                host_notify.emit(
+                    "schedule.done",
+                    title=f"Schedule done · {desk.kind or 'desk'}",
+                    body=(desk.objective or "").strip() or str(sid),
+                    desk=desk.kind,
+                    schedule_id=str(sid),
+                    progress={"pct": 100, "phase": "done", "detail": "auto_quiet"},
+                )
+        except Exception:  # noqa: BLE001
+            from .logutil import get_logger
+
+            get_logger(__name__).warning("auto_quiet host_notify failed", exc_info=True)
         return stopped
 
     def _dag_for_desk(self, desk: Desk) -> Any:

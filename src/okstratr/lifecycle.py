@@ -370,6 +370,7 @@ def start(
         "serve_url": serve_url(host, port),
         "observer_url": observer_url(),
         "consent_prompt": CONSENT_PROMPT,
+        "health": _core_health_safe(),
     }
 
 
@@ -617,6 +618,21 @@ def _files_lines_written() -> dict[str, Any]:
     }
 
 
+
+def _core_health_safe() -> dict[str, Any]:
+    try:
+        from . import status as status_mod
+
+        return status_mod.core_health()
+    except Exception:  # noqa: BLE001
+        return {
+            "ce": {"state": "stopped", "url": "", "detail": "health unavailable"},
+            "okstratr": {"state": "stopped", "url": serve_url(), "detail": "health unavailable"},
+            "wiki_build": {"state": "idle", "pages": None, "detail": "health unavailable"},
+        }
+
+
+
 def status_payload() -> dict[str, Any]:
     """Structured status used by the CLI box and API consumers."""
     serve_up = is_serve_running()
@@ -694,7 +710,17 @@ def status_payload() -> dict[str, Any]:
         "tokens": tokens,
         "files": files,
         "consent_prompt": CONSENT_PROMPT,
+        "health": _core_health_safe(),
     }
+
+
+
+def _fmt_health_line(health: dict[str, Any]) -> str:
+    ce = (health.get("ce") or {}).get("state") or "?"
+    ok = (health.get("okstratr") or {}).get("state") or "?"
+    wiki = (health.get("wiki_build") or {}).get("state") or "?"
+    return f"ce={ce} okstratr={ok} wiki_build={wiki}"
+
 
 
 def format_status_box(payload: dict[str, Any] | None = None) -> str:
@@ -738,6 +764,7 @@ def format_status_box(payload: dict[str, Any] | None = None) -> str:
         "├" + "─" * inner + "┤",
         row("", serve_line),
         row("", observer_line),
+        row("health", _fmt_health_line(p.get("health") or {})),
         row("board ", str(p.get("board_duration_chip"))),
         row("web   ", str(p.get("web_egress"))),
         row("cwd   ", str(p.get("cwd"))),

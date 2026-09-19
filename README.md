@@ -97,6 +97,27 @@ Every seat (Herdr + direct) labels with `desk_id` + `thread_id`. Config file:
 2. **Linked Nautilus** — file reveal next to Atlas
 3. **okstratr observer + Herdr side by side** — orchestrator console + agent session
 
+
+
+## Bare CLI (first-class) + host_notify
+
+Bare CLI is a **first-class** install path — not a fallback. Lifecycle verbs remain:
+
+```bash
+okstratr start | restart | status | shutdown
+```
+
+Schedule / desk progress uses **path-native** I/O via `okstratr.host_notify` v1 envelopes
+(`src/okstratr/host_notify.py`):
+
+| Path | Delivery |
+|------|----------|
+| Hosted (`OKSTRATR_HOSTED=switchbay\|okbay` or `OKSTRATR_HOST_NOTIFY_URL`) | POST JSON to host callback (Switchbay: `/api/okstratr/host-notify`) |
+| Bare | Harness-visible summary on stderr (default); `--json-notify` / `OKSTRATR_JSON_NOTIFY=1` for JSON lines |
+
+`okstratr status` (and `GET /api/status`) include a shared **health** block: `ce`, `okstratr`, `wiki_build`.
+
+
 ## What works today
 
 - Omarchy kinds: `service`, `bar-widget`, `panel` (optional thin client; no Atlas overlay)

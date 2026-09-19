@@ -102,6 +102,11 @@ def _cmd_desk(args) -> int:
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="okstratr")
+    p.add_argument(
+        "--json-notify",
+        action="store_true",
+        help="Emit host_notify as JSON lines on bare path (also OKSTRATR_JSON_NOTIFY=1)",
+    )
     sub = p.add_subparsers(dest="cmd", required=True)
 
     st = sub.add_parser("status", help="Print lifecycle status box (services, desks, tokens, …)")
@@ -382,6 +387,11 @@ def main(argv=None) -> int:
     agents_p.add_argument("--thread", dest="thread_id", default=None, help="Filter by thread_id")
 
     args = p.parse_args(argv)
+
+    if getattr(args, "json_notify", False):
+        from . import host_notify
+
+        host_notify.set_json_notify(True)
 
 
     if args.cmd == "status":
