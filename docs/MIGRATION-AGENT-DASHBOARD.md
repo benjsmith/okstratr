@@ -1,6 +1,6 @@
 # Migration: Switchbay Agent Dashboard → okstratr observer (Phase 1b)
 
-- **Status:** In progress (highest-value parity landed 2026-09-18)
+- **Status:** In progress (desk rail controls formalized 2026-09-19; residual SB chrome remains)
 - **Charter:** agent-dashboard features belong in **okstratr**; Switchbay keeps rail UI + settings that write the registry
 - **Constraint:** no chat/query/objective bar on the observer; no iframes; no TUI; hosted mode keeps settings strip hidden
 
@@ -20,7 +20,7 @@
 
 | Parity item | Landed? | Where |
 |-------------|---------|-------|
-| Desk rail Start / Stop / Dismiss / Delete | Yes (1a) | Left rail |
+| Desk rail Start / Stop / Dismiss / Delete | **Yes (1c)** | Left rail → `/api/desk/*` via `desk_rail.py`; Start may pass `desk_id` |
 | Quiet all working desks | **Yes (1b)** | Header `Quiet all` → `POST /api/desk/quiet_standing` |
 | DAG AGENT SPACE nodes/edges/token flow | Yes (pre-1b) | Main canvas |
 | Blackboard + clear (non-settings) | Yes | Main panel |
@@ -42,14 +42,35 @@
 - [ ] E2E evidence in umbrella `evidence/` vs Switchbay Agents tab
 - [ ] Feature-flag / dual-stack gate before thinning Switchbay Agents tab (charter #2)
 
+## Remaining Switchbay-only chrome (do not delete yet)
+
+Desk Start/Stop/Dismiss/Delete (+ Quiet all) now live on the observer rail and
+reuse the okstratr desk lifecycle (`POST /api/desk/start|stop|dismiss|delete`,
+`POST /api/desk/quiet_standing`). **Do not remove** Switchbay Agents UI until
+umbrella parity marks the row ✓/▲. Still Switchbay-owned:
+
+| Chrome | Why it stays in Switchbay |
+|--------|---------------------------|
+| Edit brief → rail composer | Shell chat I/O (`sy:rail-set-input`); observer has no query bar (ADR-003) |
+| Schedule create/edit dialog | Observer shows schedule **badge** only; `POST /api/desk/schedule` exists |
+| Active-run transcript / cancel / background | Switchbay run registry (`/api/runs/active`), not desks |
+| Workspace switcher + open-Agents | Shell workspaces |
+| Tools / Rules / Palettes / Providers / Skills | Shell + registry settings (hosted: shell owns) |
+| Interrupted-orchestration resume | Switchbay orchestration API |
+
+Contract helper: `okstratr.desk_rail` (`DESK_RAIL_ACTIONS`, `SWITCHBAY_ONLY_CHROME`).
+
 ## Verify
 
 ```bash
-# Desk dashboard markup present; settings still hidden when hosted
-curl -s 'http://127.0.0.1:8767/observer/?host=switchbay' | grep -E 'desk-dashboard|btn-quiet-all|OKSTRATR_HOSTED'
+# Desk dashboard + rail controls; settings still hidden when hosted
+curl -s 'http://127.0.0.1:8767/observer/?host=switchbay' | grep -E 'desk-dashboard|btn-quiet-all|desk-rail|OKSTRATR_HOSTED'
 curl -s 'http://127.0.0.1:8767/observer/?host=switchbay' | grep -E 'settings-panel|class="config"'
 # Lifecycle feeds stats
 curl -s 'http://127.0.0.1:8767/api/lifecycle' | jq '{desks,tokens,files}'
+# Desk rail APIs (dry-run herdr)
+curl -s -X POST 'http://127.0.0.1:8767/api/desk/start' -H 'Content-Type: application/json' \
+  -d '{"kind":"work","objective":"rail check"}' | jq '{ok,action,desk:.desk.desk.id//.desk.id}'
 ```
 
 ## Related

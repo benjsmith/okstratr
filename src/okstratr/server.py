@@ -260,9 +260,12 @@ class Handler(BaseHTTPRequestHandler):
             # /api/seat is deprecated alias → desk start auto
             if path == "/api/seat" and not kind:
                 kind = "auto"
+            desk_id_in = payload.get("desk_id") or payload.get("id")
+            desk_id_in = str(desk_id_in).strip() if desk_id_in else None
             result = desks.start(
                 objective,
                 kind=kind,
+                desk_id=desk_id_in,
                 reset=reset,
                 effort=effort_f,
                 run_cos=run_cos and bool(objective),

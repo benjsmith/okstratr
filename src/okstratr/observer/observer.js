@@ -1,6 +1,7 @@
 /* okstratr observer panel — DeskRail + AGENT SPACE canvas; not a chat UI.
  * No objective/query text input — Herdr / CLI harness is the only text surface.
- * Desk Start POSTs kind (+ standing objective when present), like Omarchy Start
+ * Desk rail Start/Stop/Dismiss/Delete (+ Quiet all) → /api/desk/* (see desk_rail.py).
+ * Start POSTs kind (+ optional desk_id + standing objective), like Omarchy Start
  * when the query box is empty.
  */
 (function () {
@@ -235,12 +236,14 @@
       });
   }
 
-  function startDesk(kind) {
+  function startDesk(kind, deskId) {
     const k = String(kind || state.selectedKind || "auto");
     state.selectedKind = k;
     const objective = standingObjectiveForKind(k);
+    const id = deskId && String(deskId).indexOf("kind:") !== 0 ? String(deskId) : "";
     setMsg("Starting " + k + " desk…");
     const payload = { kind: k, objective: objective };
+    if (id) payload.desk_id = id;
     if (String(objective || "").trim()) payload.drive_herdr = true;
     api("/api/desk/start", { method: "POST", body: payload })
       .then(afterDeskAction)
@@ -551,6 +554,8 @@
         (kindSel ? " active" : "") +
         '" data-act="start" data-kind="' +
         esc(kind) +
+        '" data-id="' +
+        esc(id) +
         '">' +
         startLbl +
         "</button>" +
@@ -1072,7 +1077,7 @@
       const kind = btn.getAttribute("data-kind") || state.selectedKind;
       if (act === "start") {
         state.selectedKind = kind;
-        startDesk(kind);
+        startDesk(kind, id);
       } else if (act === "stop") stopDesk(id);
       else if (act === "dismiss") dismissDesk(id);
       else if (act === "delete") deleteDesk(id);

@@ -409,6 +409,7 @@ class DeskRegistry:
         objective: str = "",
         *,
         kind: str | None = None,
+        desk_id: str | None = None,
         reset: bool = False,
         effort: float | None = None,
         run_cos: bool = True,
@@ -422,6 +423,9 @@ class DeskRegistry:
 
         Bind selected okbay workspace when okbay_workspace_id / workspace_id given
         (also persists panel selection).
+
+        Optional ``desk_id`` resumes that standing desk (observer Continue / Switchbay
+        DesksPanel Start-by-id). Dismissed ids are ignored (Start falls back to kind).
 
         ``working`` means an active Herdr run. After CoS breakdown, if we are not
         immediately driving Herdr seats (``drive_herdr=False``, the default), the
@@ -455,11 +459,17 @@ class DeskRegistry:
         ws = okbay.active_workspace()
         now = time()
 
-        # One live desk per kind: resume preferred live (working then quiet, newest)
-        # unless reset. Update objective when provided; never spawn a quiet twin.
+        # Resume explicit desk_id when live; else one live desk per kind
+        # (working then quiet, newest) unless reset. Never spawn a quiet twin.
         resumed = None
         if not reset:
-            resumed = self.preferred_live_desk(chosen_kind)
+            want = str(desk_id or "").strip()
+            if want and not want.startswith("kind:"):
+                cand = self.desks.get(want)
+                if cand is not None and cand.state != "dismissed":
+                    resumed = cand
+            if resumed is None:
+                resumed = self.preferred_live_desk(chosen_kind)
 
         if resumed is not None:
             desk = resumed
@@ -994,7 +1004,7 @@ def stop(desk_id: str | None = None) -> dict[str, Any]:
             "desk.stop",
             kind="process",
             desk_id=desk_id or (out.get("desk_id") if isinstance(out, dict) else None),
-            note=str(op),
+            note="desk stop",
         )
     except Exception:  # noqa: BLE001
         pass
@@ -1022,7 +1032,7 @@ def dismiss(desk_id: str | None = None) -> dict[str, Any]:
             "desk.dismiss",
             kind="process",
             desk_id=desk_id or (out.get("desk_id") if isinstance(out, dict) else None),
-            note=str(op),
+            note="desk dismiss",
         )
     except Exception:  # noqa: BLE001
         pass
