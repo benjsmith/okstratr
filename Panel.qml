@@ -8,7 +8,8 @@
 // Harness editor: ConfigHarnessEditor.qml; standing rail: DeskRail.qml + /api/harness*.
 // FloatingWindow desk UI (native toplevel — not Overlay / not over lock/screensaver).
 // LEFT rail: standing desks from status.desk.standing / focus_desk_id (POST /api/desk/focus).
-// Main: optional native query/workspace/config + DAG + CoS conversation + desk-scoped blackboard.
+// Main: workspace switcher + config + DAG + CoS conversation + desk-scoped blackboard.
+// No free-text objective/query bar — desks start via Herdr / CoS / DeskRail (ADR-003).
 // Config modal scrolls inside bounds (Flickable). panel_open restore stays disabled.
 // Text I/O: Herdr / CLI harnesses — not this panel as chat.
 
@@ -240,24 +241,18 @@ Item {
 
   function focusDesk(deskId) {
     if (!deskId) return
-    // Refill query with this desk's objective so Continue/Start can edit & rerun.
     var rows = Model.standingDesks(root.status) || []
     for (var i = 0; i < rows.length; i++) {
       var row = rows[i]
       if (row && String(row.id) === String(deskId)) {
         if (row.kind)
           root.selectedKind = String(row.kind)
-        if (row.objective)
-          queryInput.text = String(row.objective)
         break
       }
     }
     Model.postJson(root.apiUrl + "/api/desk/focus", {desk_id: String(deskId)}, function (parsed) {
       if (parsed && parsed.ok === false)
         return
-      // Focus API path: ensure queryInput tracks status objective (quiet desks too).
-      if (parsed && parsed.objective)
-        queryInput.text = String(parsed.objective)
       root.refreshStatus()
       root.refreshLive()
     })
@@ -276,40 +271,15 @@ Item {
       root.actionMsg = parsed.message || ("Herdr running (job " + parsed.herdr_job.id + ")")
     else
       root.actionMsg = (parsed && parsed.message) ? parsed.message : "Desk updated"
-    // Do not clear queryInput on stop — keep objective for Continue/rerun.
-    // If query empty and start returned a desk objective, refill it.
-    var nested = parsed && parsed.desk
-    var deskObj = ""
-    if (nested) {
-      if (nested.desk && nested.desk.objective)
-        deskObj = String(nested.desk.objective)
-      else if (nested.objective)
-        deskObj = String(nested.objective)
-    }
-    if (deskObj && !String(queryInput.text || "").trim())
-      queryInput.text = deskObj
     root.refreshStatus()
     root.refreshLive()
   }
 
-  function parseDeskQuery(text) {
-    // Query defaults to auto. Leading /work|/curate|/code|/deck|/auto overrides.
-    var raw = String(text || "").trim()
-    var m = raw.match(/^\/(work|curate|code|deck|auto)\b\s*([\s\S]*)$/i)
-    if (m)
-      return { kind: String(m[1]).toLowerCase(), objective: String(m[2] || "").trim(), slash: true }
-    return { kind: null, objective: raw, slash: false }
-  }
-
   function startDesk(kind) {
-    var parsed = root.parseDeskQuery(queryInput.text)
-    // Slash in the query always wins; otherwise use the rail kind / auto.
-    var k = parsed.slash ? parsed.kind : String(kind || root.selectedKind || "auto")
+    // No free-text objective bar — reuse standing / focused desk objective (Herdr/CoS owns text).
+    var k = String(kind || root.selectedKind || "auto")
     root.selectedKind = k
-    var objective = parsed.objective
-    // Empty query (Continue/Start after Stop) → reuse standing desk objective.
-    if (!String(objective || "").trim())
-      objective = root.standingObjectiveForKind(k)
+    var objective = root.standingObjectiveForKind(k)
     root.actionMsg = "Starting " + k + " desk…"
     // Non-empty effective objective → drive seats (run_ready). drive_herdr means
     // "drive seats" — Herdr *or* direct per harnesses.toml backend (not force herdr).
@@ -321,11 +291,6 @@ Item {
     if (String(objective || "").trim())
       payload.drive_herdr = true
     Model.postJson(root.apiUrl + "/api/desk/start", payload, root.afterDeskAction)
-  }
-
-  function startFromQuery() {
-    var parsed = root.parseDeskQuery(queryInput.text)
-    root.startDesk(parsed.kind || "auto")
   }
 
   function stopDesk(deskId) {
@@ -371,7 +336,7 @@ Item {
     if (!root.scheduleDeskId || root.scheduleDeskId.indexOf("kind:") === 0) {
       Model.postJson(root.apiUrl + "/api/desk/start", {
         kind: root.scheduleKind,
-        objective: String(queryInput.text || "").trim(),
+        objective: root.standingObjectiveForKind(root.scheduleKind),
         workspace_id: root.selectedWorkspaceId
       }, function(started) {
         var did = started && started.desk && started.desk.desk ? started.desk.desk.id : ""
@@ -723,7 +688,7 @@ Item {
                 spacing: 14
 
                 Text {
-                  text: "Desk objective"
+                  text: "Workspace"
                   color: root.themeMuted
                   font.pixelSize: 11
                   font.bold: true
@@ -734,45 +699,8 @@ Item {
                   spacing: 8
 
                   Rectangle {
-                    width: Math.max(220, parent.width - workspacePicker.width - startQuery.width - 18)
-                    height: 42
-                    radius: 9
-                    color: root.themeBg
-                    border.width: queryInput.activeFocus ? 2 : 1
-                    border.color: queryInput.activeFocus ? root.themeAccent : root.themeBorder
-
-                    TextInput {
-                      id: queryInput
-                      anchors.fill: parent
-                      anchors.margins: 11
-                      color: root.themeFg
-                      selectionColor: root.themeAccent
-                      selectedTextColor: root.themeBg
-                      font.pixelSize: 14
-                      clip: true
-                      verticalAlignment: TextInput.AlignVCenter
-                      onAccepted: root.startFromQuery()
-                    }
-                    Text {
-                      anchors.fill: parent
-                      anchors.margins: 11
-                      visible: !queryInput.text && !queryInput.activeFocus
-                      text: "Objective — defaults to auto; /curate /deck /work /code to override"
-                      color: root.themeMuted
-                      font.pixelSize: 14
-                      verticalAlignment: Text.AlignVCenter
-                    }
-                    MouseArea {
-                      anchors.fill: parent
-                      cursorShape: Qt.IBeamCursor
-                      onClicked: queryInput.forceActiveFocus()
-                      z: -1
-                    }
-                  }
-
-                  Rectangle {
                     id: workspacePicker
-                    width: 150
+                    width: Math.min(280, parent.width)
                     height: 42
                     radius: 9
                     color: root.themeBg
@@ -794,16 +722,11 @@ Item {
                     }
                   }
 
-                  Chip {
-                    id: startQuery
-                    label: {
-                      var parsed = root.parseDeskQuery(queryInput.text)
-                      return "Start " + (parsed.kind || "auto")
-                    }
-                    primary: true
-                    implicitHeight: 42
-                    implicitWidth: 110
-                    onClicked: root.startFromQuery()
+                  Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "Start desks from the rail · text via Herdr / CoS"
+                    color: root.themeMuted
+                    font.pixelSize: 11
                   }
                 }
 
