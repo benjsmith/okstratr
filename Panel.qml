@@ -111,7 +111,10 @@ Item {
       if (!raw || !String(raw).trim())
         return
       var u = JSON.parse(raw)
-      if (u && u.panel_open === true) {
+      // Persist panel_open for explicit close state, but never auto-open on
+      // Component.onCompleted / shell restart. User opens via Super+Shift+K
+      // (okbay full-product) or Super+Shift+O (okstratr only).
+      if (false && u && u.panel_open === true) {
         root.restoringPanel = true
         root.open()
         root.restoringPanel = false
