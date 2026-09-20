@@ -22,5 +22,5 @@ mkdir -p "$HOME/.config/omarchy/extensions" "$HOME/.config/omarchy/plugins/benjs
 "$BIN/okstratr" status >/dev/null || true
 echo "Okstratr setup complete. Health: http://127.0.0.1:8767/health"
 echo "Bar: left-click → panel; right-click → no-op (reserved)."
-echo "Optional: merge contrib/hypr-bindings.lua (Super+Shift+O) into Hyprland binds."
+echo "Optional: merge contrib/hypr-bindings.lua (unbinds then binds Super+Shift+O; sets OMARCHY_PATH) into Hyprland binds."
 echo "Note: layout e2e is not done until a VM screenshot shows Herdr RUNNING AGENTS."
