@@ -72,6 +72,28 @@
         </div>
       </section>
 
+      <!-- Easy switcher between desks and okbay workspaces -->
+      <section class="panel switcher-panel" id="context-switcher" aria-label="Desk and workspace switcher">
+        <div class="panel-head">
+          <h2>Context</h2>
+          <span class="muted" id="switcher-meta">desk · workspace</span>
+        </div>
+        <div class="switcher-row">
+          <label class="switcher-field">
+            <span class="switcher-label">Desk</span>
+            <select id="desk-switcher" class="switcher-select" aria-label="Select desk">
+              <option value="">Select a desk…</option>
+            </select>
+          </label>
+          <label class="switcher-field">
+            <span class="switcher-label">Workspace</span>
+            <select id="workspace-switcher" class="switcher-select" aria-label="Select workspace">
+              <option value="">local</option>
+            </select>
+          </label>
+        </div>
+      </section>
+
       <section class="panel agent-space-panel" aria-label="Agent Space">
         <div class="panel-head agent-space-head">
           <h2 id="agent-space-title">AGENT SPACE</h2>
@@ -82,9 +104,22 @@
         </div>
       </section>
 
-      <section class="panel bb-panel">
+      <!-- CoS conversation (Herdr) — replaces cryptic activity dump -->
+      <section class="panel conversation-panel" id="conversation-panel" aria-label="CoS conversation">
+        <div class="panel-head">
+          <h2>CoS conversation</h2>
+          <span class="muted" id="conversation-meta">select a desk</span>
+        </div>
+        <div id="conversation" class="conversation-list">
+          <div class="bb-empty">Select a desk to view ongoing CoS conversation in Herdr.</div>
+        </div>
+      </section>
+
+      <!-- Below DAG: only the live blackboard for the selected desk -->
+      <section class="panel bb-panel" id="bb-panel">
         <div class="panel-head">
           <h2>Blackboard</h2>
+          <span class="muted" id="bb-desk-label">selected desk</span>
           <button type="button" id="btn-bb-clear" class="btn ghost">Clear</button>
         </div>
         <div id="blackboard" class="bb-list">Loading…</div>
@@ -114,7 +149,7 @@
         </div>
       </div>
       <p class="hint harness-path" id="harness-path">harnesses.toml — see serve cwd</p>
-      <p class="hint">No chat/objective input here — Herdr / CLI harness only. Desk Start uses standing objective.</p>
+      <p class="hint">No chat/objective input here — Herdr / CLI harness only. Desk click opens CoS conversation; blackboard is desk-scoped.</p>
     </aside>
   </div>
 

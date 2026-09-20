@@ -520,7 +520,7 @@ class DeskRegistry:
             if run_cos and obj:
                 from . import cos
 
-                cos.break_down(obj, kind=chosen_kind)
+                cos.break_down(obj, kind=chosen_kind, desk_id=desk.id)
             self._persist_desk_dag(desk)
 
         # Keep existing desk/status objective when resuming quiet with empty query.

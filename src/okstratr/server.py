@@ -9,7 +9,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from . import PORT
-from . import blackboard, cos, dag, desks, herdr, herdr_jobs, okbay, roles, status, web_egress
+from . import blackboard, conversation, cos, dag, desks, herdr, herdr_jobs, okbay, roles, status, web_egress
 from .lifecycle import observer_asset_dir, status_payload as lifecycle_status_payload
 from .public_base import (
     HOST_HEADER,
@@ -147,13 +147,41 @@ class Handler(BaseHTTPRequestHandler):
                     n = 20
             kind = (qs.get("kind") or [None])[0]
             q = (qs.get("q") or [None])[0]
-            if kind:
+            desk_id = (qs.get("desk_id") or qs.get("desk") or [None])[0]
+            if desk_id:
+                items = conversation.blackboard_items_for_desk(
+                    str(desk_id), n=n, kind=str(kind) if kind else None
+                )
+            elif kind:
                 items = blackboard.by_kind(kind)
             elif q:
                 items = blackboard.search(q)
             else:
                 items = blackboard.head(n)
-            payload = {"summary": blackboard.summary(), "items": items}
+            payload = {
+                "summary": blackboard.summary(),
+                "items": items,
+                "desk_id": str(desk_id) if desk_id else None,
+            }
+            code, body, ct = _json_bytes(payload)
+            return self._send(code, body, ct)
+
+        if path in (
+            "/api/desk/conversation",
+            "/api/herdr/conversation",
+            "/api/conversation",
+        ):
+            desk_id = (qs.get("desk_id") or qs.get("desk") or qs.get("id") or [None])[0]
+            limit = 80
+            raw_lim = (qs.get("n") or qs.get("limit") or [None])[0]
+            if raw_lim is not None:
+                try:
+                    limit = int(raw_lim)
+                except (ValueError, TypeError):
+                    limit = 80
+            payload = conversation.conversation_for_desk(
+                str(desk_id) if desk_id else None, limit=limit
+            )
             code, body, ct = _json_bytes(payload)
             return self._send(code, body, ct)
 
@@ -707,6 +735,7 @@ def serve(host: str = "127.0.0.1", port: int = PORT) -> int:
         f"okstratr listening on http://{host}:{port}{base_note}  "
         "(/health /observer/ /panel/ /api/lifecycle /api/status /api/desk/* /api/web /api/workspaces /api/config/roles /api/harness /api/desk_session "
         "/api/seat /api/dag /api/blackboard /api/blackboard/clear /api/blackboard/prune /api/audit "
+        "/api/desk/conversation /api/herdr/conversation "
         "/api/cos/break /api/herdr/launch /api/herdr/run-ready; hosted via X-Okstratr-Host or ?host=)"
     )
     try:

@@ -55,6 +55,9 @@
     groupFilter: "all",
     /** Optional kind chip filter (empty = all kinds) */
     kindFilter: "",
+    workspaces: [],
+    selectedWorkspaceId: "",
+    conversation: null,
   };
 
   /** Hide/disable HTML settings chrome when hosted by Switchbay/okbay. */
@@ -1125,12 +1128,181 @@
     ensureAnimLoop();
   }
 
+  function deskLabel(d) {
+    if (!d) return "";
+    const kind = String(d.kind || "desk");
+    const st = deskStateLabel(d.state) || String(d.state || "");
+    const obj = d.objective ? String(d.objective).slice(0, 40) : "";
+    const id = String(d.id || "");
+    let label = kind;
+    if (st) label += " · " + st;
+    if (obj) label += " — " + obj;
+    else if (id && id.indexOf("kind:") !== 0) label += " · " + id.slice(0, 8);
+    return label;
+  }
+
+  function renderDeskSwitcher() {
+    const sel = el("desk-switcher");
+    if (!sel) return;
+    const prev = state.focusDeskId;
+    const list = (state.desks || []).filter(function (d) {
+      return d && d.id && String(d.id).indexOf("kind:") !== 0;
+    });
+    const opts = ['<option value="">Select a desk…</option>'].concat(
+      list.map(function (d) {
+        const id = String(d.id);
+        const selected = id === String(prev) ? " selected" : "";
+        return (
+          '<option value="' +
+          esc(id) +
+          '"' +
+          selected +
+          ">" +
+          esc(deskLabel(d)) +
+          "</option>"
+        );
+      })
+    );
+    sel.innerHTML = opts.join("");
+    const meta = el("switcher-meta");
+    if (meta) {
+      meta.textContent =
+        (prev ? "desk " + prev.slice(0, 8) : "no desk") +
+        " · ws " +
+        (state.selectedWorkspaceId || "local");
+    }
+  }
+
+  function renderWorkspaceSwitcher(status) {
+    const sel = el("workspace-switcher");
+    if (!sel) return;
+    let rows = [];
+    let selected = state.selectedWorkspaceId || "";
+    const pack =
+      (status && status.okbay_workspaces) ||
+      (state.status && state.status.okbay_workspaces) ||
+      null;
+    if (pack) {
+      if (Array.isArray(pack.workspaces)) rows = pack.workspaces;
+      if (!selected && pack.selected) selected = String(pack.selected);
+      if (!selected && pack.active) selected = String(pack.active.id || pack.active || "");
+    }
+    state.workspaces = rows;
+    if (!selected) selected = "local";
+    state.selectedWorkspaceId = selected;
+    const seen = {};
+    const opts = [];
+    function addOpt(id, label) {
+      const v = String(id || "");
+      if (!v || seen[v]) return;
+      seen[v] = true;
+      const selAttr = v === String(selected) ? " selected" : "";
+      opts.push(
+        '<option value="' + esc(v) + '"' + selAttr + ">" + esc(label || v) + "</option>"
+      );
+    }
+    addOpt("local", "local");
+    rows.forEach(function (w) {
+      const id = String(w.id || w.name || w.path || "");
+      const name = String(w.name || w.id || w.path || id);
+      addOpt(id, name);
+    });
+    sel.innerHTML = opts.join("");
+  }
+
+  function chooseWorkspace(id) {
+    const wid = String(id || "local");
+    state.selectedWorkspaceId = wid;
+    setMsg("Workspace: " + wid);
+    api("/api/workspace/select", {
+      method: "POST",
+      body: { id: wid, workspace_id: wid },
+    })
+      .then(function () {
+        refresh();
+      })
+      .catch(function (e) {
+        setMsg(String(e.message || e));
+      });
+  }
+
+  function renderConversation(payload) {
+    const root = el("conversation");
+    const meta = el("conversation-meta");
+    if (!root) return;
+    state.conversation = payload || null;
+    if (!state.focusDeskId) {
+      if (meta) meta.textContent = "select a desk";
+      root.innerHTML =
+        '<div class="bb-empty">Select a desk to view ongoing CoS conversation in Herdr.</div>';
+      return;
+    }
+    const msgs = (payload && payload.messages) || [];
+    const src = (payload && payload.source) || "stub";
+    if (meta) {
+      meta.textContent =
+        (payload && payload.stub ? "stub · " : "") +
+        src +
+        " · " +
+        msgs.length +
+        " turn" +
+        (msgs.length === 1 ? "" : "s");
+    }
+    if (!msgs.length) {
+      let empty =
+        '<div class="bb-empty">No CoS conversation yet for this desk. Start the desk or open Herdr.</div>';
+      if (payload && payload.hint) {
+        empty =
+          '<p class="conv-stub-hint">' +
+          esc(payload.hint) +
+          "</p>" +
+          empty;
+      }
+      root.innerHTML = empty;
+      return;
+    }
+    let html = "";
+    if (payload && payload.stub && payload.hint) {
+      html += '<p class="conv-stub-hint">' + esc(payload.hint) + "</p>";
+    }
+    html += msgs
+      .map(function (m) {
+        const role = String(m.role || "system").toLowerCase();
+        const author = String(m.author || role);
+        const body = String(m.text || m.content || "");
+        return (
+          '<div class="conv-row role-' +
+          esc(role) +
+          '"><div class="conv-meta"><span class="conv-author">' +
+          esc(author) +
+          "</span><span>" +
+          esc(role) +
+          '</span></div><div class="conv-body">' +
+          esc(body.slice(0, 1200)) +
+          "</div></div>"
+        );
+      })
+      .join("");
+    root.innerHTML = html;
+  }
+
   function renderBlackboard(payload) {
     const root = el("blackboard");
+    const label = el("bb-desk-label");
+    if (label) {
+      label.textContent = state.focusDeskId
+        ? "desk " + String(state.focusDeskId).slice(0, 10)
+        : "select a desk";
+    }
+    if (!state.focusDeskId) {
+      root.innerHTML =
+        '<div class="bb-empty">Select a desk to show its live blackboard.</div>';
+      return;
+    }
     const items = (payload && (payload.items || payload.entries || payload.head)) || [];
     const list = Array.isArray(items) ? items : [];
     if (!list.length) {
-      root.innerHTML = '<div class="bb-empty">blackboard empty</div>';
+      root.innerHTML = '<div class="bb-empty">blackboard empty for this desk</div>';
       return;
     }
     root.innerHTML = list
@@ -1193,13 +1365,22 @@
     const dagPath = state.focusDeskId
       ? "/api/dag?desk_id=" + encodeURIComponent(state.focusDeskId)
       : "/api/dag";
+    const bbPath = state.focusDeskId
+      ? "/api/blackboard?n=12&desk_id=" + encodeURIComponent(state.focusDeskId)
+      : "/api/blackboard?n=12";
+    const convPath = state.focusDeskId
+      ? "/api/desk/conversation?desk_id=" + encodeURIComponent(state.focusDeskId)
+      : null;
     Promise.all([
       api("/api/status").catch(function () { return {}; }),
       api(dagPath).catch(function () { return {}; }),
       api("/api/desk/status").catch(function () { return {}; }),
       api("/api/desk_session").catch(function () { return {}; }),
       api("/api/lifecycle").catch(function () { return null; }),
-      api("/api/blackboard?n=12").catch(function () { return {}; }),
+      api(bbPath).catch(function () { return {}; }),
+      convPath
+        ? api(convPath).catch(function () { return { messages: [], stub: true }; })
+        : Promise.resolve(null),
     ])
       .then(function (parts) {
         const status = parts[0];
@@ -1208,6 +1389,7 @@
         const deskSession = parts[3];
         const life = parts[4];
         const bb = parts[5];
+        const conv = parts[6];
         state.status = status;
 
         let desks = normalizeDesks(deskSession);
@@ -1225,7 +1407,10 @@
         }
 
         renderDesks();
+        renderDeskSwitcher();
+        renderWorkspaceSwitcher(status);
         renderAgentSpace(status, dag);
+        renderConversation(conv);
         renderBlackboard(bb);
         if (life) renderLifecycle(life);
         else renderDeskDashboard(null);
@@ -1314,6 +1499,26 @@
   window.addEventListener("resize", function () {
     rebuildLayout();
   });
+
+  const deskSwitcher = el("desk-switcher");
+  if (deskSwitcher) {
+    deskSwitcher.addEventListener("change", function () {
+      const id = deskSwitcher.value;
+      if (id) focusDesk(id);
+      else {
+        state.focusDeskId = "";
+        renderConversation(null);
+        renderBlackboard({});
+        renderDeskSwitcher();
+      }
+    });
+  }
+  const wsSwitcher = el("workspace-switcher");
+  if (wsSwitcher) {
+    wsSwitcher.addEventListener("change", function () {
+      chooseWorkspace(wsSwitcher.value);
+    });
+  }
 
   applyHostedMode();
   const health = el("health-link");
