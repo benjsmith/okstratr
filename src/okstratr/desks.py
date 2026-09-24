@@ -409,6 +409,7 @@ class DeskRegistry:
         objective: str = "",
         *,
         kind: str | None = None,
+        desk_id: str | None = None,
         reset: bool = False,
         effort: float | None = None,
         run_cos: bool = True,
@@ -422,6 +423,9 @@ class DeskRegistry:
 
         Bind selected okbay workspace when okbay_workspace_id / workspace_id given
         (also persists panel selection).
+
+        Optional ``desk_id`` resumes that standing desk (observer Continue / Switchbay
+        DesksPanel Start-by-id). Dismissed ids are ignored (Start falls back to kind).
 
         ``working`` means an active Herdr run. After CoS breakdown, if we are not
         immediately driving Herdr seats (``drive_herdr=False``, the default), the
@@ -455,11 +459,17 @@ class DeskRegistry:
         ws = okbay.active_workspace()
         now = time()
 
-        # One live desk per kind: resume preferred live (working then quiet, newest)
-        # unless reset. Update objective when provided; never spawn a quiet twin.
+        # Resume explicit desk_id when live; else one live desk per kind
+        # (working then quiet, newest) unless reset. Never spawn a quiet twin.
         resumed = None
         if not reset:
-            resumed = self.preferred_live_desk(chosen_kind)
+            want = str(desk_id or "").strip()
+            if want and not want.startswith("kind:"):
+                cand = self.desks.get(want)
+                if cand is not None and cand.state != "dismissed":
+                    resumed = cand
+            if resumed is None:
+                resumed = self.preferred_live_desk(chosen_kind)
 
         if resumed is not None:
             desk = resumed
@@ -510,7 +520,7 @@ class DeskRegistry:
             if run_cos and obj:
                 from . import cos
 
-                cos.break_down(obj, kind=chosen_kind)
+                cos.break_down(obj, kind=chosen_kind, desk_id=desk.id)
             self._persist_desk_dag(desk)
 
         # Keep existing desk/status objective when resuming quiet with empty query.
@@ -703,7 +713,7 @@ class DeskRegistry:
         *,
         desk_id: str | None = None,
     ) -> dict[str, Any]:
-        """Parse schedule args and attach to the desk (dialog UI is future)."""
+        """Parse schedule args and attach to the desk (observer Schedule dialog)."""
         desk = self._resolve(desk_id)
         if desk is None:
             return {"ok": False, "error": "no desk for schedule (start a desk first)"}
@@ -714,6 +724,7 @@ class DeskRegistry:
         payload = parsed.to_dict()
         payload["describe"] = describe(parsed)
         payload["attached_at"] = time()
+        payload["schedule_id"] = f"{desk.id}:{payload['attached_at']}"
         desk.schedule = payload
         desk.updated_at = time()
         self.save()
@@ -723,7 +734,25 @@ class DeskRegistry:
             "action": "schedule",
             "desk_id": desk.id,
             "schedule": payload,
-            "message": "Schedule attached (dialog UI later)",
+            "message": f"Schedule attached: {payload['describe']}",
+        }
+
+    def clear_schedule(self, *, desk_id: str | None = None) -> dict[str, Any]:
+        """Remove schedule from a standing desk (observer Schedule dialog Clear)."""
+        desk = self._resolve(desk_id)
+        if desk is None:
+            return {"ok": False, "error": "no desk for clear_schedule"}
+        had = desk.schedule is not None
+        desk.schedule = None
+        desk.updated_at = time()
+        self.save()
+        status.write_status()
+        return {
+            "ok": True,
+            "action": "clear_schedule",
+            "desk_id": desk.id,
+            "cleared": had,
+            "message": "Schedule cleared" if had else "No schedule to clear",
         }
 
     def status_snapshot(self) -> dict[str, Any]:
@@ -824,6 +853,34 @@ class DeskRegistry:
         stopped = self.stop(desk.id)
         stopped["action"] = "auto_quiet"
         stopped["reason"] = "dag_fully_terminal"
+        # Cheap path-native notify (desk.done); schedule.done if desk has a schedule
+        try:
+            from . import host_notify
+
+            sid = None
+            if isinstance(desk.schedule, dict):
+                sid = desk.schedule.get("schedule_id") or desk.schedule.get("id")
+            host_notify.emit(
+                "desk.done",
+                title=f"Desk done · {desk.kind or 'desk'}",
+                body=(desk.objective or "").strip() or f"desk {desk.id} quiet (DAG terminal)",
+                desk=desk.kind,
+                schedule_id=str(sid) if sid else None,
+                progress={"pct": 100, "phase": "done", "detail": "auto_quiet"},
+            )
+            if sid:
+                host_notify.emit(
+                    "schedule.done",
+                    title=f"Schedule done · {desk.kind or 'desk'}",
+                    body=(desk.objective or "").strip() or str(sid),
+                    desk=desk.kind,
+                    schedule_id=str(sid),
+                    progress={"pct": 100, "phase": "done", "detail": "auto_quiet"},
+                )
+        except Exception:  # noqa: BLE001
+            from .logutil import get_logger
+
+            get_logger(__name__).warning("auto_quiet host_notify failed", exc_info=True)
         return stopped
 
     def _dag_for_desk(self, desk: Desk) -> Any:
@@ -965,7 +1022,7 @@ def stop(desk_id: str | None = None) -> dict[str, Any]:
             "desk.stop",
             kind="process",
             desk_id=desk_id or (out.get("desk_id") if isinstance(out, dict) else None),
-            note=str(op),
+            note="desk stop",
         )
     except Exception:  # noqa: BLE001
         pass
@@ -993,7 +1050,7 @@ def dismiss(desk_id: str | None = None) -> dict[str, Any]:
             "desk.dismiss",
             kind="process",
             desk_id=desk_id or (out.get("desk_id") if isinstance(out, dict) else None),
-            note=str(op),
+            note="desk dismiss",
         )
     except Exception:  # noqa: BLE001
         pass
@@ -1024,6 +1081,10 @@ def purge(
 
 def schedule(args: list[str] | str, **kwargs: Any) -> dict[str, Any]:
     return default_registry().schedule(args, **kwargs)
+
+
+def clear_schedule(*, desk_id: str | None = None) -> dict[str, Any]:
+    return default_registry().clear_schedule(desk_id=desk_id)
 
 
 def status_snapshot() -> dict[str, Any]:

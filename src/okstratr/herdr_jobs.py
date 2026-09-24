@@ -196,6 +196,51 @@ def _finish_job(
     except Exception:  # noqa: BLE001
         _log.warning("herdr_jobs: write_status after finish failed", exc_info=True)
 
+    # Cheap path-native notify on job finish
+    try:
+        from . import host_notify
+
+        kind = "schedule.failed" if fail else "desk.done"
+        title = (
+            f"Herdr job failed · {desk_id or '?'}"
+            if fail
+            else f"Herdr job done · {desk_id or '?'}"
+        )
+        body = str(fail or "")[:500] if fail else f"job {job_id} finished"
+        desk_kind = None
+        schedule_id = None
+        if desk_id:
+            try:
+                from . import desks as desks_mod
+
+                d = desks_mod.default_registry().desks.get(str(desk_id))
+                if d is not None:
+                    desk_kind = d.kind
+                    if isinstance(d.schedule, dict):
+                        schedule_id = d.schedule.get("schedule_id") or d.schedule.get("id")
+            except Exception:  # noqa: BLE001
+                pass
+        progress = {"pct": None if fail else 100, "phase": "failed" if fail else "done", "detail": str(job_id)}
+        host_notify.emit(
+            kind if (fail and schedule_id) else ("desk.done" if not fail else "schedule.failed"),
+            title=title,
+            body=body,
+            desk=desk_kind,
+            schedule_id=str(schedule_id) if schedule_id else None,
+            progress=progress,
+        )
+        if (not fail) and schedule_id:
+            host_notify.emit(
+                "schedule.done",
+                title=f"Schedule done · {desk_kind or desk_id}",
+                body=body,
+                desk=desk_kind,
+                schedule_id=str(schedule_id),
+                progress=progress,
+            )
+    except Exception:  # noqa: BLE001
+        _log.warning("herdr_jobs: host_notify after finish failed", exc_info=True)
+
 
 def _worker(
     job_id: str,

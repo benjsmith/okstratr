@@ -8,7 +8,9 @@
 // Harness editor: ConfigHarnessEditor.qml; standing rail: DeskRail.qml + /api/harness*.
 // FloatingWindow desk UI (native toplevel — not Overlay / not over lock/screensaver).
 // LEFT rail: standing desks from status.desk.standing / focus_desk_id (POST /api/desk/focus).
-// Main: optional native query/workspace/config + DAG/blackboard (observer has no query bar).
+// Main: workspace switcher + config + DAG + CoS conversation + desk-scoped blackboard.
+// No free-text objective/query bar — desks start via Herdr / CoS / DeskRail (ADR-003).
+// Config modal scrolls inside bounds (Flickable). panel_open restore stays disabled.
 // Text I/O: Herdr / CLI harnesses — not this panel as chat.
 
 import QtQuick
@@ -67,6 +69,10 @@ Item {
   property string scheduleKind: ""
   property string actionMsg: ""
   property bool closeDialogVisible: false
+  property var conversationMessages: []
+  property string conversationMeta: "select a desk"
+  property string conversationHint: ""
+  readonly property var focusedBlackboardGroups: Model.blackboardGroupsForDesk(status, focusDeskId)
 
   function persistPanelUi() {
     // Explicit close → panel_open false → stay closed after shell restart.
@@ -111,7 +117,10 @@ Item {
       if (!raw || !String(raw).trim())
         return
       var u = JSON.parse(raw)
-      if (u && u.panel_open === true) {
+      // Persist panel_open for explicit close state, but never auto-open on
+      // Component.onCompleted / shell restart. User opens via Super+Shift+K
+      // (okbay full-product) or Super+Shift+O (okstratr only).
+      if (false && u && u.panel_open === true) {
         root.restoringPanel = true
         root.open()
         root.restoringPanel = false
@@ -119,6 +128,29 @@ Item {
     } catch (e) {
       // Missing/invalid ui.json → stay closed (default).
     }
+  }
+
+  function loadConversation() {
+    var fid = String(root.focusDeskId || "")
+    if (!fid || fid.indexOf("kind:") === 0) {
+      root.conversationMessages = []
+      root.conversationMeta = "select a desk"
+      root.conversationHint = ""
+      return
+    }
+    Model.getJson(root.apiUrl + "/api/desk/conversation?desk_id=" + encodeURIComponent(fid), function (parsed) {
+      if (!parsed) {
+        root.conversationMessages = []
+        root.conversationMeta = "unavailable"
+        root.conversationHint = ""
+        return
+      }
+      var msgs = parsed.messages || []
+      root.conversationMessages = msgs
+      var src = parsed.source || (parsed.stub ? "stub" : "herdr")
+      root.conversationMeta = (parsed.stub ? "stub · " : "") + src + " · " + msgs.length + " turns"
+      root.conversationHint = parsed.hint ? String(parsed.hint) : ""
+    })
   }
 
   function refreshLive() {
@@ -144,6 +176,7 @@ Item {
         if (!root.actionMsg || root.actionMsg.indexOf("Herdr") < 0)
           root.actionMsg = runMsg
       }
+      root.loadConversation()
     })
   }
 
@@ -208,24 +241,18 @@ Item {
 
   function focusDesk(deskId) {
     if (!deskId) return
-    // Refill query with this desk's objective so Continue/Start can edit & rerun.
     var rows = Model.standingDesks(root.status) || []
     for (var i = 0; i < rows.length; i++) {
       var row = rows[i]
       if (row && String(row.id) === String(deskId)) {
         if (row.kind)
           root.selectedKind = String(row.kind)
-        if (row.objective)
-          queryInput.text = String(row.objective)
         break
       }
     }
     Model.postJson(root.apiUrl + "/api/desk/focus", {desk_id: String(deskId)}, function (parsed) {
       if (parsed && parsed.ok === false)
         return
-      // Focus API path: ensure queryInput tracks status objective (quiet desks too).
-      if (parsed && parsed.objective)
-        queryInput.text = String(parsed.objective)
       root.refreshStatus()
       root.refreshLive()
     })
@@ -244,40 +271,15 @@ Item {
       root.actionMsg = parsed.message || ("Herdr running (job " + parsed.herdr_job.id + ")")
     else
       root.actionMsg = (parsed && parsed.message) ? parsed.message : "Desk updated"
-    // Do not clear queryInput on stop — keep objective for Continue/rerun.
-    // If query empty and start returned a desk objective, refill it.
-    var nested = parsed && parsed.desk
-    var deskObj = ""
-    if (nested) {
-      if (nested.desk && nested.desk.objective)
-        deskObj = String(nested.desk.objective)
-      else if (nested.objective)
-        deskObj = String(nested.objective)
-    }
-    if (deskObj && !String(queryInput.text || "").trim())
-      queryInput.text = deskObj
     root.refreshStatus()
     root.refreshLive()
   }
 
-  function parseDeskQuery(text) {
-    // Query defaults to auto. Leading /work|/curate|/code|/deck|/auto overrides.
-    var raw = String(text || "").trim()
-    var m = raw.match(/^\/(work|curate|code|deck|auto)\b\s*([\s\S]*)$/i)
-    if (m)
-      return { kind: String(m[1]).toLowerCase(), objective: String(m[2] || "").trim(), slash: true }
-    return { kind: null, objective: raw, slash: false }
-  }
-
   function startDesk(kind) {
-    var parsed = root.parseDeskQuery(queryInput.text)
-    // Slash in the query always wins; otherwise use the rail kind / auto.
-    var k = parsed.slash ? parsed.kind : String(kind || root.selectedKind || "auto")
+    // No free-text objective bar — reuse standing / focused desk objective (Herdr/CoS owns text).
+    var k = String(kind || root.selectedKind || "auto")
     root.selectedKind = k
-    var objective = parsed.objective
-    // Empty query (Continue/Start after Stop) → reuse standing desk objective.
-    if (!String(objective || "").trim())
-      objective = root.standingObjectiveForKind(k)
+    var objective = root.standingObjectiveForKind(k)
     root.actionMsg = "Starting " + k + " desk…"
     // Non-empty effective objective → drive seats (run_ready). drive_herdr means
     // "drive seats" — Herdr *or* direct per harnesses.toml backend (not force herdr).
@@ -289,11 +291,6 @@ Item {
     if (String(objective || "").trim())
       payload.drive_herdr = true
     Model.postJson(root.apiUrl + "/api/desk/start", payload, root.afterDeskAction)
-  }
-
-  function startFromQuery() {
-    var parsed = root.parseDeskQuery(queryInput.text)
-    root.startDesk(parsed.kind || "auto")
   }
 
   function stopDesk(deskId) {
@@ -339,7 +336,7 @@ Item {
     if (!root.scheduleDeskId || root.scheduleDeskId.indexOf("kind:") === 0) {
       Model.postJson(root.apiUrl + "/api/desk/start", {
         kind: root.scheduleKind,
-        objective: String(queryInput.text || "").trim(),
+        objective: root.standingObjectiveForKind(root.scheduleKind),
         workspace_id: root.selectedWorkspaceId
       }, function(started) {
         var did = started && started.desk && started.desk.desk ? started.desk.desk.id : ""
@@ -691,7 +688,7 @@ Item {
                 spacing: 14
 
                 Text {
-                  text: "Desk objective"
+                  text: "Workspace"
                   color: root.themeMuted
                   font.pixelSize: 11
                   font.bold: true
@@ -702,45 +699,8 @@ Item {
                   spacing: 8
 
                   Rectangle {
-                    width: Math.max(220, parent.width - workspacePicker.width - startQuery.width - 18)
-                    height: 42
-                    radius: 9
-                    color: root.themeBg
-                    border.width: queryInput.activeFocus ? 2 : 1
-                    border.color: queryInput.activeFocus ? root.themeAccent : root.themeBorder
-
-                    TextInput {
-                      id: queryInput
-                      anchors.fill: parent
-                      anchors.margins: 11
-                      color: root.themeFg
-                      selectionColor: root.themeAccent
-                      selectedTextColor: root.themeBg
-                      font.pixelSize: 14
-                      clip: true
-                      verticalAlignment: TextInput.AlignVCenter
-                      onAccepted: root.startFromQuery()
-                    }
-                    Text {
-                      anchors.fill: parent
-                      anchors.margins: 11
-                      visible: !queryInput.text && !queryInput.activeFocus
-                      text: "Objective — defaults to auto; /curate /deck /work /code to override"
-                      color: root.themeMuted
-                      font.pixelSize: 14
-                      verticalAlignment: Text.AlignVCenter
-                    }
-                    MouseArea {
-                      anchors.fill: parent
-                      cursorShape: Qt.IBeamCursor
-                      onClicked: queryInput.forceActiveFocus()
-                      z: -1
-                    }
-                  }
-
-                  Rectangle {
                     id: workspacePicker
-                    width: 150
+                    width: Math.min(280, parent.width)
                     height: 42
                     radius: 9
                     color: root.themeBg
@@ -762,16 +722,11 @@ Item {
                     }
                   }
 
-                  Chip {
-                    id: startQuery
-                    label: {
-                      var parsed = root.parseDeskQuery(queryInput.text)
-                      return "Start " + (parsed.kind || "auto")
-                    }
-                    primary: true
-                    implicitHeight: 42
-                    implicitWidth: 110
-                    onClicked: root.startFromQuery()
+                  Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "Start desks from the rail · text via Herdr / CoS"
+                    color: root.themeMuted
+                    font.pixelSize: 11
                   }
                 }
 
@@ -1038,7 +993,72 @@ Item {
                 }
 
                 Text {
-                  text: "Blackboard"
+                  text: "CoS conversation"
+                  color: root.themeMuted
+                  font.pixelSize: 11
+                  font.bold: true
+                }
+                Text {
+                  visible: root.conversationHint.length > 0
+                  width: parent.width
+                  text: root.conversationHint
+                  color: root.themeMuted
+                  font.pixelSize: 10
+                  wrapMode: Text.Wrap
+                }
+                Text {
+                  text: root.conversationMeta
+                  color: root.themeMuted
+                  font.pixelSize: 10
+                }
+                Column {
+                  width: parent.width
+                  spacing: 6
+                  Repeater {
+                    model: root.conversationMessages
+                    delegate: Rectangle {
+                      required property var modelData
+                      width: parent.width
+                      radius: 8
+                      color: "#14000000"
+                      border.width: 1
+                      border.color: root.themeDivider
+                      implicitHeight: convCol.implicitHeight + 12
+                      Column {
+                        id: convCol
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.margins: 6
+                        spacing: 2
+                        Text {
+                          text: String(modelData.author || modelData.role || "turn")
+                          color: root.themeAccent
+                          font.pixelSize: 10
+                          font.bold: true
+                        }
+                        Text {
+                          width: parent.width
+                          text: String(modelData.text || modelData.content || "")
+                          color: root.themeFg
+                          font.pixelSize: 11
+                          wrapMode: Text.Wrap
+                        }
+                      }
+                    }
+                  }
+                  Text {
+                    visible: root.conversationMessages.length === 0
+                    text: root.focusDeskId ? "No CoS conversation yet — start the desk or open Herdr." : "Select a desk to view CoS conversation in Herdr."
+                    color: root.themeMuted
+                    font.pixelSize: 12
+                    wrapMode: Text.Wrap
+                    width: parent.width
+                  }
+                }
+
+                Text {
+                  text: root.focusDeskId ? ("Blackboard · " + String(root.focusDeskId).slice(0, 10)) : "Blackboard · select a desk"
                   color: root.themeMuted
                   font.pixelSize: 11
                   font.bold: true
@@ -1047,7 +1067,7 @@ Item {
                   width: parent.width
                   spacing: 8
                   Repeater {
-                    model: Model.blackboardGroups(root.status)
+                    model: root.focusedBlackboardGroups
                     delegate: Column {
                       id: bbGroup
                       required property var modelData
@@ -1183,8 +1203,8 @@ Item {
                     }
                   }
                   Text {
-                    visible: Model.blackboardGroups(root.status).length === 0
-                    text: root.status ? "blackboard empty" : "daemon not publishing status"
+                    visible: root.focusedBlackboardGroups.length === 0
+                    text: !root.focusDeskId ? "select a desk for its live blackboard" : (root.status ? "blackboard empty for this desk" : "daemon not publishing status")
                     color: root.themeMuted
                     font.pixelSize: 12
                   }
@@ -1302,9 +1322,19 @@ Item {
           border.color: root.themeBorder
 
           MouseArea { anchors.fill: parent; onClicked: function(mouse) { mouse.accepted = true } }
-          Column {
+          Flickable {
+            id: configFlick
             anchors.fill: parent
             anchors.margins: 18
+            contentWidth: width
+            contentHeight: configCol.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            flickableDirection: Flickable.VerticalFlick
+
+          Column {
+            id: configCol
+            width: configFlick.width
             spacing: 10
             Text {
               text: "⚙ Default roles"
@@ -1439,6 +1469,7 @@ Item {
               Chip { label: "Cancel"; onClicked: root.configOpen = false }
             }
           }
+          } // configFlick
         }
       }
     }

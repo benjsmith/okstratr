@@ -18,6 +18,8 @@ After three iterations (Omarchy QML plugin → CLI → skill + observer), the co
 
 Mac path: install skill + run lifecycle CLI + open the observer panel. Omarchy guest may still load the QML plugin; prefer opening the observer for the shared console.
 
+Hosted embeds (Switchbay/okbay): same-origin reverse proxy under `OKSTRATR_PUBLIC_BASE` (e.g. `/embed/okstratr`); `?host=switchbay|okbay` or `X-Okstratr-Host` hides HTML settings — see [docs/ADR-004-hosted-proxy-registry.md](docs/ADR-004-hosted-proxy-registry.md).
+
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (kept vs legacy surfaces), [docs/ADR-003-skill-observer-vs-kernel.md](docs/ADR-003-skill-observer-vs-kernel.md), and [docs/ADR-001-cli-tui-harness.md](docs/ADR-001-cli-tui-harness.md).
 
 ## Relationship
@@ -94,6 +96,27 @@ Every seat (Herdr + direct) labels with `desk_id` + `thread_id`. Config file:
 1. **Fullscreen Atlas** — okbay knowledge plane
 2. **Linked Nautilus** — file reveal next to Atlas
 3. **okstratr observer + Herdr side by side** — orchestrator console + agent session
+
+
+
+## Bare CLI (first-class) + host_notify
+
+Bare CLI is a **first-class** install path — not a fallback. Lifecycle verbs remain:
+
+```bash
+okstratr start | restart | status | shutdown
+```
+
+Schedule / desk progress uses **path-native** I/O via `okstratr.host_notify` v1 envelopes
+(`src/okstratr/host_notify.py`):
+
+| Path | Delivery |
+|------|----------|
+| Hosted (`OKSTRATR_HOSTED=switchbay\|okbay` or `OKSTRATR_HOST_NOTIFY_URL`) | POST JSON to host callback (Switchbay: `/api/okstratr/host-notify`) |
+| Bare | Harness-visible summary on stderr (default); `--json-notify` / `OKSTRATR_JSON_NOTIFY=1` for JSON lines |
+
+`okstratr status` (and `GET /api/status`) include a shared **health** block: `ce`, `okstratr`, `wiki_build`.
+
 
 ## What works today
 

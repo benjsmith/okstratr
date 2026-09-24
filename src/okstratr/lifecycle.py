@@ -20,6 +20,7 @@ from typing import Any
 
 from . import PORT
 from .paths import state_dir
+from .public_base import public_base
 
 OBSERVER_PORT = int(os.environ.get("OKSTRATR_OBSERVER_PORT") or "8768")
 SERVE_HOST = "127.0.0.1"
@@ -36,9 +37,13 @@ def serve_url(host: str = SERVE_HOST, port: int = PORT) -> str:
 
 
 def observer_url(host: str = SERVE_HOST, port: int | None = None) -> str:
-    """Prefer same-server /observer/ when serve is up; else dedicated observer port."""
+    """Prefer same-server /observer/ when serve is up; else dedicated observer port.
+
+    Honors ``OKSTRATR_PUBLIC_BASE`` (e.g. ``/embed/okstratr``) for reverse-proxy embeds.
+    """
+    base = public_base()  # "" or "/embed/okstratr"
     if health_ok():
-        return f"{serve_url()}/observer/"
+        return f"{serve_url()}{base}/observer/"
     p = OBSERVER_PORT if port is None else port
     return f"http://{host}:{p}/"
 
@@ -115,7 +120,10 @@ def health_ok(base: str | None = None, *, timeout: float = 0.8) -> bool:
 
 def observer_reachable(*, timeout: float = 0.6) -> bool:
     """True if the observer panel is served (same-origin /observer/ or :8768)."""
+    base = public_base()
     candidates = [
+        f"{serve_url()}{base}/observer/",
+        f"{serve_url()}{base}/observer/index.html",
         f"{serve_url()}/observer/",
         f"{serve_url()}/observer/index.html",
         f"http://{SERVE_HOST}:{OBSERVER_PORT}/",
@@ -362,6 +370,7 @@ def start(
         "serve_url": serve_url(host, port),
         "observer_url": observer_url(),
         "consent_prompt": CONSENT_PROMPT,
+        "health": _core_health_safe(),
     }
 
 
@@ -609,6 +618,21 @@ def _files_lines_written() -> dict[str, Any]:
     }
 
 
+
+def _core_health_safe() -> dict[str, Any]:
+    try:
+        from . import status as status_mod
+
+        return status_mod.core_health()
+    except Exception:  # noqa: BLE001
+        return {
+            "ce": {"state": "stopped", "url": "", "detail": "health unavailable"},
+            "okstratr": {"state": "stopped", "url": serve_url(), "detail": "health unavailable"},
+            "wiki_build": {"state": "idle", "pages": None, "detail": "health unavailable"},
+        }
+
+
+
 def status_payload() -> dict[str, Any]:
     """Structured status used by the CLI box and API consumers."""
     serve_up = is_serve_running()
@@ -686,7 +710,17 @@ def status_payload() -> dict[str, Any]:
         "tokens": tokens,
         "files": files,
         "consent_prompt": CONSENT_PROMPT,
+        "health": _core_health_safe(),
     }
+
+
+
+def _fmt_health_line(health: dict[str, Any]) -> str:
+    ce = (health.get("ce") or {}).get("state") or "?"
+    ok = (health.get("okstratr") or {}).get("state") or "?"
+    wiki = (health.get("wiki_build") or {}).get("state") or "?"
+    return f"ce={ce} okstratr={ok} wiki_build={wiki}"
+
 
 
 def format_status_box(payload: dict[str, Any] | None = None) -> str:
@@ -730,6 +764,7 @@ def format_status_box(payload: dict[str, Any] | None = None) -> str:
         "├" + "─" * inner + "┤",
         row("", serve_line),
         row("", observer_line),
+        row("health", _fmt_health_line(p.get("health") or {})),
         row("board ", str(p.get("board_duration_chip"))),
         row("web   ", str(p.get("web_egress"))),
         row("cwd   ", str(p.get("cwd"))),

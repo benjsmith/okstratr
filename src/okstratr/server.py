@@ -9,8 +9,15 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from . import PORT
-from . import blackboard, cos, dag, desks, herdr, herdr_jobs, okbay, roles, status, web_egress
+from . import blackboard, conversation, cos, dag, desks, herdr, herdr_jobs, okbay, roles, status, web_egress
 from .lifecycle import observer_asset_dir, status_payload as lifecycle_status_payload
+from .public_base import (
+    HOST_HEADER,
+    hosted_shell_from_request,
+    inject_observer_bootstrap,
+    public_base,
+    strip_public_base,
+)
 from pathlib import Path as _Path
 import mimetypes
 
@@ -26,11 +33,34 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args: Any) -> None:  # quieter
         pass
 
-    def _send(self, code: int, body: bytes, content_type: str) -> None:
+    def _request_path_and_qs(self) -> tuple[str, dict[str, list[str]], Any]:
+        """Parse path with optional public-base strip; return (path, qs, parsed)."""
+        parsed = urlparse(self.path)
+        raw_path = parsed.path or "/"
+        path = strip_public_base(raw_path)
+        # Keep trailing-slash semantics used elsewhere: rstrip except root
+        path = path.rstrip("/") or "/"
+        qs = parse_qs(parsed.query)
+        return path, qs, parsed
+
+    def _hosted_shell(self, qs: dict[str, list[str]] | None = None) -> str | None:
+        return hosted_shell_from_request(self.headers, qs)
+
+    def _send(
+        self,
+        code: int,
+        body: bytes,
+        content_type: str,
+        *,
+        extra_headers: dict[str, str] | None = None,
+    ) -> None:
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
+        if extra_headers:
+            for k, v in extra_headers.items():
+                self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
 
@@ -38,13 +68,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header(
+            "Access-Control-Allow-Headers",
+            f"Content-Type, {HOST_HEADER}",
+        )
         self.end_headers()
 
     def do_GET(self) -> None:  # noqa: N802
-        parsed = urlparse(self.path)
-        path = parsed.path.rstrip("/") or "/"
-        qs = parse_qs(parsed.query)
+        path, qs, _parsed = self._request_path_and_qs()
 
         if path == "/health":
             code, body, ct = _json_bytes({"ok": True, "service": "okstratr", "port": PORT})
@@ -78,7 +109,18 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(404, b"not found\n", "text/plain; charset=utf-8")
             data = file_path.read_bytes()
             ctype, _ = mimetypes.guess_type(str(file_path))
-            return self._send(200, data, ctype or "application/octet-stream")
+            ctype = ctype or "application/octet-stream"
+            extra: dict[str, str] = {}
+            hosted = self._hosted_shell(qs)
+            if file_path.name == "index.html" and "html" in ctype:
+                data = inject_observer_bootstrap(data, hosted=hosted)
+                ctype = "text/html; charset=utf-8"
+            if hosted:
+                extra["X-Okstratr-Hosted"] = hosted
+            base = public_base()
+            if base:
+                extra["X-Okstratr-Public-Base"] = base
+            return self._send(200, data, ctype, extra_headers=extra or None)
 
         if path == "/api/status":
             snap = status.write_status()
@@ -105,13 +147,41 @@ class Handler(BaseHTTPRequestHandler):
                     n = 20
             kind = (qs.get("kind") or [None])[0]
             q = (qs.get("q") or [None])[0]
-            if kind:
+            desk_id = (qs.get("desk_id") or qs.get("desk") or [None])[0]
+            if desk_id:
+                items = conversation.blackboard_items_for_desk(
+                    str(desk_id), n=n, kind=str(kind) if kind else None
+                )
+            elif kind:
                 items = blackboard.by_kind(kind)
             elif q:
                 items = blackboard.search(q)
             else:
                 items = blackboard.head(n)
-            payload = {"summary": blackboard.summary(), "items": items}
+            payload = {
+                "summary": blackboard.summary(),
+                "items": items,
+                "desk_id": str(desk_id) if desk_id else None,
+            }
+            code, body, ct = _json_bytes(payload)
+            return self._send(code, body, ct)
+
+        if path in (
+            "/api/desk/conversation",
+            "/api/herdr/conversation",
+            "/api/conversation",
+        ):
+            desk_id = (qs.get("desk_id") or qs.get("desk") or qs.get("id") or [None])[0]
+            limit = 80
+            raw_lim = (qs.get("n") or qs.get("limit") or [None])[0]
+            if raw_lim is not None:
+                try:
+                    limit = int(raw_lim)
+                except (ValueError, TypeError):
+                    limit = 80
+            payload = conversation.conversation_for_desk(
+                str(desk_id) if desk_id else None, limit=limit
+            )
             code, body, ct = _json_bytes(payload)
             return self._send(code, body, ct)
 
@@ -175,8 +245,7 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, body, ct)
 
     def do_POST(self) -> None:  # noqa: N802
-        parsed = urlparse(self.path)
-        path = parsed.path.rstrip("/") or "/"
+        path, _qs, _parsed = self._request_path_and_qs()
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length) if length else b"{}"
         try:
@@ -219,9 +288,12 @@ class Handler(BaseHTTPRequestHandler):
             # /api/seat is deprecated alias → desk start auto
             if path == "/api/seat" and not kind:
                 kind = "auto"
+            desk_id_in = payload.get("desk_id") or payload.get("id")
+            desk_id_in = str(desk_id_in).strip() if desk_id_in else None
             result = desks.start(
                 objective,
                 kind=kind,
+                desk_id=desk_id_in,
                 reset=reset,
                 effort=effort_f,
                 run_cos=run_cos and bool(objective),
@@ -348,6 +420,17 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/desk/schedule":
             desk_id = payload.get("desk_id") or payload.get("id")
+            clear = bool(
+                payload.get("clear")
+                or payload.get("clear_schedule")
+                or str(payload.get("action") or "").strip().lower()
+                in ("clear", "clear_schedule", "unschedule")
+            )
+            if clear:
+                code, body, ct = _json_bytes(
+                    desks.clear_schedule(desk_id=str(desk_id) if desk_id else None)
+                )
+                return self._send(code, body, ct)
             spec = payload.get("spec") or payload.get("schedule") or payload.get("args")
             if isinstance(spec, list):
                 args = [str(x) for x in spec]
@@ -623,8 +706,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
     def do_DELETE(self) -> None:  # noqa: N802
-        parsed = urlparse(self.path)
-        path = parsed.path.rstrip("/") or "/"
+        path, _qs, _parsed = self._request_path_and_qs()
         if path in ("/api/blackboard", "/api/bb"):
             out = blackboard.clear()
             status.write_status()
@@ -647,11 +729,14 @@ def serve(host: str = "127.0.0.1", port: int = PORT) -> int:
         pass
     status.write_status()
     httpd = ThreadingHTTPServer((host, port), Handler)
+    base = public_base()
+    base_note = f" public_base={base}" if base else ""
     print(
-        f"okstratr listening on http://{host}:{port}  "
+        f"okstratr listening on http://{host}:{port}{base_note}  "
         "(/health /observer/ /panel/ /api/lifecycle /api/status /api/desk/* /api/web /api/workspaces /api/config/roles /api/harness /api/desk_session "
         "/api/seat /api/dag /api/blackboard /api/blackboard/clear /api/blackboard/prune /api/audit "
-        "/api/cos/break /api/herdr/launch /api/herdr/run-ready)"
+        "/api/desk/conversation /api/herdr/conversation "
+        "/api/cos/break /api/herdr/launch /api/herdr/run-ready; hosted via X-Okstratr-Host or ?host=)"
     )
     try:
         httpd.serve_forever()

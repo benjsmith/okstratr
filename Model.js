@@ -447,6 +447,55 @@ function blackboardGroups(status) {
     return groups
 }
 
+function blackboardGroupsForDesk(status, deskId) {
+    var groups = blackboardGroups(status)
+    var did = String(deskId || "").trim()
+    if (!did || did.indexOf("kind:") === 0)
+        return []
+    var kind = ""
+    var standing = standingDesks(status)
+    for (var i = 0; i < standing.length; i++) {
+        if (String(standing[i].id) === did) {
+            kind = String(standing[i].kind || "")
+            break
+        }
+    }
+    var out = []
+    for (var g = 0; g < groups.length; g++) {
+        var label = String(groups[g].deskTag || groups[g].label || "")
+        var entries = groups[g].entries || []
+        var matched = []
+        for (var e = 0; e < entries.length; e++) {
+            var ent = entries[e]
+            var tags = ent.tags || []
+            var hit = false
+            if (String(ent.deskTag || "") === did) hit = true
+            if (!hit && label === did) hit = true
+            if (!hit && kind && (label === kind || String(ent.deskTag || "") === kind)) hit = true
+            if (!hit && Array.isArray(tags)) {
+                for (var t = 0; t < tags.length; t++) {
+                    if (String(tags[t]) === did || String(tags[t]) === ("desk:" + did)) {
+                        hit = true
+                        break
+                    }
+                }
+            }
+            if (hit) matched.push(ent)
+        }
+        if (matched.length) {
+            out.push({ deskTag: groups[g].deskTag, label: groups[g].label, entries: matched })
+        }
+    }
+    // Soft fallback: if nothing matched and kind exists, return kind-labeled group only
+    if (!out.length && kind) {
+        for (var j = 0; j < groups.length; j++) {
+            if (String(groups[j].deskTag || groups[j].label || "") === kind)
+                out.push(groups[j])
+        }
+    }
+    return out
+}
+
 function dagGraph(status) {
     // Bindable Agent Space graph; idle defaults when empty.
     var idleNodes = [

@@ -188,3 +188,151 @@ def summary() -> dict[str, Any]:
             "UI is next."
         ),
     }
+
+
+def _schedule_id_for(desk_id: str, sched: dict[str, Any]) -> str:
+    """Stable-ish schedule id for notify envelopes."""
+    existing = sched.get("schedule_id") or sched.get("id")
+    if existing:
+        return str(existing)
+    attached = sched.get("attached_at") or ""
+    return f"{desk_id}:{attached}"
+
+
+def due_desks(*, now: float | None = None) -> list[dict[str, Any]]:
+    """Standing desks whose interval schedule is due.
+
+    ``_next_fire_from_payload`` always returns a *future* next_ts, so due is
+    computed from ``last_fire_ts|attached_at`` + ``every_seconds`` vs now.
+    """
+    now = time() if now is None else now
+    due: list[dict[str, Any]] = []
+    for row in desk_schedule_summaries():
+        sched = row.get("schedule") or {}
+        if not isinstance(sched, dict):
+            continue
+        every = sched.get("every_seconds")
+        if every is None:
+            continue
+        try:
+            secs = float(every)
+        except (TypeError, ValueError):
+            continue
+        if secs <= 0:
+            continue
+        base = sched.get("last_fire_ts") or sched.get("attached_at")
+        if base is None:
+            continue
+        try:
+            base_f = float(base)
+        except (TypeError, ValueError):
+            continue
+        if now >= base_f + secs:
+            due.append(row)
+    return due
+
+
+def fire_due(
+    *,
+    now: float | None = None,
+    emit_notify: bool = True,
+    limit: int = 32,
+) -> dict[str, Any]:
+    """Fire due interval schedules on the existing desk-schedule path.
+
+    Updates ``last_fire_ts`` on each due desk schedule (no second scheduler).
+    Emits ``schedule.start`` via host_notify when ``emit_notify``.
+    Called from status.write_status reconcile — same tick as auto-quiet.
+    """
+    now = time() if now is None else now
+    fired: list[dict[str, Any]] = []
+    errors: list[str] = []
+    try:
+        from . import desks as desks_mod
+
+        reg = desks_mod.default_registry()
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "fired": [], "error": f"registry: {e}"}
+
+    for row in due_desks(now=now)[: max(0, int(limit))]:
+        desk_id = str(row.get("desk_id") or "")
+        desk = reg.desks.get(desk_id) if desk_id else None
+        if desk is None or not isinstance(desk.schedule, dict):
+            continue
+        sched = dict(desk.schedule)
+        sid = _schedule_id_for(desk_id, sched)
+        sched["schedule_id"] = sid
+        sched["last_fire_ts"] = now
+        sched["last_fire_at"] = now
+        desk.schedule = sched
+        desk.updated_at = now
+        entry: dict[str, Any] = {
+            "desk_id": desk_id,
+            "kind": desk.kind,
+            "schedule_id": sid,
+            "objective": desk.objective,
+            "every_seconds": sched.get("every_seconds"),
+        }
+        if emit_notify:
+            try:
+                from . import host_notify
+
+                title = f"Schedule fire · {desk.kind or 'desk'}"
+                body = (desk.objective or "").strip() or (
+                    sched.get("describe") or sched.get("raw") or sid
+                )
+                result = host_notify.emit(
+                    "schedule.start",
+                    title=title,
+                    body=str(body)[:500],
+                    schedule_id=sid,
+                    desk=desk.kind,
+                    progress={"pct": None, "phase": "start", "detail": "schedule fire"},
+                )
+                entry["notify"] = {
+                    "ok": bool(result.get("ok")),
+                    "path": result.get("path"),
+                    "mode": result.get("mode"),
+                }
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"{desk_id}: {e}")
+                entry["notify_error"] = str(e)
+        fired.append(entry)
+
+    if fired:
+        try:
+            reg.save()
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"save: {e}")
+
+    return {
+        "ok": not errors,
+        "fired": fired,
+        "count": len(fired),
+        "errors": errors,
+        "ts": now,
+    }
+
+
+def notify_schedule(
+    kind: str,
+    *,
+    desk_id: str | None = None,
+    schedule_id: str | None = None,
+    title: str = "",
+    body: str = "",
+    desk_kind: str | None = None,
+    progress: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Emit a schedule.* host_notify (helper for progress/done/failed)."""
+    from . import host_notify
+
+    return host_notify.emit(
+        kind,
+        title=title or kind,
+        body=body,
+        schedule_id=schedule_id,
+        desk=desk_kind,
+        progress=progress,
+        extra={"desk_id": desk_id} if desk_id else None,
+    )

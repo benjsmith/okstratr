@@ -113,7 +113,7 @@ State directory: `~/.local/state/okstratr/` (override with `OKSTRATR_STATE_DIR` 
 | File | Role |
 |------|------|
 | `status.json` | Compat mirror of daemon snapshot for QML `FileView` (P3 prefers `GET /api/status` / DeskSession; P4: HTTP DeskSession SSOT; status.json compat mirror only) |
-| `ui.json` | Panel visibility `{ "panel_open": true|false }` — re-summon FloatingWindow after shell restart |
+| `ui.json` | Panel visibility `{ "panel_open": true|false }` — persist explicit close; do **not** auto-open on shell restart (open via Super+Shift+K/O) |
 | `desks.json` | Desk registry (active_id, focus_id, standing orgs + org/effort) |
 | `bandit.json` | Per-desk + global hire-policy arm stats / last decision |
 | `web_egress.json` | Web gate mode (`off`\|`once`\|`session`) |
@@ -169,6 +169,12 @@ okstratr bb post|head|search|clear
 
 | Var | Role |
 |-----|------|
+
+| `OKSTRATR_HOST_NOTIFY_URL` | Hosted notify callback (POST envelope JSON). Defaults when `OKSTRATR_HOSTED=switchbay\|okbay`. |
+| `OKSTRATR_HOSTED` / `OKSTRATR_HOST` | Process-level hosted shell hint (`switchbay`\|`okbay`) for notify delivery. |
+| `OKSTRATR_JSON_NOTIFY` | `1` → bare path prints JSON lines instead of summary (also `--json-notify`). |
+| `OKSTRATR_CE_URL` / `CE_URL` | Optional CE base for health probe (default `http://127.0.0.1:8766`). |
+| `OKSTRATR_WIKI_BUILD` / `OKSTRATR_WIKI_PAGES` | Optional wiki_build health hints when CE is co-managed. |
 | `OKSTRATR_STATE_DIR` | Override state dir (tests) |
 | `OKSTRATR_HERDR_DRY_RUN` | `1`/`true` → no real Herdr/Grok calls |
 | `OKSTRATR_HERDR_TIMEOUT` / `OKSTRATR_HERDR_WAIT_TIMEOUT` | Bounded wait seconds (default 120) |

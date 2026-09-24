@@ -12,7 +12,7 @@ exec python3 -m okstratr "\$@"
 WRAP
 chmod +x "$BIN/okstratr"
 mkdir -p "$HOME/.config/omarchy/plugins/benjsmith.okstratr"
-for f in manifest.json BarWidget.qml Panel.qml Service.qml Model.js LICENSE README.md; do
+for f in manifest.json BarWidget.qml Panel.qml Service.qml Model.js DeskRail.qml ConfigHarnessEditor.qml LICENSE README.md; do
   [ -f "$REPO_ROOT/$f" ] && cp "$REPO_ROOT/$f" "$HOME/.config/omarchy/plugins/benjsmith.okstratr/$f"
 done
 mkdir -p "$HOME/.config/omarchy/extensions" "$HOME/.config/omarchy/plugins/benjsmith.okstratr/contrib"
@@ -22,5 +22,5 @@ mkdir -p "$HOME/.config/omarchy/extensions" "$HOME/.config/omarchy/plugins/benjs
 "$BIN/okstratr" status >/dev/null || true
 echo "Okstratr setup complete. Health: http://127.0.0.1:8767/health"
 echo "Bar: left-click → panel; right-click → no-op (reserved)."
-echo "Optional: merge contrib/hypr-bindings.lua (Super+Shift+O) into Hyprland binds."
+echo "Optional: merge contrib/hypr-bindings.lua (unbinds then binds Super+Shift+O; sets OMARCHY_PATH) into Hyprland binds."
 echo "Note: layout e2e is not done until a VM screenshot shows Herdr RUNNING AGENTS."
