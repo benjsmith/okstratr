@@ -284,6 +284,78 @@
     writeStoredFocus("");
   }
 
+  /** Compact focused-desk label for panel headers / switcher meta. */
+  function focusedDeskMetaLabel(desk) {
+    const row = desk || focusedDeskRow();
+    const id = row
+      ? String(row.id || "")
+      : String(state.focusDeskId || "");
+    if (!id || id.indexOf("kind:") === 0) return "";
+    const kind = row && row.kind ? String(row.kind) : "";
+    const short = id.length > 12 ? id.slice(0, 12) : id;
+    return kind ? short + " - " + kind : short;
+  }
+
+  /** Bind switcher + Blackboard / Desk Prompt / CoS headers to focusDeskId.
+   *  Call on every focus change so panels do not stay stuck on a prior desk
+   *  while /api/desk/focus or refresh() is in flight. */
+  function bindFocusPanels() {
+    const id = String(state.focusDeskId || "");
+    const label = focusedDeskMetaLabel();
+    const sel = el("desk-switcher");
+    if (sel) {
+      // Keep selection in sync even before full option rebuild.
+      if (id && Array.prototype.some.call(sel.options, function (o) {
+        return o.value === id;
+      })) {
+        sel.value = id;
+      } else if (!id) {
+        sel.value = "";
+      }
+    }
+    const switcherMeta = el("switcher-meta");
+    if (switcherMeta) {
+      switcherMeta.textContent =
+        (label || (id ? id.slice(0, 12) : "no desk")) +
+        " · ws " +
+        (state.selectedWorkspaceId || "local");
+    }
+    const bbLabel = el("bb-desk-label");
+    if (bbLabel) {
+      bbLabel.textContent = label || (id ? id.slice(0, 12) : "select a desk");
+    }
+    const promptMeta = el("desk-prompt-meta");
+    const desk = focusedDeskRow();
+    if (promptMeta) {
+      if (!id) {
+        promptMeta.textContent = "select a desk";
+      } else if (
+        document.activeElement === el("desk-prompt") &&
+        String((el("desk-prompt") || {}).dataset.deskId || "") === id
+      ) {
+        promptMeta.textContent = "editing · " + (label || id.slice(0, 12));
+      } else {
+        promptMeta.textContent = label
+          ? label + " · standing"
+          : id.slice(0, 12) + " · standing";
+      }
+    }
+    const convMeta = el("conversation-meta");
+    if (convMeta) {
+      // renderConversation overwrites with turn counts; this covers the gap
+      // between focus change and the scoped fetch completing.
+      const cur = String(convMeta.textContent || "");
+      const already = label && cur.indexOf(label) === 0;
+      if (!id) {
+        convMeta.textContent = "select a desk";
+      } else if (!already) {
+        convMeta.textContent = (label || id.slice(0, 12)) + " · loading";
+      }
+    }
+    // Reload prompt textarea for the focused desk (no-op while user edits same desk).
+    renderDeskPrompt();
+  }
+
   /** Hide/disable HTML settings chrome when hosted by Switchbay/okbay. */
   function applyHostedMode() {
     updateHostGuidance();
@@ -501,15 +573,26 @@
   function focusDesk(deskId) {
     if (!setFocusDesk(deskId, { sticky: true })) return;
     renderDesks();
+    renderDeskSwitcher();
+    bindFocusPanels();
+    // Drop stale scoped content immediately — refresh() refills for focusDeskId.
+    renderBlackboard({ items: [] });
+    renderConversation({ messages: [], stub: true, source: "focus", desk_id: String(deskId) });
+    bindFocusPanels();
     api("/api/desk/focus", { method: "POST", body: { desk_id: String(deskId) } })
       .then(function (parsed) {
         if (!mountIsLive()) return;
-        if (parsed && parsed.ok === false) return;
+        if (parsed && parsed.ok === false) {
+          setMsg((parsed && parsed.message) || "Focus failed");
+          return;
+        }
         refresh();
       })
       .catch(function (e) {
         if (!mountIsLive()) return;
         setMsg(String(e.message || e));
+        // Still refresh so headers/content track local sticky focus.
+        refresh();
       });
   }
 
@@ -1493,10 +1576,12 @@
       })
     );
     sel.innerHTML = opts.join("");
+    if (prev) sel.value = String(prev);
     const meta = el("switcher-meta");
     if (meta) {
+      const lab = focusedDeskMetaLabel();
       meta.textContent =
-        (prev ? "desk " + prev.slice(0, 8) : "no desk") +
+        (lab || (prev ? prev.slice(0, 12) : "no desk")) +
         " · ws " +
         (state.selectedWorkspaceId || "local");
     }
@@ -1705,7 +1790,11 @@
     const saveBtn = el("btn-desk-prompt-save");
     if (!ta) return;
     const desk = focusedDeskRow();
-    const id = desk ? String(desk.id) : "";
+    const id = desk
+      ? String(desk.id)
+      : (String(state.focusDeskId || "").indexOf("kind:") === 0
+          ? ""
+          : String(state.focusDeskId || ""));
     const obj = desk && desk.objective != null ? String(desk.objective) : "";
     // Avoid clobbering in-progress edits for the same desk.
     if (
@@ -1713,7 +1802,10 @@
       String(ta.dataset.deskId || "") === id
     ) {
       if (meta) {
-        meta.textContent = id ? "editing · " + id.slice(0, 8) : "select a desk";
+        const lab = focusedDeskMetaLabel(desk);
+        meta.textContent = id
+          ? "editing · " + (lab || id.slice(0, 12))
+          : "select a desk";
       }
       return;
     }
@@ -1722,8 +1814,9 @@
     ta.disabled = !id || id.indexOf("kind:") === 0;
     if (saveBtn) saveBtn.disabled = ta.disabled;
     if (meta) {
+      const lab = focusedDeskMetaLabel(desk);
       meta.textContent = id
-        ? "desk " + id.slice(0, 8) + (desk.kind ? " · " + desk.kind : "")
+        ? (lab || id.slice(0, 12)) + " · standing"
         : "select a desk";
     }
   }
@@ -1804,8 +1897,11 @@
     }
     const msgs = (payload && payload.messages) || [];
     const src = (payload && payload.source) || "stub";
+    const focusLab = focusedDeskMetaLabel() || String(state.focusDeskId).slice(0, 12);
     if (meta) {
       meta.textContent =
+        focusLab +
+        " · " +
         (payload && payload.stub ? "stub · " : "") +
         src +
         " · " +
@@ -1857,9 +1953,11 @@
     const root = el("blackboard");
     const label = el("bb-desk-label");
     if (label) {
-      label.textContent = state.focusDeskId
-        ? "desk " + String(state.focusDeskId).slice(0, 10)
-        : "select a desk";
+      const lab = focusedDeskMetaLabel();
+      label.textContent = lab
+        || (state.focusDeskId
+          ? String(state.focusDeskId).slice(0, 12)
+          : "select a desk");
     }
     if (!state.focusDeskId) {
       root.innerHTML =
@@ -1989,10 +2087,25 @@
         renderDesks();
         renderDeskSwitcher();
         renderWorkspaceSwitcher(status, hostWs);
-        renderDeskPrompt();
+        bindFocusPanels();
         renderAgentSpace(status, dag);
-        renderConversation(conv);
-        renderBlackboard(bb);
+        // Discard scoped payloads fetched for a desk we are no longer focused on
+        // (user clicked another desk while this refresh was in flight).
+        const focusNow = String(state.focusDeskId || "");
+        const focusStill = focusNow === String(focusedAtStart || "");
+        if (focusStill) {
+          renderConversation(conv);
+          renderBlackboard(bb);
+        } else {
+          // Headers already bound; content comes from the focusDesk refresh.
+          renderBlackboard({ items: [] });
+          renderConversation(
+            focusNow
+              ? { messages: [], stub: true, source: "focus", desk_id: focusNow }
+              : null
+          );
+          bindFocusPanels();
+        }
         if (life) renderLifecycle(life);
         else renderDeskDashboard(null);
         renderRunChip();
@@ -2092,6 +2205,7 @@
         renderConversation(null);
         renderBlackboard({});
         renderDeskSwitcher();
+        bindFocusPanels();
       }
     });
   }
