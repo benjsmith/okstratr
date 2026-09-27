@@ -144,3 +144,79 @@ def test_migration_doc_exists() -> None:
     assert "Phase 1b" in text
     assert "no chat" in text.lower() or "No chat" in text
     assert "Quiet all" in text or "quiet_standing" in text
+
+def test_by_state_omits_empty_placeholder_question_chip(env: Path) -> None:
+    """Empty kind placeholders must not become by_state['?'] (mystery chip)."""
+    from okstratr import desks, lifecycle
+
+    reg = desks.default_registry(force_reload=True)
+    # No real desks yet — standing rows are placeholders with empty state
+    snap = reg.status_snapshot()
+    standing = snap.get("standing") or []
+    assert standing, "expected default standing placeholders"
+    assert any(r.get("placeholder") or not r.get("state") for r in standing)
+
+    p = lifecycle.status_payload()
+    by_state = (p.get("desks") or {}).get("by_state") or {}
+    assert "?" not in by_state
+    assert "" not in by_state
+
+
+def test_dag_at_rest_when_desk_quiet(env: Path) -> None:
+    """Quiet desks keep last DAG structure but graph.idle / at_rest for UI."""
+    from okstratr import desks
+    from okstratr.dag import Dag, Node
+
+    reg = desks.default_registry(force_reload=True)
+    out = reg.start(objective="at rest graph", kind="auto", drive_herdr=False)
+    desk_id = out.get("desk_id") or (out.get("desk") or {}).get("id")
+    assert desk_id
+    desk = reg.desks[desk_id]
+    path = reg.dag_path_for(desk)
+    g = Dag(path=path)
+    if path.is_file():
+        g.load()
+    g.nodes["root"] = Node(id="root", title="root", role="cos", state="done", kind="root")
+    g.nodes["worker-x"] = Node(
+        id="worker-x",
+        title="worker-x",
+        role="investigator",
+        state="running",
+        depends_on=["root"],
+    )
+    g.save()
+    reg.stop(desk_id)
+    assert reg.desks[desk_id].state == "quiet"
+
+    payload = desks.load_dag_for_api(desk_id)
+    assert payload.get("at_rest") is True
+    assert payload.get("desk_state") == "quiet"
+    graph = payload.get("graph") or {}
+    assert graph.get("idle") is True
+    live = [
+        n
+        for n in (graph.get("nodes") or [])
+        if isinstance(n, dict)
+        and str(n.get("state") or "").lower()
+        in ("running", "pending", "ready", "blocked", "working", "active", "busy")
+    ]
+    assert live == [], f"expected neutralized states, got {live}"
+
+
+def test_switchbay_observer_hides_herdr_via_js_and_css(http_server: str) -> None:
+    code, _h, body = _get(http_server, "/observer/?host=switchbay")
+    assert code == 200
+    text = body.decode("utf-8")
+    # Markup still ships the button (okbay needs it); hosted JS/CSS strip it.
+    assert 'id="open-herdr-workspace"' in text
+    js_code, _jh, js_body = _get(http_server, "/observer/observer.js")
+    assert js_code == 200
+    js = js_body.decode("utf-8")
+    assert 'HOSTED === "switchbay"' in js
+    assert "open-herdr-workspace" in js
+    css_code, _ch, css_body = _get(http_server, "/observer/observer.css")
+    assert css_code == 200
+    css = css_body.decode("utf-8")
+    assert 'data-okstratr-host="switchbay"' in css
+    assert "open-herdr-workspace" in css
+

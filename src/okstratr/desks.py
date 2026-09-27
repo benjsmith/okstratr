@@ -985,6 +985,34 @@ def load_dag_for_api(desk_id: str | None = None) -> dict[str, Any]:
         out["desk_id"] = resolved_id
     elif did:
         out["desk_id"] = did
+
+    # Quiet / dismissed / placeholder desks keep the last DAG for structure, but
+    # must not look "live": mark at_rest and force graph.idle so Agent Space
+    # stops pulsing / edge particles while the desk is idle.
+    desk_state = str(desk.state) if desk is not None else ""
+    at_rest = desk is None or desk_state != "working"
+    out["desk_state"] = desk_state or None
+    out["at_rest"] = at_rest
+    graph = out.get("graph")
+    if isinstance(graph, dict):
+        graph = dict(graph)
+        if at_rest:
+            graph["idle"] = True
+            remapped = []
+            for n in graph.get("nodes") or []:
+                if not isinstance(n, dict):
+                    remapped.append(n)
+                    continue
+                nn = dict(n)
+                st = str(nn.get("state") or "").lower()
+                if st in ("done", "failed", "error"):
+                    pass
+                else:
+                    # pending/ready/running/blocked → idle (standing roster)
+                    nn["state"] = "idle"
+                remapped.append(nn)
+            graph["nodes"] = remapped
+        out["graph"] = graph
     return out
 
 

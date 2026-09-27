@@ -526,10 +526,13 @@ def _desk_counts() -> dict[str, Any]:
             for r in rows:
                 if not isinstance(r, dict):
                     continue
-                k = str(r.get("kind") or "?")
-                st = str(r.get("state") or "?")
+                k = str(r.get("kind") or "").strip() or "?"
+                st = str(r.get("state") or "").strip()
                 by_kind[k] = by_kind.get(k, 0) + 1
-                by_state[st] = by_state.get(st, 0) + 1
+                # Empty / placeholder desks have no state — never emit "?" chip
+                # under By state (that was the mystery gray "?" under BY STATE).
+                if st and st != "?":
+                    by_state[st] = by_state.get(st, 0) + 1
                 if st == "working":
                     working += 1
                 elif st in ("quiet", "idle"):

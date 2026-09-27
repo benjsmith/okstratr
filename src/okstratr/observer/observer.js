@@ -81,6 +81,20 @@
       brand.dataset.hostedTagged = "1";
       brand.textContent = brand.textContent + " · hosted:" + HOSTED;
     }
+    // Herdr seating is okbay/Omarchy-only (docs/HERDR-AND-REGISTRY.md).
+    // Switchbay seats via direct harness CLIs — strip the button from embed.
+    if (HOSTED === "switchbay") {
+      const herdrBtn = el("open-herdr-workspace");
+      if (herdrBtn) {
+        herdrBtn.hidden = true;
+        herdrBtn.setAttribute("aria-hidden", "true");
+        herdrBtn.disabled = true;
+      }
+      const herdrMsg = el("open-herdr-msg");
+      if (herdrMsg) {
+        herdrMsg.hidden = true;
+      }
+    }
   }
 
   function api(path, opts) {
@@ -192,6 +206,26 @@
     return desks.some(function (d) {
       return String(d.state) === "working";
     });
+  }
+
+  /** True when the focused (or overall) desk is not actively working. */
+  function deskAtRest() {
+    const id = String(state.focusDeskId || "");
+    if (id && id.indexOf("kind:") !== 0) {
+      for (let i = 0; i < state.desks.length; i++) {
+        const d = state.desks[i];
+        if (String(d.id) === id) {
+          return String(d.state || "") !== "working";
+        }
+      }
+    }
+    return !anyRunning(state.desks);
+  }
+
+  function graphAtRest(graph) {
+    if (graph && graph.idle) return true;
+    if (graph && graph.at_rest) return true;
+    return deskAtRest();
   }
 
   function isActiveState(st) {
@@ -563,16 +597,27 @@
 
     const byKind = desksInfo.by_kind || {};
     const byState = desksInfo.by_state || {};
-    function chipsFromMap(map, fallback) {
-      const keys = Object.keys(map || {});
+    function stateChipLabel(k) {
+      const s = String(k || "");
+      if (s === "working") return "Running";
+      if (s === "quiet" || s === "idle") return "Idle";
+      if (s === "dismissed") return "dismissed";
+      return s;
+    }
+    function chipsFromMap(map, fallback, labelFn) {
+      const keys = Object.keys(map || {}).filter(function (k) {
+        const s = String(k || "").trim();
+        return s && s !== "?";
+      });
       if (!keys.length && fallback) return fallback;
       if (!keys.length) return '<span class="muted">—</span>';
       return keys
         .sort()
         .map(function (k) {
+          const label = labelFn ? labelFn(k) : k;
           return (
             '<span class="dash-chip">' +
-            esc(k) +
+            esc(label) +
             "<strong>" +
             esc(String(map[k])) +
             "</strong></span>"
@@ -595,15 +640,16 @@
     const stateRoot = el("dash-by-state");
     if (kindRoot) kindRoot.innerHTML = chipsFromMap(byKind, kindFallback);
     if (stateRoot) {
-      let html = chipsFromMap(byState, null);
+      let html = chipsFromMap(byState, null, stateChipLabel);
       if (html.indexOf("—") >= 0 || html === '<span class="muted">—</span>') {
         const local = {};
         state.desks.forEach(function (d) {
           if (d.placeholder) return;
-          const s = String(d.state || "?") || "?";
+          const s = String(d.state || "").trim();
+          if (!s || s === "?") return;
           local[s] = (local[s] || 0) + 1;
         });
-        html = chipsFromMap(local, null);
+        html = chipsFromMap(local, null, stateChipLabel);
       }
       stateRoot.innerHTML = html;
     }
@@ -863,10 +909,23 @@
     for (let i = 0; i < candidates.length; i++) {
       const g = candidates[i];
       if (g && Array.isArray(g.nodes) && g.nodes.length >= 2) {
+        const rest = !!g.idle || !!g.at_rest || deskAtRest();
+        let nodes = g.nodes;
+        if (rest) {
+          nodes = g.nodes.map(function (n) {
+            const nn = Object.assign({}, n);
+            const st = String(nn.state || "").toLowerCase();
+            if (st !== "done" && st !== "failed" && st !== "error") {
+              nn.state = "idle";
+            }
+            return nn;
+          });
+        }
         return {
-          nodes: g.nodes,
+          nodes: nodes,
           edges: (g.edges || []).map(normalizeEdge).filter(Boolean),
-          idle: !!g.idle,
+          idle: rest,
+          at_rest: rest,
           label: g.label || "AGENT SPACE",
         };
       }
@@ -924,10 +983,24 @@
       edges.push({ from: "cos", to: "blackboard" });
     }
 
+    const empty = workers.length + terminals.length === 0;
+    const rest = empty || deskAtRest();
+    let outNodes = nodes;
+    if (rest && !empty) {
+      outNodes = nodes.map(function (n) {
+        const nn = Object.assign({}, n);
+        const st = String(nn.state || "").toLowerCase();
+        if (st !== "done" && st !== "failed" && st !== "error") {
+          nn.state = "idle";
+        }
+        return nn;
+      });
+    }
     return {
-      nodes: nodes,
+      nodes: outNodes,
       edges: edges,
-      idle: workers.length + terminals.length === 0,
+      idle: rest,
+      at_rest: rest,
       label: "AGENT SPACE",
     };
   }
@@ -988,6 +1061,7 @@
   }
 
   function edgeFlowing(edge, pos) {
+    if (graphAtRest(state.graph)) return false;
     const a = pos[edge.from];
     const b = pos[edge.to];
     if (!a || !b) return false;
@@ -1077,7 +1151,7 @@
       ctx.strokeStyle = isCos ? "#99f6e4" : "#1f2937";
       ctx.stroke();
 
-      if (active) {
+      if (active && !graphAtRest(state.graph)) {
         ctx.beginPath();
         ctx.arc(n.x, n.y, 14 + Math.sin(t * 6) * 1.5, 0, Math.PI * 2);
         ctx.strokeStyle = "rgba(158, 206, 106, 0.7)";
@@ -1106,12 +1180,13 @@
       });
       const g = state.graph || { edges: [] };
       const needs =
-        (state.layoutNodes || []).some(function (n) {
+        !graphAtRest(g) &&
+        ((state.layoutNodes || []).some(function (n) {
           return isActiveState(n.state);
         }) ||
         (g.edges || []).some(function (e) {
           return edgeFlowing(e, pos);
-        });
+        }));
       paintAgentSpace();
       if (needs) state.animRaf = requestAnimationFrame(tick);
       else state.animRaf = 0;
@@ -1121,6 +1196,11 @@
 
   function renderAgentSpace(status, dagPayload) {
     const graph = synthesizeDagGraph(status, dagPayload);
+    // Bind animation to desk quiet/working — last DAG stays visible but at rest.
+    if ((dagPayload && dagPayload.at_rest) || deskAtRest()) {
+      graph.idle = true;
+      graph.at_rest = true;
+    }
     state.graph = graph;
     setText("agent-space-title", graph.label || "AGENT SPACE");
     setText("dag-meta", dagSummaryText(status, graph));

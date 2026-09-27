@@ -531,6 +531,12 @@ body.hosted .shell {
 }
 .dash-chip strong { color: var(--accent); margin-left: 0.2rem; }
 
+/* Herdr affordance is okbay-only — never show in Switchbay embed. */
+body.hosted[data-okstratr-host="switchbay"] #open-herdr-workspace,
+body.hosted[data-okstratr-host="switchbay"] #open-herdr-msg {
+  display: none !important;
+}
+
 /* —— Modals (schedule + objective edit) —— */
 .modal {
   position: fixed;
