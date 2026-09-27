@@ -478,7 +478,56 @@ class Handler(BaseHTTPRequestHandler):
             # Same process as `okstratr serve` — PATH includes ~/.local/bin when daemon
             # was started from a normal user session (unlike Quickshell execDetached).
             objective = str(payload.get("objective") or "").strip()
-            result = herdr.focus(objective)
+            # Optional: also seat an agent on a registered workspace dir (not okbay repo).
+            open_agent = payload.get("open_agent")
+            if open_agent is None:
+                open_agent = bool(
+                    payload.get("cwd")
+                    or payload.get("path")
+                    or payload.get("workspace_id")
+                    or payload.get("workspace")
+                )
+            if open_agent:
+                result = herdr.open_workspace_agent(
+                    cwd=str(payload.get("cwd") or "").strip() or None,
+                    path=str(payload.get("path") or "").strip() or None,
+                    workspace_id=str(
+                        payload.get("workspace_id")
+                        or payload.get("workspace")
+                        or payload.get("id")
+                        or ""
+                    ).strip()
+                    or None,
+                    label=str(payload.get("label") or "").strip() or None,
+                    kind=str(payload.get("kind") or "").strip() or None,
+                    focus_ui=True,
+                    prefer_harness=str(payload.get("prefer_harness") or "grok").strip()
+                    or "grok",
+                )
+                if objective:
+                    result = {**result, "objective": objective}
+            else:
+                result = herdr.focus(objective)
+            code, body, ct = _json_bytes(result)
+            return self._send(code, body, ct)
+
+        if path in ("/api/herdr/open-workspace", "/api/herdr/open_workspace"):
+            result = herdr.open_workspace_agent(
+                cwd=str(payload.get("cwd") or "").strip() or None,
+                path=str(payload.get("path") or "").strip() or None,
+                workspace_id=str(
+                    payload.get("workspace_id")
+                    or payload.get("workspace")
+                    or payload.get("id")
+                    or ""
+                ).strip()
+                or None,
+                label=str(payload.get("label") or "").strip() or None,
+                kind=str(payload.get("kind") or "").strip() or None,
+                focus_ui=bool(payload.get("focus_ui", True)),
+                prefer_harness=str(payload.get("prefer_harness") or "grok").strip()
+                or "grok",
+            )
             code, body, ct = _json_bytes(result)
             return self._send(code, body, ct)
 
@@ -736,7 +785,7 @@ def serve(host: str = "127.0.0.1", port: int = PORT) -> int:
         "(/health /observer/ /panel/ /api/lifecycle /api/status /api/desk/* /api/web /api/workspaces /api/config/roles /api/harness /api/desk_session "
         "/api/seat /api/dag /api/blackboard /api/blackboard/clear /api/blackboard/prune /api/audit "
         "/api/desk/conversation /api/herdr/conversation "
-        "/api/cos/break /api/herdr/launch /api/herdr/run-ready; hosted via X-Okstratr-Host or ?host=)"
+        "/api/cos/break /api/herdr/launch /api/herdr/open-workspace /api/herdr/run-ready; hosted via X-Okstratr-Host or ?host=)"
     )
     try:
         httpd.serve_forever()

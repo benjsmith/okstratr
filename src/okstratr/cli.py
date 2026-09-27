@@ -223,12 +223,34 @@ def main(argv=None) -> int:
         help="Force a fresh desk org",
     )
 
-    hh = sub.add_parser("herdr", help="Herdr bridge: launch UI or run-ready finite seats")
+    hh = sub.add_parser(
+        "herdr",
+        help="Herdr bridge: launch UI, open-workspace agent, or run-ready seats",
+    )
     hh.add_argument(
         "objective",
         nargs="?",
         default="",
-        help="Objective text to launch, or 'run-ready' to seat ready DAG nodes",
+        help=(
+            "Objective text to launch, 'run-ready' to seat ready DAG nodes, "
+            "or 'open-workspace' / 'open' to start an agent on a registered workspace"
+        ),
+    )
+    hh.add_argument(
+        "workspace",
+        nargs="?",
+        default="",
+        help="For open-workspace: workspace id or absolute path",
+    )
+    hh.add_argument(
+        "--cwd",
+        default="",
+        help="For open-workspace: explicit workspace directory (preferred over id)",
+    )
+    hh.add_argument(
+        "--kind",
+        default="",
+        help="For open-workspace: herdr agent kind (default: seated grok)",
     )
     hh.add_argument(
         "--limit",
@@ -527,6 +549,28 @@ def main(argv=None) -> int:
         if obj == "run-ready":
             return _print(
                 herdr.run_ready(limit=int(args.limit), dry_run=bool(args.dry_run) or None)
+            )
+        if obj in ("open-workspace", "open_workspace", "open"):
+            target = (getattr(args, "workspace", None) or "").strip()
+            cwd = (getattr(args, "cwd", None) or "").strip()
+            kind = (getattr(args, "kind", None) or "").strip() or None
+            workspace_id = None
+            path = None
+            if cwd:
+                path = cwd
+            elif target.startswith("/") or target.startswith("~"):
+                path = target
+            elif target:
+                workspace_id = target
+            return _print(
+                herdr.open_workspace_agent(
+                    cwd=path,
+                    path=path,
+                    workspace_id=workspace_id,
+                    kind=kind,
+                    focus_ui=True,
+                    prefer_harness="grok",
+                )
             )
         obj = obj or status.get_objective()
         return _print(herdr.launch(obj))

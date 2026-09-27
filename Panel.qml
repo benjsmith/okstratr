@@ -182,13 +182,33 @@ Item {
 
   function openHerdr() {
     var obj = (root.status && root.status.objective) ? String(root.status.objective) : ""
-    root.herdrLaunchMsg = "Launching Herdr…"
+    var wsId = root.selectedWorkspaceId || ""
+    var wsPath = ""
+    var rows = root.workspaceRows || []
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i]
+      if (!row) continue
+      var rid = String(row.id || row.name || "")
+      if (rid && rid === String(wsId) && row.path) {
+        wsPath = String(row.path)
+        break
+      }
+    }
+    root.herdrLaunchMsg = "Opening Herdr agent on " + (wsPath || wsId || "workspace") + "…"
     // Prefer HTTP so PATH + systemd user env match herdr.launch.
+    // open_agent seats grok (fallback seated) at the selected workspace cwd — never okbay repo.
     // Local execDetached only if serve is down / launch fails — never both on success.
-    Model.postJson(root.apiUrl + "/api/herdr/launch", {objective: obj}, function (parsed) {
+    Model.postJson(root.apiUrl + "/api/herdr/launch", {
+      objective: obj,
+      open_agent: true,
+      workspace_id: wsId,
+      path: wsPath,
+      prefer_harness: "grok"
+    }, function (parsed) {
       if (parsed && parsed.ok !== false) {
-        var via = parsed.launcher || (parsed.exec && parsed.exec[0]) || "herdr"
-        root.herdrLaunchMsg = "Opened via " + via
+        var via = parsed.cwd || parsed.launcher || (parsed.exec && parsed.exec[0]) || "herdr"
+        var kind = parsed.kind ? (" · " + parsed.kind) : ""
+        root.herdrLaunchMsg = "Agent at " + via + kind
         return
       }
       if (parsed && parsed.ok === false)
@@ -700,7 +720,7 @@ Item {
 
                   Rectangle {
                     id: workspacePicker
-                    width: Math.min(280, parent.width)
+                    width: Math.min(220, parent.width - 140)
                     height: 42
                     radius: 9
                     color: root.themeBg
@@ -720,6 +740,13 @@ Item {
                       cursorShape: Qt.PointingHandCursor
                       onClicked: root.workspaceMenuOpen = !root.workspaceMenuOpen
                     }
+                  }
+
+                  Chip {
+                    anchors.verticalCenter: parent.verticalCenter
+                    label: "Open in Herdr"
+                    primary: true
+                    onClicked: root.openHerdr()
                   }
 
                   Text {

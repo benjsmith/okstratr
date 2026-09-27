@@ -1210,6 +1210,51 @@
     sel.innerHTML = opts.join("");
   }
 
+  function openHerdrWorkspace() {
+    const wid = String(state.selectedWorkspaceId || (el("workspace-switcher") || {}).value || "");
+    let path = "";
+    (state.workspaces || []).forEach(function (w) {
+      const id = String(w.id || w.name || "");
+      if (id && id === wid && w.path) path = String(w.path);
+    });
+    const msg = el("open-herdr-msg");
+    if (msg) {
+      msg.hidden = false;
+      msg.textContent = "Opening Herdr agent on " + (path || wid || "workspace") + "…";
+    }
+    setMsg("Open in Herdr…");
+    api("/api/herdr/open-workspace", {
+      method: "POST",
+      body: {
+        workspace_id: wid,
+        path: path,
+        prefer_harness: "grok",
+        focus_ui: true,
+      },
+    })
+      .then(function (parsed) {
+        const cwd = (parsed && parsed.cwd) || path || wid;
+        const kind = (parsed && parsed.kind) || "agent";
+        const ok = !parsed || parsed.ok !== false;
+        const line = ok
+          ? "Agent at " + cwd + " · " + kind
+          : String((parsed && (parsed.error || parsed.message)) || "Open in Herdr failed");
+        setMsg(line);
+        if (msg) {
+          msg.hidden = false;
+          msg.textContent = line;
+        }
+      })
+      .catch(function (e) {
+        const line = String(e.message || e);
+        setMsg(line);
+        if (msg) {
+          msg.hidden = false;
+          msg.textContent = line;
+        }
+      });
+  }
+
   function chooseWorkspace(id) {
     const wid = String(id || "local");
     state.selectedWorkspaceId = wid;
@@ -1517,6 +1562,12 @@
   if (wsSwitcher) {
     wsSwitcher.addEventListener("change", function () {
       chooseWorkspace(wsSwitcher.value);
+    });
+  }
+  const openHerdrBtn = el("open-herdr-workspace");
+  if (openHerdrBtn) {
+    openHerdrBtn.addEventListener("click", function () {
+      openHerdrWorkspace();
     });
   }
 
