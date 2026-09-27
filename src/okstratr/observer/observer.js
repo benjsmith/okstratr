@@ -75,11 +75,11 @@
 
   const GUIDANCE = {
     switchbay:
-      "Start, stop, create, dismiss, and update desks from the Rail. New work requests go through the Rail chat.",
+      "Start, stop, create, dismiss, and update desks from the Rail. New work requests go through the Rail chat. Modify Desk Prompt to fine-tune its behaviour.",
     okbay:
-      "Start, stop, create, dismiss, and update desks from the Desk rail / Herdr. New work requests go through Herdr or okbay affordances.",
+      "Start, stop, create, dismiss, and update desks from the Desk rail / Herdr. New work requests go through Herdr or okbay affordances. Modify Desk Prompt to fine-tune its behaviour.",
     bare:
-      "Desk lifecycle: okstratr desk start|stop|dismiss|delete (or /okstratr in a harness). New work via CLI / Herdr — not a chat bar here.",
+      "Desk lifecycle: okstratr desk start|stop|dismiss|delete (or /okstratr in a harness). New work via CLI / Herdr — not a chat bar here. Modify Desk Prompt to fine-tune its behaviour.",
   };
 
   function guidanceText() {
