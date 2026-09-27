@@ -130,8 +130,20 @@
     root.innerHTML = hintHtml + cosEmptyHtml(kind);
   }
 
+  // Soft remount (Switchbay ProxiedSkillPanel) re-injects this IIFE. Teardown
+  // clears the prior interval, but in-flight Promise callbacks and a buggy
+  // "re-query #conversation" zombie check could still write the new DOM with
+  // a stale focusDeskId — flipping selection between idle desks every poll.
+  let mountAlive = true;
+  const FOCUS_STORE_KEY = "okstratr.observer.focusDeskId";
+
   const state = {
     focusDeskId: "",
+    /** Once set (user click, preferred embed desk, or first adopted focus),
+     *  poll ticks must not replace focus with another idle/server desk. */
+    focusSticky: false,
+    /** Preferred desk from embed honored at most once per mount. */
+    preferredDeskApplied: false,
     selectedKind: "auto",
     desks: [],
     life: null,
@@ -150,6 +162,87 @@
     selectedWorkspaceId: "",
     conversation: null,
   };
+
+  function readStoredFocus() {
+    try {
+      const v = sessionStorage.getItem(FOCUS_STORE_KEY);
+      return v && String(v).indexOf("kind:") !== 0 ? String(v) : "";
+    } catch (e) {
+      return "";
+    }
+  }
+
+  function writeStoredFocus(id) {
+    try {
+      if (id) sessionStorage.setItem(FOCUS_STORE_KEY, String(id));
+      else sessionStorage.removeItem(FOCUS_STORE_KEY);
+    } catch (e) { /* ignore */ }
+  }
+
+  /** Switchbay (or other host) may pass a preferred desk once via bootstrap /
+   *  query / body attr. Honor once, then stick — never re-promote on poll. */
+  function detectPreferredDesk() {
+    try {
+      if (typeof window.OKSTRATR_FOCUS_DESK === "string" && window.OKSTRATR_FOCUS_DESK) {
+        const id = String(window.OKSTRATR_FOCUS_DESK).trim();
+        if (id && id.indexOf("kind:") !== 0) return id;
+      }
+    } catch (e) { /* ignore */ }
+    try {
+      if (typeof window.OKSTRATR_DESK_ID === "string" && window.OKSTRATR_DESK_ID) {
+        const id = String(window.OKSTRATR_DESK_ID).trim();
+        if (id && id.indexOf("kind:") !== 0) return id;
+      }
+    } catch (e2) { /* ignore */ }
+    try {
+      const q = new URLSearchParams(location.search || "");
+      const id = String(q.get("desk") || q.get("focus") || q.get("desk_id") || "").trim();
+      if (id && id.indexOf("kind:") !== 0) return id;
+    } catch (e3) { /* ignore */ }
+    try {
+      const attr =
+        (document.body && document.body.getAttribute("data-okstratr-desk")) || "";
+      const id = String(attr).trim();
+      if (id && id.indexOf("kind:") !== 0) return id;
+    } catch (e4) { /* ignore */ }
+    return "";
+  }
+
+  /** True while this IIFE owns the mount; false after teardown / remount.
+   *  When called with a captured root arg (even null), never re-query by id —
+   *  a soft remount would otherwise hand a zombie the new DOM. */
+  function mountIsLive(capturedRoot) {
+    if (!mountAlive) return false;
+    if (arguments.length >= 1) {
+      return !!(capturedRoot && capturedRoot.isConnected);
+    }
+    const desks = el("desks");
+    const conv = el("conversation");
+    if (!desks || !conv) return false;
+    return desks.isConnected && conv.isConnected;
+  }
+
+  function setFocusDesk(deskId, opts) {
+    const o = opts || {};
+    const id = String(deskId || "");
+    if (!id || id.indexOf("kind:") === 0) return false;
+    state.focusDeskId = id;
+    if (o.sticky !== false) {
+      state.focusSticky = true;
+      writeStoredFocus(id);
+    }
+    const row = state.desks.find(function (d) {
+      return String(d.id) === id;
+    });
+    if (row && row.kind) state.selectedKind = String(row.kind);
+    return true;
+  }
+
+  function clearFocusDesk() {
+    state.focusDeskId = "";
+    state.focusSticky = false;
+    writeStoredFocus("");
+  }
 
   /** Hide/disable HTML settings chrome when hosted by Switchbay/okbay. */
   function applyHostedMode() {
@@ -364,19 +457,16 @@
   }
 
   function focusDesk(deskId) {
-    if (!deskId || String(deskId).indexOf("kind:") === 0) return;
-    state.focusDeskId = String(deskId);
-    const row = state.desks.find(function (d) {
-      return String(d.id) === String(deskId);
-    });
-    if (row && row.kind) state.selectedKind = String(row.kind);
+    if (!setFocusDesk(deskId, { sticky: true })) return;
     renderDesks();
     api("/api/desk/focus", { method: "POST", body: { desk_id: String(deskId) } })
       .then(function (parsed) {
+        if (!mountIsLive()) return;
         if (parsed && parsed.ok === false) return;
         refresh();
       })
       .catch(function (e) {
+        if (!mountIsLive()) return;
         setMsg(String(e.message || e));
       });
   }
@@ -1611,19 +1701,21 @@
   }
 
   function refresh() {
-    // Switchbay soft remount tears down markup but cannot clear this IIFE's
-    // setInterval — bail so a zombie tick cannot fight the new mount.
+    // Capture roots from THIS mount. Re-querying by id after soft remount would
+    // find the new DOM and let a zombie interval fight the new IIFE's focus.
     const convRoot = el("conversation");
-    if (convRoot && !convRoot.isConnected) return;
+    const desksRoot = el("desks");
+    if (!mountIsLive(convRoot) || !mountIsLive(desksRoot)) return;
     setText("poll-status", "refreshing…");
-    const dagPath = state.focusDeskId
-      ? "/api/dag?desk_id=" + encodeURIComponent(state.focusDeskId)
+    const focusedAtStart = state.focusDeskId;
+    const dagPath = focusedAtStart
+      ? "/api/dag?desk_id=" + encodeURIComponent(focusedAtStart)
       : "/api/dag";
-    const bbPath = state.focusDeskId
-      ? "/api/blackboard?n=12&desk_id=" + encodeURIComponent(state.focusDeskId)
+    const bbPath = focusedAtStart
+      ? "/api/blackboard?n=12&desk_id=" + encodeURIComponent(focusedAtStart)
       : "/api/blackboard?n=12";
-    const convPath = state.focusDeskId
-      ? "/api/desk/conversation?desk_id=" + encodeURIComponent(state.focusDeskId)
+    const convPath = focusedAtStart
+      ? "/api/desk/conversation?desk_id=" + encodeURIComponent(focusedAtStart)
       : null;
     Promise.all([
       api("/api/status").catch(function () { return {}; }),
@@ -1637,6 +1729,8 @@
         : Promise.resolve(null),
     ])
       .then(function (parts) {
+        // Stale mount: interval cleared or soft remount replaced the nodes.
+        if (!mountIsLive(convRoot) || !mountIsLive(desksRoot)) return;
         const status = parts[0];
         const dag = parts[1];
         const deskStatus = parts[2];
@@ -1651,13 +1745,15 @@
         if (!desks.length) desks = normalizeDesks(status);
         state.desks = desks;
 
-        if (!state.focusDeskId) {
+        // Adopt a desk only when we have none yet. Never auto-promote another
+        // idle/server desk over the user's sticky selection on later ticks.
+        if (!state.focusDeskId && !state.focusSticky) {
           const fid =
             (deskSession && deskSession.focus_desk_id) ||
             (status && status.focus_desk_id) ||
             (status && status.desk && status.desk.focus_desk_id) ||
             "";
-          if (fid) state.focusDeskId = String(fid);
+          if (fid) setFocusDesk(fid, { sticky: true });
         }
 
         renderDesks();
@@ -1672,6 +1768,7 @@
         setText("poll-status", "updated " + new Date().toLocaleTimeString());
       })
       .catch(function (e) {
+        if (!mountIsLive(convRoot)) return;
         setText("poll-status", "error: " + e.message);
       });
   }
@@ -1760,7 +1857,7 @@
       const id = deskSwitcher.value;
       if (id) focusDesk(id);
       else {
-        state.focusDeskId = "";
+        clearFocusDesk();
         renderConversation(null);
         renderBlackboard({});
         renderDeskSwitcher();
@@ -1788,6 +1885,20 @@
   } catch (e) { /* ignore */ }
 
   applyHostedMode();
+
+  // Preferred embed desk once, else restore sticky selection across remounts.
+  // Poll must not later flip to another idle desk.
+  (function adoptInitialFocus() {
+    const preferred = detectPreferredDesk();
+    if (preferred && !state.preferredDeskApplied) {
+      state.preferredDeskApplied = true;
+      setFocusDesk(preferred, { sticky: true });
+      return;
+    }
+    const stored = readStoredFocus();
+    if (stored) setFocusDesk(stored, { sticky: true });
+  })();
+
   const health = el("health-link");
   if (health) health.setAttribute("href", API + "/health");
 
@@ -1831,13 +1942,28 @@
 
   let pollTimer = 0;
   function stopObserver() {
+    // Mark dead first so in-flight refresh().then cannot stomp a new mount.
+    mountAlive = false;
     if (pollTimer) {
       clearInterval(pollTimer);
       pollTimer = 0;
+    }
+    if (state.animRaf) {
+      try { cancelAnimationFrame(state.animRaf); } catch (e) { /* ignore */ }
+      state.animRaf = 0;
     }
   }
   window.__okstratrObserverTeardown = stopObserver;
 
   refresh();
-  pollTimer = setInterval(refresh, POLL_MS);
+  pollTimer = setInterval(function () {
+    if (!mountAlive) {
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = 0;
+      }
+      return;
+    }
+    refresh();
+  }, POLL_MS);
 })();

@@ -221,6 +221,14 @@ def test_switchbay_observer_hides_herdr_via_js_and_css(http_server: str) -> None
     assert "cosEmptyHtml" in js
     assert "ensureConversationHostCopy" in js
     assert "__okstratrObserverTeardown" in js
+    # Sticky desk focus across poll / soft remount (selection/poll race fix).
+    assert "focusSticky" in js
+    assert "mountAlive" in js
+    assert "mountIsLive" in js
+    assert "detectPreferredDesk" in js
+    assert "setFocusDesk" in js
+    assert "clearFocusDesk" in js
+    assert "okstratr.observer.focusDeskId" in js
     assert "open-herdr-workspace" in js
     assert "cosCopyNoDesk" in js
     assert "cosCopyNoTurns" in js
