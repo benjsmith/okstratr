@@ -101,6 +101,34 @@ def test_hosted_shell_from_request() -> None:
     )
 
 
+def test_resolve_hosted_shell_falls_back_to_env(monkeypatch) -> None:
+    from okstratr.public_base import resolve_hosted_shell
+
+    monkeypatch.delenv("OKSTRATR_HOSTED", raising=False)
+    monkeypatch.delenv("OKSTRATR_HOST", raising=False)
+    assert resolve_hosted_shell({}, {}) is None
+    monkeypatch.setenv("OKSTRATR_HOSTED", "switchbay")
+    assert resolve_hosted_shell({}, {}) == "switchbay"
+    # Request still wins over env
+    assert resolve_hosted_shell({"X-Okstratr-Host": "okbay"}, {}) == "okbay"
+
+
+def test_scrub_observer_html_for_host_switchbay() -> None:
+    from okstratr.public_base import (
+        COS_EMPTY_NO_DESK_HERDR,
+        COS_EMPTY_NO_DESK_SWITCHBAY,
+        scrub_observer_html_for_host,
+    )
+
+    raw = f'<div class="bb-empty">{COS_EMPTY_NO_DESK_HERDR}</div>'
+    out = scrub_observer_html_for_host(raw, hosted="switchbay")
+    assert COS_EMPTY_NO_DESK_SWITCHBAY in out
+    assert "Herdr" not in out
+    # okbay/bare keep Herdr
+    assert scrub_observer_html_for_host(raw, hosted="okbay") == raw
+    assert scrub_observer_html_for_host(raw, hosted=None) == raw
+
+
 # —— HTTP: hosted mode injects bootstrap ——
 
 
@@ -115,6 +143,9 @@ def test_observer_hosted_query_injects_bootstrap(http_server: str) -> None:
     assert "dag-graph" in text or "agent-space" in text
     assert "blackboard" in text
     assert 'id="settings-panel"' in text or 'class="config"' in text
+    # Switchbay must not serve Herdr empty-state defaults (avoids remount flicker).
+    assert "Select a desk to view the ongoing CoS conversation." in text
+    assert "Select a desk to view ongoing CoS conversation in Herdr." not in text
 
 
 def test_observer_hosted_header_injects_bootstrap(http_server: str) -> None:

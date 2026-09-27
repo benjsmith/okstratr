@@ -37,27 +37,60 @@
   }
 
   const API = detectApiBase();
+  // Initial detection; prefer currentHosted() for every DOM write so soft remounts
+  // / late bootstrap / zombie poll ticks cannot reintroduce Herdr on Switchbay.
   const HOSTED = detectHosted();
 
+  /**
+   * Live hosted-shell id. Re-reads window + body attr every call so a Switchbay
+   * soft remount that refreshes OKSTRATR_HOSTED is honored by existing poll
+   * intervals (teardown cannot clear prior IIFE timers from the shell).
+   */
+  function currentHosted() {
+    try {
+      if (typeof window.OKSTRATR_HOSTED === "string" && window.OKSTRATR_HOSTED) {
+        const h = String(window.OKSTRATR_HOSTED).trim().toLowerCase();
+        if (HOSTED_SHELLS[h]) return h;
+      }
+    } catch (e) { /* ignore */ }
+    try {
+      const attr =
+        (document.body && document.body.getAttribute("data-okstratr-host")) || "";
+      const h = String(attr).trim().toLowerCase();
+      if (HOSTED_SHELLS[h]) return h;
+    } catch (e2) { /* ignore */ }
+    if (HOSTED && HOSTED_SHELLS[HOSTED]) return HOSTED;
+    return detectHosted();
+  }
+
+  function isSwitchbayHost() {
+    return currentHosted() === "switchbay";
+  }
 
   /** CoS empty/status copy — Switchbay must not mention Herdr (okbay/bare may). */
   function cosCopyNoDesk() {
-    if (HOSTED === "switchbay") {
+    if (isSwitchbayHost()) {
       return "Select a desk to view the ongoing CoS conversation.";
     }
     return "Select a desk to view ongoing CoS conversation in Herdr.";
   }
 
   function cosCopyNoTurns() {
-    if (HOSTED === "switchbay") {
+    if (isSwitchbayHost()) {
       return "No CoS conversation yet for this desk. Start the desk.";
     }
     return "No CoS conversation yet for this desk. Start the desk or open Herdr.";
   }
 
+  /** Single host-aware empty markup used by every conversation render path. */
+  function cosEmptyHtml(kind) {
+    const copy = kind === "no-turns" ? cosCopyNoTurns() : cosCopyNoDesk();
+    return '<div class="bb-empty">' + copy + "</div>";
+  }
+
   function cosStubHint(hint) {
     const h = String(hint || "");
-    if (HOSTED !== "switchbay") return h;
+    if (!isSwitchbayHost()) return h;
     if (!h) return h;
     // Neutralize any Herdr-bearing stub hint from API or cache.
     return (
@@ -66,12 +99,35 @@
   }
 
   function scrubHerdrStatus(msg) {
-    if (HOSTED !== "switchbay" || !msg) return msg;
+    if (!isSwitchbayHost() || !msg) return msg;
     return String(msg)
       .replace(/Herdr drive/gi, "Drive")
       .replace(/Herdr job/gi, "Drive job")
       .replace(/Herdr error/gi, "Drive error")
       .replace(/\bHerdr\b/g, "drive");
+  }
+
+  /** After any conversation innerHTML write: never leave Herdr in Switchbay DOM. */
+  function ensureConversationHostCopy() {
+    if (!isSwitchbayHost()) return;
+    const root = el("conversation");
+    if (!root) return;
+    const raw = root.textContent || "";
+    if (!/Herdr/i.test(raw)) return;
+    // Preserve stub hint paragraph if present; replace only bb-empty / Herdr text.
+    const hintEl = root.querySelector(".conv-stub-hint");
+    const hintHtml = hintEl
+      ? '<p class="conv-stub-hint">' + esc(cosStubHint(hintEl.textContent || "")) + "</p>"
+      : "";
+    const kind = state.focusDeskId ? "no-turns" : "no-desk";
+    // Only rewrite empty / stub surfaces — do not clobber real turns.
+    if (root.querySelector(".conv-row")) {
+      if (hintEl && /Herdr/i.test(hintEl.textContent || "")) {
+        hintEl.textContent = cosStubHint(hintEl.textContent || "");
+      }
+      return;
+    }
+    root.innerHTML = hintHtml + cosEmptyHtml(kind);
   }
 
   const state = {
@@ -97,9 +153,10 @@
 
   /** Hide/disable HTML settings chrome when hosted by Switchbay/okbay. */
   function applyHostedMode() {
-    if (!HOSTED) return;
+    const hostedNow = currentHosted();
+    if (!hostedNow) return;
     document.body.classList.add("hosted");
-    document.body.setAttribute("data-okstratr-host", HOSTED);
+    document.body.setAttribute("data-okstratr-host", hostedNow);
     const config = document.querySelector("aside.config");
     if (config) {
       config.hidden = true;
@@ -114,11 +171,11 @@
     const brand = document.querySelector(".brand");
     if (brand && !brand.dataset.hostedTagged) {
       brand.dataset.hostedTagged = "1";
-      brand.textContent = brand.textContent + " · hosted:" + HOSTED;
+      brand.textContent = brand.textContent + " · hosted:" + hostedNow;
     }
     // Herdr seating is okbay/Omarchy-only (docs/HERDR-AND-REGISTRY.md).
     // Switchbay seats via direct harness CLIs — strip the button from embed.
-    if (HOSTED === "switchbay") {
+    if (hostedNow === "switchbay") {
       const herdrBtn = el("open-herdr-workspace");
       if (herdrBtn) {
         herdrBtn.hidden = true;
@@ -130,11 +187,7 @@
         herdrMsg.hidden = true;
       }
       // Scrub CoS empty/status copy (HTML default still mentions Herdr for okbay/bare).
-      const conv = el("conversation");
-      if (conv && /Herdr/i.test(conv.textContent || "")) {
-        conv.innerHTML =
-          '<div class="bb-empty">' + cosCopyNoDesk() + "</div>";
-      }
+      ensureConversationHostCopy();
     }
   }
 
@@ -145,7 +198,8 @@
       ...(o.body ? { "Content-Type": "application/json" } : {}),
     };
     // So conversation stub hint (and other host-aware copy) match the embed.
-    if (HOSTED) headers["X-Okstratr-Host"] = HOSTED;
+    const hostedNow = currentHosted();
+    if (hostedNow) headers["X-Okstratr-Host"] = hostedNow;
     return fetch(API + path, {
       method: o.method || "GET",
       headers: headers,
@@ -294,12 +348,12 @@
     if (parsed && parsed.herdr_error) {
       const err = parsed.herdr_error;
       const fallback =
-        HOSTED === "switchbay" ? String(err) : "Herdr: " + err;
+        isSwitchbayHost() ? String(err) : "Herdr: " + err;
       setMsg(scrubHerdrStatus(parsed.message || fallback));
     } else if (parsed && parsed.herdr_job && parsed.herdr_job.state === "running") {
       const jid = parsed.herdr_job.id;
       const fallback =
-        HOSTED === "switchbay"
+        isSwitchbayHost()
           ? "Drive running (job " + jid + ")"
           : "Herdr running (job " + jid + ")";
       setMsg(scrubHerdrStatus(parsed.message || fallback));
@@ -527,7 +581,7 @@
     el("edit-desk-id").value = String(deskId);
     el("edit-kind").value = String(kind || "auto");
     el("edit-objective").value = objective || "";
-    if (HOSTED === "switchbay") {
+    if (isSwitchbayHost()) {
       try {
         window.dispatchEvent(
           new CustomEvent("sy:rail-set-input", {
@@ -1427,8 +1481,8 @@
     state.conversation = payload || null;
     if (!state.focusDeskId) {
       if (meta) meta.textContent = "select a desk";
-      root.innerHTML =
-        '<div class="bb-empty">' + cosCopyNoDesk() + "</div>";
+      root.innerHTML = cosEmptyHtml("no-desk");
+      ensureConversationHostCopy();
       return;
     }
     const msgs = (payload && payload.messages) || [];
@@ -1443,8 +1497,7 @@
         (msgs.length === 1 ? "" : "s");
     }
     if (!msgs.length) {
-      let empty =
-        '<div class="bb-empty">' + cosCopyNoTurns() + "</div>";
+      let empty = cosEmptyHtml("no-turns");
       if (payload && payload.hint) {
         empty =
           '<p class="conv-stub-hint">' +
@@ -1453,6 +1506,7 @@
           empty;
       }
       root.innerHTML = empty;
+      ensureConversationHostCopy();
       return;
     }
     let html = "";
@@ -1479,6 +1533,7 @@
       })
       .join("");
     root.innerHTML = html;
+    ensureConversationHostCopy();
   }
 
   function renderBlackboard(payload) {
@@ -1556,6 +1611,10 @@
   }
 
   function refresh() {
+    // Switchbay soft remount tears down markup but cannot clear this IIFE's
+    // setInterval — bail so a zombie tick cannot fight the new mount.
+    const convRoot = el("conversation");
+    if (convRoot && !convRoot.isConnected) return;
     setText("poll-status", "refreshing…");
     const dagPath = state.focusDeskId
       ? "/api/dag?desk_id=" + encodeURIComponent(state.focusDeskId)
@@ -1687,7 +1746,7 @@
 
   document.querySelectorAll("[data-web]").forEach(function (b) {
     b.addEventListener("click", function () {
-      if (HOSTED) return; // shell owns settings in hosted mode
+      if (currentHosted()) return; // shell owns settings in hosted mode
       setWeb(b.getAttribute("data-web"));
     });
   });
@@ -1720,6 +1779,13 @@
       openHerdrWorkspace();
     });
   }
+
+  // Drop any prior observer IIFE left by Switchbay soft remount / re-inject.
+  try {
+    if (typeof window.__okstratrObserverTeardown === "function") {
+      window.__okstratrObserverTeardown();
+    }
+  } catch (e) { /* ignore */ }
 
   applyHostedMode();
   const health = el("health-link");
@@ -1763,6 +1829,15 @@
     if (em && !em.hidden) closeModal("edit");
   });
 
+  let pollTimer = 0;
+  function stopObserver() {
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = 0;
+    }
+  }
+  window.__okstratrObserverTeardown = stopObserver;
+
   refresh();
-  setInterval(refresh, POLL_MS);
+  pollTimer = setInterval(refresh, POLL_MS);
 })();

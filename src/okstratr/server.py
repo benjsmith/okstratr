@@ -13,9 +13,9 @@ from . import blackboard, conversation, cos, dag, desks, herdr, herdr_jobs, okba
 from .lifecycle import observer_asset_dir, status_payload as lifecycle_status_payload
 from .public_base import (
     HOST_HEADER,
-    hosted_shell_from_request,
     inject_observer_bootstrap,
     public_base,
+    resolve_hosted_shell,
     strip_public_base,
 )
 from pathlib import Path as _Path
@@ -44,7 +44,7 @@ class Handler(BaseHTTPRequestHandler):
         return path, qs, parsed
 
     def _hosted_shell(self, qs: dict[str, list[str]] | None = None) -> str | None:
-        return hosted_shell_from_request(self.headers, qs)
+        return resolve_hosted_shell(self.headers, qs)
 
     def _send(
         self,

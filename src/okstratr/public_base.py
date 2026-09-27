@@ -81,6 +81,23 @@ def hosted_shell_from_query_string(qs: str) -> str | None:
     return hosted_shell_from_request(None, parse_qs(qs))
 
 
+def hosted_shell_from_env() -> str | None:
+    """Resolve hosted shell from ``OKSTRATR_HOSTED`` / ``OKSTRATR_HOST`` env."""
+    for key in ("OKSTRATR_HOSTED", "OKSTRATR_HOST"):
+        found = normalize_hosted_shell(os.environ.get(key))
+        if found:
+            return found
+    return None
+
+
+def resolve_hosted_shell(
+    headers: Mapping[str, str] | None = None,
+    query: Mapping[str, list[str]] | None = None,
+) -> str | None:
+    """Request header/query first, then process env (Switchbay/okbay supervisors)."""
+    return hosted_shell_from_request(headers, query) or hosted_shell_from_env()
+
+
 def observer_bootstrap_js(*, hosted: str | None = None, api_base: str | None = None) -> str:
     """Inline script assigning window.OKSTRATR_* for the observer panel."""
     base = public_base() if api_base is None else (api_base or "")
@@ -102,9 +119,45 @@ def _js_str(s: str) -> str:
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+# CoS conversation empty-state copy (must stay in sync with observer.js).
+COS_EMPTY_NO_DESK_HERDR = (
+    "Select a desk to view ongoing CoS conversation in Herdr."
+)
+COS_EMPTY_NO_DESK_SWITCHBAY = (
+    "Select a desk to view the ongoing CoS conversation."
+)
+COS_EMPTY_NO_TURNS_HERDR = (
+    "No CoS conversation yet for this desk. Start the desk or open Herdr."
+)
+COS_EMPTY_NO_TURNS_SWITCHBAY = (
+    "No CoS conversation yet for this desk. Start the desk."
+)
+
+
+def scrub_observer_html_for_host(text: str, *, hosted: str | None = None) -> str:
+    """Rewrite observer HTML defaults so Switchbay never paints Herdr copy.
+
+    Soft remounts (Switchbay ProxiedSkillPanel) re-inject markup; without this,
+    the index.html Herdr empty-state flashes until client JS runs — racing the
+    host-aware poll path.
+    """
+    if normalize_hosted_shell(hosted) != "switchbay":
+        return text
+    # Conversation panel default empty state (no desk selected).
+    text = text.replace(COS_EMPTY_NO_DESK_HERDR, COS_EMPTY_NO_DESK_SWITCHBAY)
+    # Defense in depth if a NoTurns Herdr string is ever baked into HTML.
+    text = text.replace(COS_EMPTY_NO_TURNS_HERDR, COS_EMPTY_NO_TURNS_SWITCHBAY)
+    return text
+
+
 def inject_observer_bootstrap(html: bytes | str, *, hosted: str | None = None) -> bytes:
-    """Inject bootstrap script before ``</head>`` (or start of ``<body>``)."""
+    """Inject bootstrap script before ``</head>`` (or start of ``<body>``).
+
+    When ``hosted=switchbay``, also scrub Herdr-bearing CoS empty defaults out of
+    the HTML so first paint / soft remount never introduces Herdr into the DOM.
+    """
     text = html.decode("utf-8") if isinstance(html, (bytes, bytearray)) else str(html)
+    text = scrub_observer_html_for_host(text, hosted=hosted)
     snippet = "<script>" + observer_bootstrap_js(hosted=hosted) + "</script>\n"
     lower = text.lower()
     idx = lower.find("</head>")

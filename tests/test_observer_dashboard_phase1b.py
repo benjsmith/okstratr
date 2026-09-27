@@ -209,10 +209,18 @@ def test_switchbay_observer_hides_herdr_via_js_and_css(http_server: str) -> None
     text = body.decode("utf-8")
     # Markup still ships the button (okbay needs it); hosted JS/CSS strip it.
     assert 'id="open-herdr-workspace"' in text
+    # Injected HTML defaults must already be Switchbay-neutral (no Herdr flash).
+    assert "Select a desk to view the ongoing CoS conversation." in text
+    assert "Select a desk to view ongoing CoS conversation in Herdr." not in text
+    assert "Start the desk or open Herdr." not in text
     js_code, _jh, js_body = _get(http_server, "/observer/observer.js")
     assert js_code == 200
     js = js_body.decode("utf-8")
-    assert 'HOSTED === "switchbay"' in js
+    assert "isSwitchbayHost" in js
+    assert "currentHosted" in js
+    assert "cosEmptyHtml" in js
+    assert "ensureConversationHostCopy" in js
+    assert "__okstratrObserverTeardown" in js
     assert "open-herdr-workspace" in js
     assert "cosCopyNoDesk" in js
     assert "cosCopyNoTurns" in js
