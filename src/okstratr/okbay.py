@@ -71,6 +71,105 @@ def set_selected_workspace(workspace_id: str, *, path: str | None = None) -> dic
     return active_workspace()
 
 
+def resolve_workspace_path(workspace_id: str, *, path: str | None = None) -> str:
+    """Resolve a filesystem path for a workspace id (explicit path wins)."""
+    explicit = (path or "").strip()
+    if explicit:
+        return str(Path(explicit).expanduser())
+    wid = (workspace_id or "").strip()
+    if not wid or wid in ("local",):
+        return ""
+    pack = list_workspaces()
+    for row in pack.get("workspaces") or []:
+        if not isinstance(row, dict):
+            continue
+        rid = str(row.get("id") or row.get("name") or "")
+        if rid == wid and row.get("path"):
+            return str(Path(str(row["path"]).strip()).expanduser())
+    # Fallbacks used by active_workspace()
+    if wid == DEMO_WORKSPACE_ID:
+        return str(Path("~/Work/Biocure").expanduser())
+    if wid in (DEFAULT_WORKSPACE_ID, "okbay"):
+        return str(Path(DEFAULT_WORK_ROOT).expanduser())
+    return ""
+
+
+def activate_remote_workspace(workspace_id: str, *, timeout: float = 0.8) -> dict[str, Any]:
+    """Ask okbay to switch active workspace (POST /api/workspace/use)."""
+    import urllib.error
+    import urllib.request
+
+    wid = (workspace_id or "").strip()
+    if not wid or wid in ("local",):
+        return {"ok": True, "skipped": True, "reason": "local-or-empty"}
+    # Map okstratr default id → okbay hub name
+    remote_name = "okbay" if wid == DEFAULT_WORKSPACE_ID else wid
+    url = f"{OKBAY_API_URL}/api/workspace/use"
+    body = json.dumps({"name": remote_name, "workspace": remote_name}).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+        data = json.loads(raw) if raw else {}
+        if isinstance(data, dict):
+            data.setdefault("ok", True)
+            data["api_url"] = url
+            return data
+        return {"ok": True, "raw": data, "api_url": url}
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as e:
+        return {
+            "ok": False,
+            "reachable": False,
+            "error": str(e),
+            "api_url": url,
+            "workspace_id": wid,
+        }
+
+
+def apply_workspace_selection(
+    workspace_id: str, *, path: str | None = None, set_operating_cwd: bool = True
+) -> dict[str, Any]:
+    """Select okbay workspace, optionally set okstratr operating cwd, activate remote.
+
+    This is the path the observer workspace-switcher must take so the displayed
+    lifecycle cwd updates immediately after a switch.
+    """
+    wid = (workspace_id or "").strip() or "local"
+    resolved = resolve_workspace_path(wid, path=path)
+    selected = set_selected_workspace(wid, path=resolved or path)
+
+    cwd_result: dict[str, Any] | None = None
+    if set_operating_cwd and resolved:
+        p = Path(resolved).expanduser()
+        if p.is_dir():
+            from . import workspace as ws_mod
+
+            cwd_result = ws_mod.set_cwd(p)
+        else:
+            cwd_result = {"ok": False, "error": f"path does not exist: {p}", "cwd": None}
+    elif set_operating_cwd and wid == "local":
+        cwd_result = {"ok": True, "skipped": True, "reason": "local"}
+
+    remote = activate_remote_workspace(wid)
+    from . import workspace as ws_mod
+
+    return {
+        "ok": True,
+        "workspace_id": wid,
+        "path": resolved or None,
+        "okbay": selected,
+        "cwd": cwd_result,
+        "operating_cwd": ws_mod.get_cwd(),
+        "activate": remote,
+        "workspaces": list_workspaces(),
+    }
+
+
 def list_workspaces(*, timeout: float = 0.4) -> dict[str, Any]:
     """
     Fetch okbay workspace list from http://127.0.0.1:8766/api/workspace/list.

@@ -1258,12 +1258,27 @@
   function chooseWorkspace(id) {
     const wid = String(id || "local");
     state.selectedWorkspaceId = wid;
-    setMsg("Workspace: " + wid);
+    let path = "";
+    (state.workspaces || []).forEach(function (w) {
+      const rowId = String(w.id || w.name || "");
+      if (rowId && rowId === wid && w.path) path = String(w.path);
+    });
+    setMsg("Workspace: " + wid + (path ? " · " + path : ""));
     api("/api/workspace/select", {
       method: "POST",
-      body: { id: wid, workspace_id: wid },
+      body: { id: wid, workspace_id: wid, path: path || undefined },
     })
-      .then(function () {
+      .then(function (parsed) {
+        const cwd =
+          (parsed && (parsed.operating_cwd || (parsed.cwd && parsed.cwd.cwd))) ||
+          path ||
+          wid;
+        if (cwd) {
+          state.cwd = cwd;
+          setText("s-cwd", cwd);
+          setText("cwd-chip", "cwd: " + cwd);
+        }
+        setMsg("Workspace: " + wid + " · cwd " + cwd);
         refresh();
       })
       .catch(function (e) {

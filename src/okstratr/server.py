@@ -674,13 +674,11 @@ class Handler(BaseHTTPRequestHandler):
                 or ""
             )
             ws_path = payload.get("path")
-            result = okbay.set_selected_workspace(
+            applied = okbay.apply_workspace_selection(
                 str(ws_id), path=str(ws_path) if ws_path else None
             )
             status.write_status()
-            code, body, ct = _json_bytes(
-                {"ok": True, "okbay": result, "workspaces": okbay.list_workspaces()}
-            )
+            code, body, ct = _json_bytes(applied)
             return self._send(code, body, ct)
 
         if path in ("/api/config/roles", "/api/roles/config"):
