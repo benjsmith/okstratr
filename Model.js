@@ -578,9 +578,26 @@ function nodeColorForRole(role) {
 }
 
 function workspaceRows(status) {
+    function labelFor(w) {
+        var id = String((w && (w.id || w.name)) || "local")
+        var name = String((w && (w.name || w.id)) || id)
+        var path = String((w && w.path) || "")
+        if (w && w.label) return String(w.label)
+        if (id === "local" || name === "local")
+            return path ? ("local (serve cwd) — " + path) : "local (serve cwd)"
+        if (name && path) return name + " — " + path
+        return name || path || id
+    }
+    var rows = []
     if (status && status.okbay_workspaces && Array.isArray(status.okbay_workspaces.workspaces))
-        return status.okbay_workspaces.workspaces
-    return [{ id: "local", name: "local", label: "local", path: "" }]
+        rows = status.okbay_workspaces.workspaces.slice()
+    if (!rows.length)
+        rows = [{ id: "local", name: "local", path: "", label: "local (serve cwd)" }]
+    return rows.map(function (w) {
+        var copy = Object.assign({}, w)
+        copy.label = labelFor(copy)
+        return copy
+    })
 }
 
 function workspaceReachable(status) {

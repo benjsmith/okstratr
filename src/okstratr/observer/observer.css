@@ -595,3 +595,67 @@ body.hosted[data-okstratr-host="switchbay"] #open-herdr-msg {
   gap: 0.4rem;
   margin-top: 0.25rem;
 }
+
+/* —— Agents tab host-aware guidance —— */
+.agents-guidance {
+  margin: 0 0 0.55rem;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+  color: var(--fg);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+.agents-guidance code {
+  font-size: 0.72rem;
+  padding: 0.05rem 0.25rem;
+  border-radius: 4px;
+  background: var(--chip);
+}
+
+/* —— Desk standing prompt (below blackboard) —— */
+.desk-prompt-panel .panel-head {
+  gap: 0.5rem;
+}
+.desk-prompt-panel #desk-prompt-meta {
+  margin-right: auto;
+}
+.desk-prompt-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 4.5rem;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  padding: 0.5rem 0.65rem;
+  font: inherit;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+.desk-prompt-textarea:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 1px;
+}
+.desk-prompt-textarea:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.desk-prompt-hint {
+  margin: 0.35rem 0 0;
+  font-size: 0.7rem;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+

@@ -782,7 +782,7 @@ Item {
                         Text {
                           anchors.fill: parent
                           anchors.leftMargin: 8
-                          text: (modelData.name || modelData.id || "local") + (modelData.path ? "  ·  " + modelData.path : "")
+                          text: (modelData.label || ((modelData.name || modelData.id || "local") + (modelData.path ? "  ·  " + modelData.path : "")))
                           color: root.themeFg
                           font.pixelSize: 11
                           verticalAlignment: Text.AlignVCenter

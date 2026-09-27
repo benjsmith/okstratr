@@ -134,6 +134,32 @@ COS_EMPTY_NO_TURNS_SWITCHBAY = (
 )
 
 
+GUIDANCE_BARE = (
+    "Desk lifecycle via CLI: okstratr desk start|stop|dismiss|delete "
+    "(or /okstratr in a harness). New work requests go through the CLI / Herdr."
+)
+GUIDANCE_SWITCHBAY = (
+    "Start, stop, create, dismiss, and update desks from the Rail. "
+    "New work requests go through the Rail chat."
+)
+GUIDANCE_OKBAY = (
+    "Start, stop, create, dismiss, and update desks from the Desk rail / Herdr. "
+    "New work requests go through Herdr or okbay affordances."
+)
+DESK_PROMPT_HINT_BARE = (
+    "Updates the desk standing instruction. New work still goes through "
+    "CLI / Herdr — not this box."
+)
+DESK_PROMPT_HINT_SWITCHBAY = (
+    "Updates the desk standing instruction. New work still goes through "
+    "the Rail chat — not this box."
+)
+DESK_PROMPT_HINT_OKBAY = (
+    "Updates the desk standing instruction. New work still goes through "
+    "Herdr / okbay — not this box."
+)
+
+
 def scrub_observer_html_for_host(text: str, *, hosted: str | None = None) -> str:
     """Rewrite observer HTML defaults so Switchbay never paints Herdr copy.
 
@@ -141,12 +167,17 @@ def scrub_observer_html_for_host(text: str, *, hosted: str | None = None) -> str
     the index.html Herdr empty-state flashes until client JS runs — racing the
     host-aware poll path.
     """
-    if normalize_hosted_shell(hosted) != "switchbay":
-        return text
-    # Conversation panel default empty state (no desk selected).
-    text = text.replace(COS_EMPTY_NO_DESK_HERDR, COS_EMPTY_NO_DESK_SWITCHBAY)
-    # Defense in depth if a NoTurns Herdr string is ever baked into HTML.
-    text = text.replace(COS_EMPTY_NO_TURNS_HERDR, COS_EMPTY_NO_TURNS_SWITCHBAY)
+    host = normalize_hosted_shell(hosted)
+    if host == "switchbay":
+        # Conversation panel default empty state (no desk selected).
+        text = text.replace(COS_EMPTY_NO_DESK_HERDR, COS_EMPTY_NO_DESK_SWITCHBAY)
+        # Defense in depth if a NoTurns Herdr string is ever baked into HTML.
+        text = text.replace(COS_EMPTY_NO_TURNS_HERDR, COS_EMPTY_NO_TURNS_SWITCHBAY)
+        text = text.replace(GUIDANCE_BARE, GUIDANCE_SWITCHBAY)
+        text = text.replace(DESK_PROMPT_HINT_BARE, DESK_PROMPT_HINT_SWITCHBAY)
+    elif host in ("okbay", "omarchy"):
+        text = text.replace(GUIDANCE_BARE, GUIDANCE_OKBAY)
+        text = text.replace(DESK_PROMPT_HINT_BARE, DESK_PROMPT_HINT_OKBAY)
     return text
 
 

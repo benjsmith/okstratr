@@ -16,7 +16,7 @@
       <span class="chip" id="chip-run">Idle</span>
       <span class="chip desk-stat" id="chip-desks" title="Standing desks working / idle">desks: …</span>
       <span class="chip desk-stat" id="chip-tokens" title="Tokens from lifecycle (n/a when unknown)">tok: …</span>
-      <span class="chip desk-stat" id="chip-files" title="Files / lines from lifecycle">files: …</span>
+      <span class="chip desk-stat" id="chip-files" title="Files written / lines written (harness logs + audit file ops)">files written: …</span>
     </div>
     <div class="actions">
       <button type="button" id="btn-quiet-all" class="btn ghost" title="Quiet every working standing desk">Quiet all</button>
@@ -42,6 +42,9 @@
     <!-- Main column -->
     <main class="main">
       <div class="action-msg" id="action-msg" hidden></div>
+      <p class="agents-guidance" id="agents-guidance" role="note">
+        Desk lifecycle via CLI: okstratr desk start|stop|dismiss|delete (or /okstratr in a harness). New work requests go through the CLI / Herdr.
+      </p>
       <div class="status-line">
         <span class="chip cwd" id="cwd-chip" title="workspace / cwd">cwd: …</span>
       </div>
@@ -53,12 +56,24 @@
           <span class="muted" id="desk-dash-meta">stats from /api/lifecycle</span>
         </div>
         <div class="desk-dash-grid" id="desk-dash-stats">
-          <div class="dash-stat"><span class="dash-label">Working</span><span class="dash-val" id="dash-working">0</span></div>
-          <div class="dash-stat"><span class="dash-label">Idle</span><span class="dash-val" id="dash-quiet">0</span></div>
-          <div class="dash-stat"><span class="dash-label">Total</span><span class="dash-val" id="dash-total">0</span></div>
-          <div class="dash-stat"><span class="dash-label">Tokens</span><span class="dash-val" id="dash-tokens">n/a</span></div>
-          <div class="dash-stat"><span class="dash-label">Files</span><span class="dash-val" id="dash-files">0</span></div>
-          <div class="dash-stat"><span class="dash-label">Lines</span><span class="dash-val" id="dash-lines">0</span></div>
+          <div class="dash-stat" title="Standing desks currently working">
+            <span class="dash-label">Working</span><span class="dash-val" id="dash-working">0</span>
+          </div>
+          <div class="dash-stat" title="Standing desks idle / quiet">
+            <span class="dash-label">Idle</span><span class="dash-val" id="dash-quiet">0</span>
+          </div>
+          <div class="dash-stat" title="Total standing desks (incl. placeholders)">
+            <span class="dash-label">Total</span><span class="dash-val" id="dash-total">0</span>
+          </div>
+          <div class="dash-stat" title="Token usage from lifecycle (n/a when unknown)">
+            <span class="dash-label">Tokens</span><span class="dash-val" id="dash-tokens">n/a</span>
+          </div>
+          <div class="dash-stat" title="Files written — harness log files / audit file ops count (not wiki links)">
+            <span class="dash-label">Files written</span><span class="dash-val" id="dash-files">0</span>
+          </div>
+          <div class="dash-stat" title="Lines written — lines in harness logs / file ops (not wiki links)">
+            <span class="dash-label">Lines written</span><span class="dash-val" id="dash-lines">0</span>
+          </div>
         </div>
         <div class="desk-dash-groups">
           <div class="dash-group">
@@ -88,7 +103,7 @@
           <label class="switcher-field">
             <span class="switcher-label">Workspace</span>
             <select id="workspace-switcher" class="switcher-select" aria-label="Select workspace">
-              <option value="">local</option>
+              <option value="local">local (serve cwd)</option>
             </select>
           </label>
           <button type="button" id="open-herdr-workspace" class="btn primary" title="Start a Herdr agent (grok preferred) at the selected workspace cwd">
@@ -128,6 +143,21 @@
         </div>
         <div id="blackboard" class="bb-list">Loading…</div>
       </section>
+
+      <section class="panel desk-prompt-panel" id="desk-prompt-panel" aria-label="Desk standing prompt">
+        <div class="panel-head">
+          <h2>Desk prompt</h2>
+          <span class="muted" id="desk-prompt-meta">standing instruction</span>
+          <button type="button" id="btn-desk-prompt-save" class="btn primary" title="Save standing instruction for the focused desk">Save</button>
+        </div>
+        <label class="sr-only" for="desk-prompt">Standing prompt</label>
+        <textarea id="desk-prompt" class="desk-prompt-textarea" rows="3"
+          placeholder="Standing instruction for the focused desk…"
+          title="Editable standing prompt/objective for the focused desk"></textarea>
+        <p class="muted desk-prompt-hint" id="desk-prompt-hint">
+          Updates the desk standing instruction. New work still goes through CLI / Herdr — not this box.
+        </p>
+      </section>
     </main>
 
     <!-- Right strip: config -->
@@ -142,7 +172,7 @@
         <dt>cwd</dt><dd id="s-cwd">…</dd>
         <dt>backend</dt><dd id="s-backend">…</dd>
         <dt>tokens</dt><dd id="s-tokens">n/a</dd>
-        <dt>files</dt><dd id="s-files">…</dd>
+        <dt title="Files written / lines written from lifecycle">files written</dt><dd id="s-files" title="Files written / lines written">…</dd>
       </dl>
       <div class="web-btns">
         <span class="muted">Web egress</span>
@@ -153,7 +183,7 @@
         </div>
       </div>
       <p class="hint harness-path" id="harness-path">harnesses.toml — see serve cwd</p>
-      <p class="hint">No chat/objective input here — Herdr / CLI harness only. Desk click opens CoS conversation; blackboard is desk-scoped.</p>
+      <p class="hint" id="config-lifecycle-hint">No chat bar here (ADR-003). Desk click opens CoS conversation; blackboard is desk-scoped. Standing prompt lives below the blackboard.</p>
     </aside>
   </div>
 

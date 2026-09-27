@@ -1,5 +1,6 @@
 /* okstratr observer panel — DeskRail + AGENT SPACE canvas; not a chat UI.
- * No objective/query text input — Herdr / CLI harness is the only text surface.
+ * No chat/query bar (ADR-003). Standing desk prompt lives below Blackboard.
+ * New work: Rail (Switchbay) / Herdr (okbay) / CLI — not the observer chat surface.
  * Desk rail Start/Stop/Dismiss/Delete/Schedule/Edit (+ Quiet all) → /api/desk/* (see desk_rail.py).
  * Start POSTs kind (+ optional desk_id + standing objective), like Omarchy Start
  * when the query box is empty.
@@ -66,6 +67,44 @@
   function isSwitchbayHost() {
     return currentHosted() === "switchbay";
   }
+
+  function isOkbayHost() {
+    const h = currentHosted();
+    return h === "okbay" || h === "omarchy";
+  }
+
+  const GUIDANCE = {
+    switchbay:
+      "Start, stop, create, dismiss, and update desks from the Rail. New work requests go through the Rail chat.",
+    okbay:
+      "Start, stop, create, dismiss, and update desks from the Desk rail / Herdr. New work requests go through Herdr or okbay affordances.",
+    bare:
+      "Desk lifecycle: okstratr desk start|stop|dismiss|delete (or /okstratr in a harness). New work via CLI / Herdr — not a chat bar here.",
+  };
+
+  function guidanceText() {
+    if (isSwitchbayHost()) return GUIDANCE.switchbay;
+    if (isOkbayHost()) return GUIDANCE.okbay;
+    return GUIDANCE.bare;
+  }
+
+  function deskPromptHintText() {
+    if (isSwitchbayHost()) {
+      return "Updates the desk standing instruction. New work still goes through the Rail chat — not this box.";
+    }
+    if (isOkbayHost()) {
+      return "Updates the desk standing instruction. New work still goes through Herdr / okbay — not this box.";
+    }
+    return "Updates the desk standing instruction. New work still goes through CLI / Herdr — not this box.";
+  }
+
+  function updateHostGuidance() {
+    const g = el("agents-guidance");
+    if (g) g.textContent = guidanceText();
+    const hint = el("desk-prompt-hint");
+    if (hint) hint.textContent = deskPromptHintText();
+  }
+
 
   /** CoS empty/status copy — Switchbay must not mention Herdr (okbay/bare may). */
   function cosCopyNoDesk() {
@@ -159,6 +198,7 @@
     /** Optional kind chip filter (empty = all kinds) */
     kindFilter: "",
     workspaces: [],
+    hostWorkspaces: [],
     selectedWorkspaceId: "",
     conversation: null,
   };
@@ -246,6 +286,7 @@
 
   /** Hide/disable HTML settings chrome when hosted by Switchbay/okbay. */
   function applyHostedMode() {
+    updateHostGuidance();
     const hostedNow = currentHosted();
     if (!hostedNow) return;
     document.body.classList.add("hosted");
@@ -282,6 +323,7 @@
       // Scrub CoS empty/status copy (HTML default still mentions Herdr for okbay/bare).
       ensureConversationHostCopy();
     }
+    updateHostGuidance();
   }
 
   function api(path, opts) {
@@ -791,7 +833,16 @@
 
     setText("chip-desks", "desks: " + working + " run / " + quiet + " idle");
     setText("chip-tokens", "tok: " + tokStr);
-    setText("chip-files", "files: " + fileN + " / " + lineN + " ln");
+    setText("chip-files", "files written: " + fileN + " / " + lineN + " lines");
+    const chipFiles = el("chip-files");
+    if (chipFiles) {
+      chipFiles.title =
+        "Files written: " +
+        fileN +
+        " · Lines written: " +
+        lineN +
+        " (harness logs / audit file ops — not wiki links)";
+    }
 
     const byKind = desksInfo.by_kind || {};
     const byState = desksInfo.by_state || {};
@@ -1451,7 +1502,98 @@
     }
   }
 
-  function renderWorkspaceSwitcher(status) {
+  function workspaceOptionLabel(w) {
+    if (!w) return "local (serve cwd)";
+    const id = String(w.id || w.name || "");
+    const name = String(w.name || w.id || "");
+    const path = String(w.path || "");
+    const label = String(w.label || "").trim();
+    if (label) return label;
+    if (id === "local" || name === "local") {
+      return path ? "local (serve cwd) — " + path : "local (serve cwd)";
+    }
+    if (name && path) return name + " — " + path;
+    return name || path || id || "workspace";
+  }
+
+  function normalizeWorkspaceRows(raw) {
+    const rows = [];
+    const list = Array.isArray(raw) ? raw : [];
+    list.forEach(function (w) {
+      if (!w) return;
+      if (typeof w === "string") {
+        const path = String(w);
+        const name = path.split("/").filter(Boolean).pop() || path;
+        rows.push({ id: name, name: name, path: path, label: name + " — " + path });
+        return;
+      }
+      const id = String(w.id || w.name || w.path || "");
+      if (!id) return;
+      const name = String(w.name || w.id || id);
+      const path = String(w.path || "");
+      rows.push({
+        id: id,
+        name: name,
+        path: path,
+        label: workspaceOptionLabel({ id: id, name: name, path: path, label: w.label }),
+        source: w.source || "",
+      });
+    });
+    return rows;
+  }
+
+  function mergeWorkspaceRows(primary, extra) {
+    const out = [];
+    const seenId = {};
+    const seenPath = {};
+    function add(w) {
+      if (!w) return;
+      const id = String(w.id || "");
+      const path = String(w.path || "");
+      if (id && seenId[id]) return;
+      if (path && seenPath[path]) return;
+      if (id) seenId[id] = true;
+      if (path) seenPath[path] = true;
+      out.push(w);
+    }
+    (primary || []).forEach(add);
+    (extra || []).forEach(add);
+    return out;
+  }
+
+  function rowsFromSwitchbayPayload(payload) {
+    if (!payload) return [];
+    if (Array.isArray(payload.workspaces)) return normalizeWorkspaceRows(payload.workspaces);
+    if (Array.isArray(payload.paths)) {
+      return normalizeWorkspaceRows(
+        payload.paths.map(function (p) {
+          const path = String(p);
+          const name = path.split("/").filter(Boolean).pop() || path;
+          return { id: name, name: name, path: path, source: "switchbay" };
+        })
+      );
+    }
+    return [];
+  }
+
+  /** When embedded in Switchbay, /api/workspaces is host-reserved and lists vaults. */
+  function fetchHostWorkspaces() {
+    if (!isSwitchbayHost()) return Promise.resolve([]);
+    // Absolute /api/workspaces — Switchbay fetch shim keeps this on the host.
+    return fetch("/api/workspaces", { headers: { Accept: "application/json" } })
+      .then(function (r) {
+        if (!r.ok) throw new Error("workspaces " + r.status);
+        return r.json();
+      })
+      .then(function (payload) {
+        return rowsFromSwitchbayPayload(payload);
+      })
+      .catch(function () {
+        return [];
+      });
+  }
+
+  function renderWorkspaceSwitcher(status, hostRows) {
     const sel = el("workspace-switcher");
     if (!sel) return;
     let rows = [];
@@ -1461,12 +1603,27 @@
       (state.status && state.status.okbay_workspaces) ||
       null;
     if (pack) {
-      if (Array.isArray(pack.workspaces)) rows = pack.workspaces;
+      if (Array.isArray(pack.workspaces)) rows = normalizeWorkspaceRows(pack.workspaces);
       if (!selected && pack.selected) selected = String(pack.selected);
       if (!selected && pack.active) selected = String(pack.active.id || pack.active || "");
     }
+    rows = mergeWorkspaceRows(rows, normalizeWorkspaceRows(hostRows || state.hostWorkspaces || []));
+    // Always keep local (serve cwd) as an explicit fallback option.
+    const cwd =
+      (status && (status.cwd || status.operating_cwd)) ||
+      state.cwd ||
+      "";
+    rows = mergeWorkspaceRows(rows, [
+      {
+        id: "local",
+        name: "local",
+        path: cwd ? String(cwd) : "",
+        label: cwd ? "local (serve cwd) — " + cwd : "local (serve cwd)",
+        source: "local",
+      },
+    ]);
     state.workspaces = rows;
-    if (!selected) selected = "local";
+    if (!selected) selected = rows[0] ? String(rows[0].id) : "local";
     state.selectedWorkspaceId = selected;
     const seen = {};
     const opts = [];
@@ -1479,12 +1636,10 @@
         '<option value="' + esc(v) + '"' + selAttr + ">" + esc(label || v) + "</option>"
       );
     }
-    addOpt("local", "local");
     rows.forEach(function (w) {
-      const id = String(w.id || w.name || w.path || "");
-      const name = String(w.name || w.id || w.path || id);
-      addOpt(id, name);
+      addOpt(String(w.id || w.name || ""), workspaceOptionLabel(w));
     });
+    if (!opts.length) addOpt("local", "local (serve cwd)");
     sel.innerHTML = opts.join("");
   }
 
@@ -1530,6 +1685,78 @@
           msg.hidden = false;
           msg.textContent = line;
         }
+      });
+  }
+
+
+  function focusedDeskRow() {
+    const id = String(state.focusDeskId || "");
+    if (!id) return null;
+    const list = state.desks || [];
+    for (let i = 0; i < list.length; i++) {
+      if (String(list[i].id) === id) return list[i];
+    }
+    return null;
+  }
+
+  function renderDeskPrompt() {
+    const ta = el("desk-prompt");
+    const meta = el("desk-prompt-meta");
+    const saveBtn = el("btn-desk-prompt-save");
+    if (!ta) return;
+    const desk = focusedDeskRow();
+    const id = desk ? String(desk.id) : "";
+    const obj = desk && desk.objective != null ? String(desk.objective) : "";
+    // Avoid clobbering in-progress edits for the same desk.
+    if (
+      document.activeElement === ta &&
+      String(ta.dataset.deskId || "") === id
+    ) {
+      if (meta) {
+        meta.textContent = id ? "editing · " + id.slice(0, 8) : "select a desk";
+      }
+      return;
+    }
+    ta.dataset.deskId = id;
+    ta.value = obj;
+    ta.disabled = !id || id.indexOf("kind:") === 0;
+    if (saveBtn) saveBtn.disabled = ta.disabled;
+    if (meta) {
+      meta.textContent = id
+        ? "desk " + id.slice(0, 8) + (desk.kind ? " · " + desk.kind : "")
+        : "select a desk";
+    }
+  }
+
+  function saveDeskPrompt() {
+    const ta = el("desk-prompt");
+    if (!ta || ta.disabled) return;
+    const deskId = String(ta.dataset.deskId || state.focusDeskId || "").trim();
+    if (!deskId || deskId.indexOf("kind:") === 0) {
+      setMsg("Select a desk first");
+      return;
+    }
+    const desk = focusedDeskRow();
+    const kind = (desk && desk.kind) || "auto";
+    const objective = String(ta.value || "");
+    setMsg("Saving desk prompt…");
+    api("/api/desk/start", {
+      method: "POST",
+      body: {
+        desk_id: deskId,
+        kind: kind,
+        objective: objective,
+        drive_herdr: false,
+      },
+    })
+      .then(function (parsed) {
+        setMsg("Desk prompt saved");
+        // Keep textarea in sync after save.
+        ta.dataset.deskId = deskId;
+        afterDeskAction(parsed);
+      })
+      .catch(function (e) {
+        setMsg(String(e.message || e));
       });
   }
 
@@ -1682,7 +1909,7 @@
     const tok = life.tokens || {};
     setText("s-tokens", tok.n_a ? "n/a" : String(tok.tokens || 0));
     const files = life.files || {};
-    setText("s-files", (files.files || 0) + " / " + (files.lines || 0) + " lines");
+    setText("s-files", (files.files || 0) + " files written / " + (files.lines || 0) + " lines written");
     const hp = el("harness-path");
     if (hp && life.cwd) hp.textContent = "harnesses.toml · " + life.cwd;
     renderDeskDashboard(life);
@@ -1727,6 +1954,7 @@
       convPath
         ? api(convPath).catch(function () { return { messages: [], stub: true }; })
         : Promise.resolve(null),
+      fetchHostWorkspaces(),
     ])
       .then(function (parts) {
         // Stale mount: interval cleared or soft remount replaced the nodes.
@@ -1738,7 +1966,9 @@
         const life = parts[4];
         const bb = parts[5];
         const conv = parts[6];
+        const hostWs = parts[7] || [];
         state.status = status;
+        state.hostWorkspaces = hostWs;
 
         let desks = normalizeDesks(deskSession);
         if (!desks.length) desks = normalizeDesks(deskStatus);
@@ -1758,7 +1988,8 @@
 
         renderDesks();
         renderDeskSwitcher();
-        renderWorkspaceSwitcher(status);
+        renderWorkspaceSwitcher(status, hostWs);
+        renderDeskPrompt();
         renderAgentSpace(status, dag);
         renderConversation(conv);
         renderBlackboard(bb);
@@ -1874,6 +2105,19 @@
   if (openHerdrBtn) {
     openHerdrBtn.addEventListener("click", function () {
       openHerdrWorkspace();
+    });
+  }
+  const deskPromptSave = el("btn-desk-prompt-save");
+  if (deskPromptSave) {
+    deskPromptSave.addEventListener("click", saveDeskPrompt);
+  }
+  const deskPromptTa = el("desk-prompt");
+  if (deskPromptTa) {
+    deskPromptTa.addEventListener("keydown", function (ev) {
+      if ((ev.metaKey || ev.ctrlKey) && ev.key === "Enter") {
+        ev.preventDefault();
+        saveDeskPrompt();
+      }
     });
   }
 
