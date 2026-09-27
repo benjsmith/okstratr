@@ -142,3 +142,39 @@ def test_observer_chrome_has_switcher_and_conversation(http_server: str) -> None
     assert 'id="bb-desk-label"' in text
     # Still no persistent chat bar
     assert 'id="objective"' not in text
+
+
+def test_conversation_stub_hint_switchbay_omits_herdr(env: Path, http_server: str) -> None:
+    started = _json(
+        http_server,
+        "/api/desk/start",
+        "POST",
+        {"kind": "work", "objective": "Neutral hint", "drive_herdr": False},
+    )
+    desk = (started.get("desk") or {}).get("desk") or started.get("desk") or {}
+    desk_id = str(desk.get("id") or started.get("desk_id") or "")
+    assert desk_id
+
+    bare = _json(http_server, f"/api/desk/conversation?desk_id={desk_id}")
+    assert "Herdr" in str(bare.get("hint") or "")
+
+    hosted = _json(
+        http_server,
+        f"/api/desk/conversation?desk_id={desk_id}&host=switchbay",
+    )
+    hint = str(hosted.get("hint") or "")
+    assert "Herdr" not in hint
+    assert "desk objective" in hint.lower() or "blackboard" in hint.lower()
+
+    # Header wins / also accepted
+    conn = HTTPConnection(http_server, timeout=5)
+    conn.request(
+        "GET",
+        f"/api/desk/conversation?desk_id={desk_id}",
+        headers={"Accept": "application/json", "X-Okstratr-Host": "switchbay"},
+    )
+    resp = conn.getresponse()
+    data = json.loads(resp.read().decode())
+    conn.close()
+    assert resp.status == 200
+    assert "Herdr" not in str(data.get("hint") or "")

@@ -39,6 +39,41 @@
   const API = detectApiBase();
   const HOSTED = detectHosted();
 
+
+  /** CoS empty/status copy — Switchbay must not mention Herdr (okbay/bare may). */
+  function cosCopyNoDesk() {
+    if (HOSTED === "switchbay") {
+      return "Select a desk to view the ongoing CoS conversation.";
+    }
+    return "Select a desk to view ongoing CoS conversation in Herdr.";
+  }
+
+  function cosCopyNoTurns() {
+    if (HOSTED === "switchbay") {
+      return "No CoS conversation yet for this desk. Start the desk.";
+    }
+    return "No CoS conversation yet for this desk. Start the desk or open Herdr.";
+  }
+
+  function cosStubHint(hint) {
+    const h = String(hint || "");
+    if (HOSTED !== "switchbay") return h;
+    if (!h) return h;
+    // Neutralize any Herdr-bearing stub hint from API or cache.
+    return (
+      "Transcript not found; showing desk objective + CoS blackboard turns."
+    );
+  }
+
+  function scrubHerdrStatus(msg) {
+    if (HOSTED !== "switchbay" || !msg) return msg;
+    return String(msg)
+      .replace(/Herdr drive/gi, "Drive")
+      .replace(/Herdr job/gi, "Drive job")
+      .replace(/Herdr error/gi, "Drive error")
+      .replace(/\bHerdr\b/g, "drive");
+  }
+
   const state = {
     focusDeskId: "",
     selectedKind: "auto",
@@ -94,17 +129,26 @@
       if (herdrMsg) {
         herdrMsg.hidden = true;
       }
+      // Scrub CoS empty/status copy (HTML default still mentions Herdr for okbay/bare).
+      const conv = el("conversation");
+      if (conv && /Herdr/i.test(conv.textContent || "")) {
+        conv.innerHTML =
+          '<div class="bb-empty">' + cosCopyNoDesk() + "</div>";
+      }
     }
   }
 
   function api(path, opts) {
     const o = opts || {};
+    const headers = {
+      Accept: "application/json",
+      ...(o.body ? { "Content-Type": "application/json" } : {}),
+    };
+    // So conversation stub hint (and other host-aware copy) match the embed.
+    if (HOSTED) headers["X-Okstratr-Host"] = HOSTED;
     return fetch(API + path, {
       method: o.method || "GET",
-      headers: {
-        Accept: "application/json",
-        ...(o.body ? { "Content-Type": "application/json" } : {}),
-      },
+      headers: headers,
       body: o.body ? JSON.stringify(o.body) : undefined,
     }).then(function (r) {
       return r
@@ -241,16 +285,26 @@
   /* —— Desk actions (POST mirrors Panel.qml) —— */
   function afterDeskAction(parsed) {
     if (parsed && parsed.ok === false) {
-      setMsg(parsed.herdr_error || parsed.error || "Desk action failed");
+      setMsg(
+        scrubHerdrStatus(parsed.herdr_error || parsed.error || "Desk action failed")
+      );
       refresh();
       return;
     }
     if (parsed && parsed.herdr_error) {
-      setMsg(parsed.message || ("Herdr: " + parsed.herdr_error));
+      const err = parsed.herdr_error;
+      const fallback =
+        HOSTED === "switchbay" ? String(err) : "Herdr: " + err;
+      setMsg(scrubHerdrStatus(parsed.message || fallback));
     } else if (parsed && parsed.herdr_job && parsed.herdr_job.state === "running") {
-      setMsg(parsed.message || ("Herdr running (job " + parsed.herdr_job.id + ")"));
+      const jid = parsed.herdr_job.id;
+      const fallback =
+        HOSTED === "switchbay"
+          ? "Drive running (job " + jid + ")"
+          : "Herdr running (job " + jid + ")";
+      setMsg(scrubHerdrStatus(parsed.message || fallback));
     } else {
-      setMsg((parsed && parsed.message) || "Desk updated");
+      setMsg(scrubHerdrStatus((parsed && parsed.message) || "Desk updated"));
     }
     refresh();
   }
@@ -1374,7 +1428,7 @@
     if (!state.focusDeskId) {
       if (meta) meta.textContent = "select a desk";
       root.innerHTML =
-        '<div class="bb-empty">Select a desk to view ongoing CoS conversation in Herdr.</div>';
+        '<div class="bb-empty">' + cosCopyNoDesk() + "</div>";
       return;
     }
     const msgs = (payload && payload.messages) || [];
@@ -1390,11 +1444,11 @@
     }
     if (!msgs.length) {
       let empty =
-        '<div class="bb-empty">No CoS conversation yet for this desk. Start the desk or open Herdr.</div>';
+        '<div class="bb-empty">' + cosCopyNoTurns() + "</div>";
       if (payload && payload.hint) {
         empty =
           '<p class="conv-stub-hint">' +
-          esc(payload.hint) +
+          esc(cosStubHint(payload.hint)) +
           "</p>" +
           empty;
       }
@@ -1403,7 +1457,8 @@
     }
     let html = "";
     if (payload && payload.stub && payload.hint) {
-      html += '<p class="conv-stub-hint">' + esc(payload.hint) + "</p>";
+      html +=
+        '<p class="conv-stub-hint">' + esc(cosStubHint(payload.hint)) + "</p>";
     }
     html += msgs
       .map(function (m) {

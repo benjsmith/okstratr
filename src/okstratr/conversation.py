@@ -190,10 +190,30 @@ def _synthesize_from_blackboard(
     return messages
 
 
-def conversation_for_desk(desk_id: str | None, *, limit: int = 80) -> dict[str, Any]:
-    """Return CoS/Herdr conversation turns for a desk.
+def _stub_hint(*, hosted: str | None = None) -> str:
+    """User-visible stub status when no transcript file is available."""
+    if str(hosted or "").strip().lower() == "switchbay":
+        return (
+            "Transcript not found; showing desk objective + CoS "
+            "blackboard turns."
+        )
+    return (
+        "Herdr transcript not found; showing desk objective + CoS/Herdr "
+        "blackboard turns. Wire Herdr transcript path when available."
+    )
+
+
+def conversation_for_desk(
+    desk_id: str | None,
+    *,
+    limit: int = 80,
+    hosted: str | None = None,
+) -> dict[str, Any]:
+    """Return CoS conversation turns for a desk.
 
     ``source`` is ``herdr_transcript`` when a file was read, else ``stub``.
+    When ``hosted=switchbay``, stub hint omits Herdr (Switchbay seats via
+    direct harness CLIs).
     """
     did = str(desk_id or "").strip()
     if not did or did.startswith("kind:"):
@@ -229,10 +249,7 @@ def conversation_for_desk(desk_id: str | None, *, limit: int = 80) -> dict[str, 
         "stub": True,
         "available": bool(messages),
         "transcript_path": None,
-        "hint": (
-            "Herdr transcript not found; showing desk objective + CoS/Herdr "
-            "blackboard turns. Wire Herdr transcript path when available."
-        ),
+        "hint": _stub_hint(hosted=hosted),
         "candidates_checked": [str(p) for p in transcript_candidates(did)[:6]],
     }
 

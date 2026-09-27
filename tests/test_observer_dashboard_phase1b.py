@@ -214,6 +214,13 @@ def test_switchbay_observer_hides_herdr_via_js_and_css(http_server: str) -> None
     js = js_body.decode("utf-8")
     assert 'HOSTED === "switchbay"' in js
     assert "open-herdr-workspace" in js
+    assert "cosCopyNoDesk" in js
+    assert "cosCopyNoTurns" in js
+    assert "Select a desk to view the ongoing CoS conversation." in js
+    assert "No CoS conversation yet for this desk. Start the desk." in js
+    # Switchbay path must not bake Herdr into the neutral empty strings.
+    assert 'return "Select a desk to view the ongoing CoS conversation.";' in js
+    assert 'return "No CoS conversation yet for this desk. Start the desk.";' in js
     css_code, _ch, css_body = _get(http_server, "/observer/observer.css")
     assert css_code == 200
     css = css_body.decode("utf-8")

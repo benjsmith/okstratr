@@ -291,7 +291,7 @@ body.hosted .shell {
   border-color: var(--accent);
 }
 
-/* —— CoS conversation (Herdr) —— */
+/* —— CoS conversation —— */
 .conversation-list {
   font-size: 0.8rem;
   max-height: 16rem;

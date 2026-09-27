@@ -180,7 +180,9 @@ class Handler(BaseHTTPRequestHandler):
                 except (ValueError, TypeError):
                     limit = 80
             payload = conversation.conversation_for_desk(
-                str(desk_id) if desk_id else None, limit=limit
+                str(desk_id) if desk_id else None,
+                limit=limit,
+                hosted=self._hosted_shell(qs),
             )
             code, body, ct = _json_bytes(payload)
             return self._send(code, body, ct)
