@@ -39,7 +39,9 @@ Work-coverage default lives in **okbay** (magical all-`~/Work`). **Biocure** is 
 ## Skill + observer panel
 
 ```bash
-# Install (editable) + optional skill copy into your harness skills dir
+# Install CLI onto ~/.local/bin (required for Switchbay Agents supervisor PATH)
+bash contrib/setup.sh        # prefers: uv tool install -e .
+# Dev extras / pytest:
 uv pip install -e '.[dev]'   # or: pip install -e '.[dev]'
 
 # Lifecycle (consent on start unless --yes)
@@ -176,6 +178,7 @@ Panel open/close persists in `~/.local/state/okstratr/ui.json`. Theme colors fro
 
 ```sh
 cd /path/to/okstratr
+bash contrib/setup.sh          # ~/.local/bin/okstratr (Switchbay Agents PATH)
 uv pip install -e '.[dev]'
 okstratr start --yes
 okstratr desk start work "Ship desk brain"
