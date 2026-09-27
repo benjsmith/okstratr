@@ -596,6 +596,64 @@
       });
   }
 
+  /** Pull real desk id out of nested /api/desk/start payloads. */
+  function deskIdFromStartPayload(parsed) {
+    if (!parsed || typeof parsed !== "object") return "";
+    if (parsed.focus_desk_id) return String(parsed.focus_desk_id);
+    if (parsed.desk_id) return String(parsed.desk_id);
+    let desk = parsed.desk || {};
+    if (desk.desk && typeof desk.desk === "object") desk = desk.desk;
+    if (desk.focus_desk_id) return String(desk.focus_desk_id);
+    if (desk.id) return String(desk.id);
+    if (desk.desk_id) return String(desk.desk_id);
+    return "";
+  }
+
+  /** Standing kind: placeholders have no registry id — materialize a quiet
+   *  desk (no Herdr drive) then take the same focus path as Idle rows.
+   *  Does not require pressing Start first. */
+  function ensureAndFocusKind(kind) {
+    const k = String(kind || state.selectedKind || "auto");
+    state.selectedKind = k;
+    setMsg("Opening " + k + " desk…");
+    api("/api/desk/start", {
+      method: "POST",
+      body: { kind: k, objective: "", drive_herdr: false },
+    })
+      .then(function (parsed) {
+        if (!mountIsLive()) return;
+        if (parsed && parsed.ok === false) {
+          setMsg(
+            scrubHerdrStatus(
+              (parsed && (parsed.message || parsed.error)) || "Open failed"
+            )
+          );
+          return;
+        }
+        const newId = deskIdFromStartPayload(parsed);
+        if (newId && newId.indexOf("kind:") !== 0) {
+          focusDesk(newId);
+        } else {
+          setMsg("Open failed — no desk id");
+          refresh();
+        }
+      })
+      .catch(function (e) {
+        if (!mountIsLive()) return;
+        setMsg(String(e.message || e));
+      });
+  }
+
+  /** Row click / label select — real ids focus immediately; kind: placeholders
+   *  ensure a quiet standing desk then focus. Button acts stay separate. */
+  function selectDeskRow(kind, id) {
+    const k = String(kind || "auto");
+    state.selectedKind = k;
+    const realId = id && String(id).indexOf("kind:") !== 0 ? String(id) : "";
+    if (realId) focusDesk(realId);
+    else ensureAndFocusKind(k);
+  }
+
   function startDesk(kind, deskId) {
     const k = String(kind || state.selectedKind || "auto");
     state.selectedKind = k;
@@ -2148,9 +2206,7 @@
     if (!row) return;
     const kind = row.getAttribute("data-kind") || "auto";
     const id = row.getAttribute("data-id") || "";
-    state.selectedKind = kind;
-    if (id && id.indexOf("kind:") !== 0) focusDesk(id);
-    else renderDesks();
+    selectDeskRow(kind, id);
   });
 
   el("btn-refresh").addEventListener("click", refresh);
