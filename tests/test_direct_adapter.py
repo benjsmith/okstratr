@@ -216,3 +216,67 @@ def test_spawn_fake_grok_prompt_file(
     assert "--model" in recorded and "grok-4.6" in recorded
     assert "--reasoning-effort" in recorded and "low" in recorded
     assert "--disable-web-search" in recorded
+
+
+def test_build_argv_pi_openai_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """pi direct seats use -p and --provider openai when OPENAI_API_KEY is set."""
+    from okstratr.harness import argv as argv_mod
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+    for k in ("OKSTRATR_PI_PROVIDER", "PI_PROVIDER", "ANTHROPIC_API_KEY", "XAI_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    cmd = argv_mod.build_argv(
+        "pi",
+        prompt="PONG",
+        model="gpt-4.1-mini",
+        which=lambda n: f"/bin/{n}" if n == "pi" else None,
+    )
+    assert cmd[0] == "/bin/pi"
+    assert "-p" in cmd
+    assert "--provider" in cmd and cmd[cmd.index("--provider") + 1] == "openai"
+    assert "--model" in cmd and cmd[cmd.index("--model") + 1] == "gpt-4.1-mini"
+    assert cmd[-1] == "PONG"
+
+
+def test_build_argv_pi_provider_slash_model() -> None:
+    from okstratr.harness import argv as argv_mod
+
+    cmd = argv_mod.build_argv(
+        "pi",
+        prompt="hi",
+        model="anthropic/claude-sonnet-4",
+        which=lambda n: "/bin/pi" if n == "pi" else None,
+        settings={},
+    )
+    assert "--provider" in cmd and cmd[cmd.index("--provider") + 1] == "anthropic"
+    assert "--model" in cmd and cmd[cmd.index("--model") + 1] == "claude-sonnet-4"
+
+
+def test_build_argv_pi_settings_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    from okstratr.harness import argv as argv_mod
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OKSTRATR_PI_PROVIDER", raising=False)
+    cmd = argv_mod.build_argv(
+        "pi",
+        prompt="hi",
+        model="grok-4",
+        which=lambda n: "/bin/pi" if n == "pi" else None,
+        settings={"provider": "xai"},
+    )
+    assert cmd[cmd.index("--provider") + 1] == "xai"
+    assert cmd[cmd.index("--model") + 1] == "grok-4"
+
+
+def test_infer_pi_provider_env_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    from okstratr.harness import argv as argv_mod
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-x")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant")
+    monkeypatch.delenv("OKSTRATR_PI_PROVIDER", raising=False)
+    # explicit settings wins
+    p, m = argv_mod.infer_pi_provider(model="gpt-4o", settings={"provider": "xai"})
+    assert p == "xai" and m == "gpt-4o"
+    # model slash wins over env
+    p, m = argv_mod.infer_pi_provider(model="google/gemini-2.0-flash", settings={})
+    assert p == "google" and m == "gemini-2.0-flash"

@@ -100,6 +100,16 @@ def run_direct_stub(
     if argv_mod.uses_prompt_file(hid):
         prompt_file = _write_prompt_file(prompt, node_id=req.node_id, harness_id=hid)
     try:
+        seat_settings = {}
+        try:
+            from . import config as harness_config
+
+            seat_settings = dict(
+                getattr(harness_config.load().settings_for(seat.harness_id or ""), "settings", None)
+                or {}
+            )
+        except Exception:  # noqa: BLE001
+            seat_settings = {}
         would_argv = argv_mod.build_argv(
             seat.harness_id or "?",
             prompt=prompt,
@@ -109,6 +119,7 @@ def run_direct_stub(
             cwd=seat_workdir,
             disable_web_search=disable_web,
             prompt_file=prompt_file,
+            settings=seat_settings,
         )
     except (ValueError, FileNotFoundError) as e:
         would_argv = [seat.harness_id or "?", str(e)]
@@ -175,18 +186,29 @@ def run_direct(
     labels = _labels(req, seat)
     prompt = req.objective or req.node_id
     # Derive CLI effort/reasoning flags from harnesses.toml settings when not passed.
+    seat_settings: dict = {}
     if not effort_flags:
         try:
             from . import config as harness_config
 
             cfg = harness_config.load()
-            settings = dict(getattr(cfg.settings_for(seat.harness_id), 'settings', None) or {})
-            effort_flags = argv_mod.effort_flags_for(seat.harness_id, settings)
-            reasoning = str(settings.get("reasoning") or "").strip()
+            seat_settings = dict(getattr(cfg.settings_for(seat.harness_id), 'settings', None) or {})
+            effort_flags = argv_mod.effort_flags_for(seat.harness_id, seat_settings)
+            reasoning = str(seat_settings.get("reasoning") or "").strip()
             if reasoning:
                 labels["reasoning"] = reasoning
         except Exception:  # noqa: BLE001 — best-effort
             effort_flags = effort_flags or None
+    else:
+        try:
+            from . import config as harness_config
+
+            seat_settings = dict(
+                getattr(harness_config.load().settings_for(seat.harness_id), "settings", None)
+                or {}
+            )
+        except Exception:  # noqa: BLE001
+            seat_settings = {}
     seat_workdir, disable_web = _seat_workdir_and_web()
     prompt_file = None
     if argv_mod.uses_prompt_file(seat.harness_id):
@@ -203,6 +225,7 @@ def run_direct(
             cwd=seat_workdir,
             disable_web_search=disable_web,
             prompt_file=prompt_file,
+            settings=seat_settings,
         )
     except FileNotFoundError as e:
         return {
