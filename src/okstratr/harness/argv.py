@@ -151,9 +151,12 @@ def infer_pi_provider(
 ) -> tuple[str | None, str | None]:
     """Resolve (provider, model_id) for pi direct seats.
 
-    Order: explicit provider → settings.provider → model ``provider/id`` →
-    OKSTRATR_PI_PROVIDER / PI_PROVIDER → model-id heuristics → first set
+    Order: explicit provider → model ``provider/id`` slash → settings.provider
+    → OKSTRATR_PI_PROVIDER / PI_PROVIDER → model-id heuristics → first set
     API-key env among known providers.
+
+    Slash models (``xai/grok-4``) must beat a harness default like
+    ``provider=openai`` so multi-provider pi desks work on one install.
     """
     import os
 
@@ -161,14 +164,20 @@ def infer_pi_provider(
     settings = dict(settings or {})
     mid = (model or "").strip() or None
     prov = (provider or "").strip().lower() or None
+    slash_p, slash_m = parse_provider_model(mid)
+    if slash_p:
+        # Explicit provider/model in the model id wins over harness defaults.
+        if not prov:
+            prov = slash_p
+        mid = slash_m or mid
+        # When caller did not pass an explicit provider kwarg, slash still
+        # overrides settings.provider (checked below only if prov empty).
+        if provider is None or not str(provider).strip():
+            prov = slash_p
     if not prov:
         sp = settings.get("provider") or settings.get("pi_provider")
         if sp:
             prov = str(sp).strip().lower() or None
-    slash_p, slash_m = parse_provider_model(mid)
-    if slash_p:
-        prov = prov or slash_p
-        mid = slash_m or mid
     if not prov:
         for key in ("OKSTRATR_PI_PROVIDER", "PI_PROVIDER"):
             v = (environ.get(key) or "").strip().lower()

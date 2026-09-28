@@ -250,6 +250,16 @@ def test_build_argv_pi_provider_slash_model() -> None:
     )
     assert "--provider" in cmd and cmd[cmd.index("--provider") + 1] == "anthropic"
     assert "--model" in cmd and cmd[cmd.index("--model") + 1] == "claude-sonnet-4"
+    # slash beats harness default provider=openai
+    cmd2 = argv_mod.build_argv(
+        "pi",
+        prompt="hi",
+        model="xai/grok-4",
+        which=lambda n: "/bin/pi" if n == "pi" else None,
+        settings={"provider": "openai"},
+    )
+    assert cmd2[cmd2.index("--provider") + 1] == "xai"
+    assert cmd2[cmd2.index("--model") + 1] == "grok-4"
 
 
 def test_build_argv_pi_settings_provider(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -274,9 +284,11 @@ def test_infer_pi_provider_env_order(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-x")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant")
     monkeypatch.delenv("OKSTRATR_PI_PROVIDER", raising=False)
-    # explicit settings wins
+    # settings wins when model has no slash
     p, m = argv_mod.infer_pi_provider(model="gpt-4o", settings={"provider": "xai"})
     assert p == "xai" and m == "gpt-4o"
-    # model slash wins over env
-    p, m = argv_mod.infer_pi_provider(model="google/gemini-2.0-flash", settings={})
+    # model slash wins over settings default and env
+    p, m = argv_mod.infer_pi_provider(
+        model="google/gemini-2.0-flash", settings={"provider": "openai"}
+    )
     assert p == "google" and m == "gemini-2.0-flash"
