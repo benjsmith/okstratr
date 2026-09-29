@@ -39,8 +39,8 @@ second allowlist.
 
 - Proxy must forward `X-Okstratr-Host` (or append `?host=`) when embedding.
 - Bare / Mac installs omit the header and query → full settings chrome.
-- Phase 4 Switchbay / Phase 5 okbay wire the reverse proxy; this ADR is the
-  okstratr contract they implement against.
+- Switchbay Phase 4a / Embed v2 wires the reverse proxy against this contract
+  (okbay Phase 5 still deferred). Bare / Mac installs omit hosted headers.
 - Textual TUI stays removed (charter #8); observer-only console.
 
 ## Verify

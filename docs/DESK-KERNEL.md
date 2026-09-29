@@ -1,15 +1,17 @@
 # Desk kernel (Switchbay-style)
 
-> **Product vision (locked):** see **[ADR-001-cli-tui-harness.md](ADR-001-cli-tui-harness.md)** — CLI-first desk brain, harness-agnostic seating, Omarchy Panel as client.
+> **Product vision (locked):** **[ADR-003-skill-observer-vs-kernel.md](ADR-003-skill-observer-vs-kernel.md)** —
+> skill + **observer panel** (primary visual; no chat/query bar); Herdr/CLI = text I/O;
+> Omarchy QML = optional thin client. Seating history: **[ADR-001](ADR-001-cli-tui-harness.md)**.
+> Hosted proxy / registry SSOT: **[ADR-004](ADR-004-hosted-proxy-registry.md)**.
 >
-
 > Design authority for okstratr’s hiring manager, desk lifecycle, roles, and Herdr pairing.
 > Implementation today: desk lifecycle + **live effort-bandit hire** + web egress gate +
-> kind-aware planner templates + Herdr labels/focus stub. No live Grok/Herdr model calls;
-> finite-job / dry-run Herdr rules remain. Live Herdr focus sync is still a stub.
+> kind-aware planner templates + Herdr labels/focus stub + observer desk UX. No live
+> Grok/Herdr model calls; finite-job / dry-run Herdr rules remain. Live Herdr focus sync
+> is still a stub (not a blocked Switchbay release — Switchbay Phase 4a embeds the observer).
 >
-> **Switchbay release pending** — deep parity check against Switchbay once that tree is
-> available; vocabulary here is Switchbay-inspired and may be tightened after review.
+> Vocabulary is Switchbay-inspired; tighten after residual parity checklist items close.
 
 ## Omarchy product
 
@@ -258,7 +260,7 @@ keeps the existing objective when resuming a quiet desk with an empty objective.
 
 ### Focus + close
 
-- `focus_desk(desk_id)` — on focus of any **non-dismissed** desk: set `focus_id` + `active_id`, **always** sync the global DAG from that desk’s DAG file, `status.set_objective(desk.objective)`, save registry + `write_status()`. Panel refills `queryInput` from the focus API `objective` (rail click and API path). Live Herdr pane sync remains pending.
+- `focus_desk(desk_id)` — on focus of any **non-dismissed** desk: set `focus_id` + `active_id`, **always** sync the global DAG from that desk’s DAG file, `status.set_objective(desk.objective)`, save registry + `write_status()`. Focus API exposes `objective` for clients; observer has **no** query bar (ADR-003) — Desk Prompt / CoS conversation are the in-panel text surfaces. Live Herdr pane sync remains a stub.
 - Switching desks in okstratr focuses that CoS in Herdr, and vice versa (live pane sync later).
 - Closing okstratr: **warn** (Panel close dialog binds `status.ui.close_warning`); on confirm, `POST /api/desk/quiet_standing` then close panel; cancel stays open.
 

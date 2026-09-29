@@ -6,7 +6,10 @@
 >
 
 > Desk / kernel design authority: **[DESK-KERNEL.md](DESK-KERNEL.md)**.
-> Switchbay release pending for deep parity check.
+> Hosted embed + registry SSOT: **[ADR-004-hosted-proxy-registry.md](ADR-004-hosted-proxy-registry.md)**;
+> host_notify + health: **[ADR-005-host-notify-and-health.md](ADR-005-host-notify-and-health.md)**.
+> Switchbay consumes this contract (Phase 4a / Embed v2); deep feature parity
+> checklist items that remain open are stubs/non-goals, not a blocked release.
 
 ## Intent
 
