@@ -71,46 +71,319 @@ def set_selected_workspace(workspace_id: str, *, path: str | None = None) -> dic
     return active_workspace()
 
 
+def resolve_workspace_path(workspace_id: str, *, path: str | None = None) -> str:
+    """Resolve a filesystem path for a workspace id (explicit path wins)."""
+    explicit = (path or "").strip()
+    if explicit:
+        return str(Path(explicit).expanduser())
+    wid = (workspace_id or "").strip()
+    if not wid or wid in ("local",):
+        return ""
+    pack = list_workspaces()
+    for row in pack.get("workspaces") or []:
+        if not isinstance(row, dict):
+            continue
+        rid = str(row.get("id") or row.get("name") or "")
+        if rid == wid and row.get("path"):
+            return str(Path(str(row["path"]).strip()).expanduser())
+    # Fallbacks used by active_workspace()
+    if wid == DEMO_WORKSPACE_ID:
+        return str(Path("~/Work/Biocure").expanduser())
+    if wid in (DEFAULT_WORKSPACE_ID, "okbay"):
+        return str(Path(DEFAULT_WORK_ROOT).expanduser())
+    return ""
+
+
+def activate_remote_workspace(workspace_id: str, *, timeout: float = 0.8) -> dict[str, Any]:
+    """Ask okbay to switch active workspace (POST /api/workspace/use)."""
+    import urllib.error
+    import urllib.request
+
+    wid = (workspace_id or "").strip()
+    if not wid or wid in ("local",):
+        return {"ok": True, "skipped": True, "reason": "local-or-empty"}
+    # Map okstratr default id → okbay hub name
+    remote_name = "okbay" if wid == DEFAULT_WORKSPACE_ID else wid
+    url = f"{OKBAY_API_URL}/api/workspace/use"
+    body = json.dumps({"name": remote_name, "workspace": remote_name}).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+        data = json.loads(raw) if raw else {}
+        if isinstance(data, dict):
+            data.setdefault("ok", True)
+            data["api_url"] = url
+            return data
+        return {"ok": True, "raw": data, "api_url": url}
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as e:
+        return {
+            "ok": False,
+            "reachable": False,
+            "error": str(e),
+            "api_url": url,
+            "workspace_id": wid,
+        }
+
+
+def apply_workspace_selection(
+    workspace_id: str, *, path: str | None = None, set_operating_cwd: bool = True
+) -> dict[str, Any]:
+    """Select okbay workspace, optionally set okstratr operating cwd, activate remote.
+
+    This is the path the observer workspace-switcher must take so the displayed
+    lifecycle cwd updates immediately after a switch.
+    """
+    wid = (workspace_id or "").strip() or "local"
+    resolved = resolve_workspace_path(wid, path=path)
+    selected = set_selected_workspace(wid, path=resolved or path)
+
+    cwd_result: dict[str, Any] | None = None
+    if set_operating_cwd and resolved:
+        p = Path(resolved).expanduser()
+        if p.is_dir():
+            from . import workspace as ws_mod
+
+            cwd_result = ws_mod.set_cwd(p)
+        else:
+            cwd_result = {"ok": False, "error": f"path does not exist: {p}", "cwd": None}
+    elif set_operating_cwd and wid == "local":
+        cwd_result = {"ok": True, "skipped": True, "reason": "local"}
+
+    remote = activate_remote_workspace(wid)
+    from . import workspace as ws_mod
+
+    return {
+        "ok": True,
+        "workspace_id": wid,
+        "path": resolved or None,
+        "okbay": selected,
+        "cwd": cwd_result,
+        "operating_cwd": ws_mod.get_cwd(),
+        "activate": remote,
+        "workspaces": list_workspaces(),
+    }
+
+
+def _workspace_label(name: str, path: str = "", *, local: bool = False) -> str:
+    """Human label for workspace dropdowns (name + path; local = serve cwd)."""
+    n = (name or "").strip() or ("local" if local else "")
+    p = (path or "").strip()
+    if local or n in ("local",):
+        return f"local (serve cwd) — {p}" if p else "local (serve cwd)"
+    if p:
+        return f"{n} — {p}"
+    return n or p or "workspace"
+
+
+def _local_workspace_row() -> dict[str, Any]:
+    cwd = ""
+    try:
+        from . import workspace as ws_mod
+
+        cwd = str(ws_mod.get_cwd() or "").strip()
+    except Exception:
+        cwd = ""
+    return {
+        "id": "local",
+        "name": "local",
+        "path": cwd,
+        "label": _workspace_label("local", cwd, local=True),
+        "source": "local",
+    }
+
+
+def switchbay_workspaces_path() -> Path:
+    override = (os.environ.get("OKSTRATR_SWITCHBAY_WORKSPACES") or "").strip()
+    if override:
+        return Path(override).expanduser()
+    return Path.home() / ".config" / "switchbay" / "workspaces.json"
+
+
+def _rows_from_path_list(
+    paths: list[str], *, source: str, active: str = ""
+) -> tuple[list[dict[str, Any]], str]:
+    """Build workspace rows from absolute/relative directory paths."""
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    active_id = ""
+    active_norm = str(Path(active).expanduser()) if active else ""
+    for raw in paths:
+        p = str(Path(str(raw)).expanduser())
+        if not p or p in seen:
+            continue
+        seen.add(p)
+        name = Path(p).name or p
+        # Prefer unique id = basename; collide → full path slug
+        wid = name
+        if any(i["id"] == wid for i in items):
+            wid = p.replace("/", "_").lstrip("_")
+        row = {
+            "id": wid,
+            "name": name,
+            "path": p,
+            "label": _workspace_label(name, p),
+            "source": source,
+        }
+        items.append(row)
+        if active_norm and str(Path(p)) == active_norm:
+            active_id = wid
+    return items, active_id
+
+
+def list_switchbay_workspaces(*, timeout: float = 0.3) -> dict[str, Any]:
+    """Registered Switchbay workspaces (HTTP :8765 or ~/.config/switchbay/workspaces.json)."""
+    import urllib.error
+    import urllib.request
+
+    base = (os.environ.get("OKSTRATR_SWITCHBAY_URL") or "http://127.0.0.1:8765").rstrip("/")
+    url = f"{base}/api/workspaces"
+    try:
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+        data = json.loads(raw)
+        if isinstance(data, dict) and isinstance(data.get("paths"), list):
+            paths = [str(p) for p in data["paths"] if p]
+            items, active_id = _rows_from_path_list(
+                paths, source="switchbay", active=str(data.get("active") or "")
+            )
+            return {
+                "ok": True,
+                "reachable": True,
+                "source": "switchbay-http",
+                "workspaces": items,
+                "active": active_id or str(data.get("active") or ""),
+                "api_url": url,
+            }
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
+        pass
+
+    cfg = switchbay_workspaces_path()
+    if cfg.is_file():
+        try:
+            data = json.loads(cfg.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            data = {}
+        if isinstance(data, dict) and isinstance(data.get("paths"), list):
+            paths = [str(p) for p in data["paths"] if p]
+            items, active_id = _rows_from_path_list(
+                paths, source="switchbay", active=str(data.get("active") or "")
+            )
+            return {
+                "ok": True,
+                "reachable": True,
+                "source": "switchbay-file",
+                "workspaces": items,
+                "active": active_id or str(data.get("active") or ""),
+                "path": str(cfg),
+            }
+    return {
+        "ok": True,
+        "reachable": False,
+        "source": "switchbay",
+        "workspaces": [],
+        "active": "",
+    }
+
+
+def _enrich_workspace_labels(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for row in items:
+        if not isinstance(row, dict):
+            continue
+        nid = str(row.get("id") or row.get("name") or "")
+        name = str(row.get("name") or nid)
+        path = str(row.get("path") or "")
+        local = nid == "local" or bool(row.get("local"))
+        label = str(row.get("label") or "").strip()
+        if not label or label == name or label == nid or (local and "serve cwd" not in label):
+            label = _workspace_label(name, path, local=local)
+        enriched = dict(row)
+        enriched["id"] = nid
+        enriched["name"] = name
+        enriched["path"] = path
+        enriched["label"] = label
+        out.append(enriched)
+    return out
+
+
+def _merge_workspace_rows(
+    primary: list[dict[str, Any]], extra: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Merge by id then by path; primary wins on id collision."""
+    out = _enrich_workspace_labels(primary)
+    seen_ids = {str(i.get("id") or "") for i in out}
+    seen_paths = {str(i.get("path") or "") for i in out if i.get("path")}
+    for row in _enrich_workspace_labels(extra):
+        rid = str(row.get("id") or "")
+        rpath = str(row.get("path") or "")
+        if rid and rid in seen_ids:
+            continue
+        if rpath and rpath in seen_paths:
+            continue
+        out.append(row)
+        if rid:
+            seen_ids.add(rid)
+        if rpath:
+            seen_paths.add(rpath)
+    return out
+
+
 def list_workspaces(*, timeout: float = 0.4) -> dict[str, Any]:
     """
     Fetch okbay workspace list from http://127.0.0.1:8766/api/workspace/list.
 
-    Returns {reachable, workspaces:[{id,name,path}], active, local_fallback}.
-    When okbay is down → reachable=False and a local fallback row.
+    Returns {reachable, workspaces:[{id,name,path,label}], active, local_fallback}.
+    When okbay is down → Switchbay registered workspaces (HTTP or config file)
+    plus a clearly labeled ``local (serve cwd)`` fallback row.
     """
     import urllib.error
     import urllib.request
 
     url = f"{OKBAY_API_URL}/api/workspace/list"
     selected = get_selected_workspace_id()
+    sy = list_switchbay_workspaces(timeout=min(timeout, 0.35))
     try:
         req = urllib.request.Request(url, method="GET")
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8")
         data = json.loads(raw)
     except (urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
-        local = [
-            {"id": "local", "name": "local", "path": "", "label": "local"},
-        ]
+        items = list(sy.get("workspaces") or [])
+        items = _merge_workspace_rows(items, [_local_workspace_row()])
+        active = selected or str(sy.get("active") or "") or "local"
         return {
             "ok": True,
             "reachable": False,
-            "workspaces": local,
-            "active": selected or "local",
-            "selected": selected or "local",
+            "workspaces": _enrich_workspace_labels(items),
+            "active": active,
+            "selected": selected or active,
             "local_fallback": True,
             "api_url": url,
+            "switchbay": {
+                "reachable": bool(sy.get("reachable")),
+                "source": sy.get("source"),
+                "count": len(sy.get("workspaces") or []),
+            },
         }
 
     named = data.get("workspaces") or {}
     items: list[dict[str, Any]] = []
     if isinstance(named, dict):
         for name, wpath in named.items():
+            p = str(wpath) if wpath is not None else ""
             items.append({
                 "id": str(name),
                 "name": str(name),
-                "path": str(wpath) if wpath is not None else "",
-                "label": str(name),
+                "path": p,
+                "label": _workspace_label(str(name), p),
+                "source": "okbay",
             })
     elif isinstance(named, list):
         for entry in named:
@@ -118,14 +391,23 @@ def list_workspaces(*, timeout: float = 0.4) -> dict[str, Any]:
                 nid = str(entry.get("id") or entry.get("name") or "")
                 if not nid:
                     continue
+                name = str(entry.get("name") or nid)
+                p = str(entry.get("path") or "")
                 items.append({
                     "id": nid,
-                    "name": str(entry.get("name") or nid),
-                    "path": str(entry.get("path") or ""),
-                    "label": str(entry.get("name") or nid),
+                    "name": name,
+                    "path": p,
+                    "label": _workspace_label(name, p, local=(nid == "local")),
+                    "source": "okbay",
                 })
             elif entry:
-                items.append({"id": str(entry), "name": str(entry), "path": "", "label": str(entry)})
+                items.append({
+                    "id": str(entry),
+                    "name": str(entry),
+                    "path": "",
+                    "label": _workspace_label(str(entry)),
+                    "source": "okbay",
+                })
 
     # Ensure biocure demo surfaces even if not yet in okbay coverage cfg
     ids = {i["id"] for i in items}
@@ -134,28 +416,41 @@ def list_workspaces(*, timeout: float = 0.4) -> dict[str, Any]:
             "id": DEMO_WORKSPACE_ID,
             "name": DEMO_WORKSPACE_ID,
             "path": "~/Work/Biocure",
-            "label": DEMO_WORKSPACE_ID,
+            "label": _workspace_label(DEMO_WORKSPACE_ID, "~/Work/Biocure"),
             "demo": True,
+            "source": "okbay",
         })
     if DEFAULT_WORKSPACE_ID not in ids and "okbay" not in ids:
         items.insert(0, {
             "id": DEFAULT_WORKSPACE_ID,
             "name": DEFAULT_WORKSPACE_ID,
             "path": DEFAULT_WORK_ROOT,
-            "label": DEFAULT_WORKSPACE_ID,
+            "label": _workspace_label(DEFAULT_WORKSPACE_ID, DEFAULT_WORK_ROOT),
+            "source": "okbay",
         })
 
-    active = str(data.get("active") or selected or DEFAULT_WORKSPACE_ID)
+    # Merge Switchbay registered dirs so Agents embed sees vaults even when
+    # okbay list is sparse / demo-only.
+    items = _merge_workspace_rows(items, list(sy.get("workspaces") or []))
+    # Always keep a clear local (serve cwd) option at the end.
+    items = _merge_workspace_rows(items, [_local_workspace_row()])
+
+    active = str(data.get("active") or selected or sy.get("active") or DEFAULT_WORKSPACE_ID)
     return {
         "ok": True,
         "reachable": True,
-        "workspaces": items,
+        "workspaces": _enrich_workspace_labels(items),
         "active": active,
         "selected": selected or active,
         "local_fallback": False,
         "api_url": url,
         "raw_active": data.get("active"),
         "current": data.get("current"),
+        "switchbay": {
+            "reachable": bool(sy.get("reachable")),
+            "source": sy.get("source"),
+            "count": len(sy.get("workspaces") or []),
+        },
     }
 
 

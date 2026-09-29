@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 from time import sleep, time
+from pathlib import Path
 from typing import Any
 
 from . import blackboard, dag, status
@@ -498,6 +499,288 @@ def focus(objective: str = "") -> dict[str, Any]:
     """Focus / reopen Herdr on the given (or seated) objective."""
     obj = (objective or "").strip() or status.get_objective()
     return launch(obj, focus=True)
+
+
+def _looks_like_okbay_code_repo(path: str | Path) -> bool:
+    """True when *path* is the okbay source tree (never seat agents there)."""
+    try:
+        p = Path(str(path)).expanduser().resolve()
+    except (OSError, RuntimeError):
+        return False
+    if not p.is_dir():
+        return False
+    name = p.name.lower()
+    # Guest/host tips: /mnt/mac/okbay, ~/Work/okbay, ~/Dev/okbay
+    if name == "okbay":
+        markers = ("Cargo.toml", "contrib", "crates", "skills", "Panel.qml")
+        hits = sum(1 for m in markers if (p / m).exists())
+        if hits >= 2:
+            return True
+    for tip in (
+        "/mnt/mac/okbay",
+        str(Path.home() / "Work" / "okbay"),
+        str(Path.home() / "Dev" / "okbay"),
+        str(Path.home() / "src" / "okbay"),
+    ):
+        try:
+            if p == Path(tip).expanduser().resolve():
+                return True
+        except (OSError, RuntimeError):
+            continue
+    return False
+
+
+def resolve_workspace_agent_cwd(
+    *,
+    cwd: str | None = None,
+    workspace_id: str | None = None,
+    path: str | None = None,
+) -> dict[str, Any]:
+    """Resolve a registered okbay *workspace* directory for a new Herdr agent.
+
+    Prefer explicit cwd/path, then selected/active okbay workspace from the
+    workspace list API. Never returns the okbay code repo.
+    """
+    from . import okbay as okbay_mod
+    from . import workspace as ws_mod
+
+    candidates: list[tuple[str, str]] = []  # (source, path)
+
+    for raw, src in ((cwd, "cwd"), (path, "path")):
+        s = (raw or "").strip()
+        if s:
+            candidates.append((src, s))
+
+    wid = (workspace_id or "").strip()
+    pack = okbay_mod.list_workspaces()
+    items = list(pack.get("workspaces") or [])
+    by_id = {
+        str(i.get("id") or i.get("name") or ""): i
+        for i in items
+        if isinstance(i, dict)
+    }
+
+    if wid and wid in by_id and by_id[wid].get("path"):
+        candidates.append((f"workspace_id:{wid}", str(by_id[wid]["path"])))
+
+    selected = str(pack.get("selected") or pack.get("active") or "").strip()
+    if selected and selected in by_id and by_id[selected].get("path"):
+        candidates.append((f"selected:{selected}", str(by_id[selected]["path"])))
+
+    active = str(pack.get("active") or "").strip()
+    if active and active in by_id and by_id[active].get("path"):
+        candidates.append((f"active:{active}", str(by_id[active]["path"])))
+
+    home = Path.home()
+    for tip in (
+        "/mnt/mac/Workspaces/biocure-membership-7074bbec6",
+        str(home / "Work" / "Workspaces" / "biocure-membership-7074bbec6"),
+        "/mnt/mac/Workspaces/biocure-confirm-v1-query-5b9711895",
+        str(home / "Work" / "Workspaces" / "biocure-confirm-v1-query-5b9711895"),
+    ):
+        candidates.append(("biocure_tip", tip))
+
+    tried: list[dict[str, Any]] = []
+    for src, raw in candidates:
+        p = Path(str(raw)).expanduser()
+        entry: dict[str, Any] = {"source": src, "raw": raw, "exists": p.is_dir()}
+        if not p.is_dir():
+            tried.append(entry)
+            continue
+        try:
+            resolved = str(p.resolve())
+        except (OSError, RuntimeError) as e:
+            entry["error"] = str(e)
+            tried.append(entry)
+            continue
+        entry["resolved"] = resolved
+        if _looks_like_okbay_code_repo(resolved):
+            entry["rejected"] = "okbay_code_repo"
+            tried.append(entry)
+            continue
+        tried.append(entry)
+        try:
+            ws_mod.set_cwd(resolved)
+        except Exception as e:  # noqa: BLE001
+            entry["set_cwd_error"] = str(e)
+        # Prefer path basename for label when cwd/path was explicit so parallel
+        # agents on different dirs do not collide on the selected workspace id.
+        if src in ("cwd", "path", "biocure_tip") or src.startswith("cwd") or src.startswith("path"):
+            label = Path(resolved).name
+        elif wid:
+            label = wid
+        else:
+            label = selected or active or Path(resolved).name
+        return {
+            "ok": True,
+            "cwd": resolved,
+            "label": str(label),
+            "workspace_id": wid or selected or active or None,
+            "source": src,
+            "tried": tried,
+        }
+
+    return {
+        "ok": False,
+        "error": (
+            "no registered workspace directory for Herdr agent "
+            "(refusing okbay code repo)"
+        ),
+        "tried": tried,
+        "workspaces": items,
+    }
+
+
+def open_workspace_agent(
+    *,
+    cwd: str | None = None,
+    workspace_id: str | None = None,
+    path: str | None = None,
+    label: str | None = None,
+    kind: str | None = None,
+    focus_ui: bool = True,
+    prefer_harness: str | None = "grok",
+) -> dict[str, Any]:
+    """Create a Herdr workspace at a registered okbay workspace dir and start an agent.
+
+    Prefers grok; falls back to another seated provider via resolve_seat_kind.
+    Does not stop or clobber existing agents on other cwds.
+    """
+    resolved = resolve_workspace_agent_cwd(
+        cwd=cwd, workspace_id=workspace_id, path=path
+    )
+    if not resolved.get("ok"):
+        return resolved
+
+    workdir = str(resolved["cwd"])
+    ws_label = (
+        label or resolved.get("label") or Path(workdir).name
+    ).strip() or "workspace"
+    ws_label = (
+        "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in ws_label)[:48].strip("-_")
+        or "workspace"
+    )
+
+    seat = resolve_seat_kind(
+        node_id=f"ws-{ws_label}",
+        role="worker",
+        prefer_harness=prefer_harness or "grok",
+        require_installed=True,
+    )
+    if not seat.get("ok"):
+        herdr_kind = (kind or DEFAULT_KIND).strip() or DEFAULT_KIND
+        seat_note = seat.get("error")
+    else:
+        herdr_kind = (kind or seat.get("herdr_kind") or DEFAULT_KIND).strip() or DEFAULT_KIND
+        seat_note = None
+
+    bin_path = herdr_bin()
+    if not bin_path:
+        out: dict[str, Any] = {
+            "ok": False,
+            "error": "herdr binary not on PATH",
+            "message": NOT_INSTALLED_MSG,
+            "cwd": workdir,
+            "label": ws_label,
+            "kind": herdr_kind,
+            "resolved": resolved,
+        }
+        if focus_ui:
+            out["launch"] = launch("", focus=True)
+        return out
+
+    env = merge_user_session_env()
+    create_cmd = [
+        bin_path,
+        "workspace",
+        "create",
+        "--cwd",
+        workdir,
+        "--label",
+        ws_label,
+        "--focus",
+    ]
+    create_res = _run_cmd(create_cmd, timeout=30.0, env=env)
+    data = _cmd_payload(create_res)
+    pane_id = None
+    workspace_id_herdr = None
+    if isinstance(data, dict):
+        res = data.get("result") if isinstance(data.get("result"), dict) else data
+        if isinstance(res, dict):
+            rp = res.get("root_pane") or {}
+            if isinstance(rp, dict):
+                pane_id = _pane_id_from_obj(rp) or rp.get("pane_id")
+            pane_id = pane_id or res.get("pane_id") or res.get("active_pane_id")
+            ws = res.get("workspace")
+            if isinstance(ws, dict):
+                workspace_id_herdr = ws.get("workspace_id") or ws.get("id")
+                pane_id = pane_id or ws.get("pane_id") or ws.get("active_pane_id")
+            workspace_id_herdr = workspace_id_herdr or res.get("workspace_id")
+
+    if not pane_id:
+        pick = _pick_base_pane(bin_path, env=env, timeout=15.0)
+        if pick.get("ok"):
+            pane_id = pick.get("pane_id")
+
+    if not pane_id:
+        out = {
+            "ok": False,
+            "error": _herdr_error_message(
+                create_res, fallback="could not resolve pane for agent start"
+            ),
+            "cwd": workdir,
+            "label": ws_label,
+            "kind": herdr_kind,
+            "create": create_res,
+            "resolved": resolved,
+        }
+        if focus_ui:
+            out["launch"] = launch("", focus=True)
+        return out
+
+    # Unique-ish agent name from label + short path hash (avoid agent_name_taken).
+    digest = hashlib.sha1(workdir.encode("utf-8")).hexdigest()[:4]
+    base_name = ws_label if ws_label != "workspace" else herdr_kind
+    agent_name = _ensure_herdr_name(f"{base_name}-{digest}"[:AGENT_ID_MAX])
+    timeout_ms = max(1000, int(_timeout_sec() * 1000))
+    start_cmd = [
+        bin_path,
+        "agent",
+        "start",
+        agent_name,
+        "--kind",
+        herdr_kind,
+        "--pane",
+        str(pane_id),
+        "--timeout",
+        str(timeout_ms),
+    ]
+    start_res = _run_cmd(
+        start_cmd, timeout=max(35.0, _timeout_sec() + 5.0), env=env
+    )
+
+    out = {
+        "ok": bool(start_res.get("ok")),
+        "cwd": workdir,
+        "label": ws_label,
+        "kind": herdr_kind,
+        "harness_id": seat.get("harness_id"),
+        "pane_id": pane_id,
+        "agent_name": agent_name,
+        "workspace_id": resolved.get("workspace_id"),
+        "herdr_workspace_id": workspace_id_herdr,
+        "create": create_res,
+        "start": start_res,
+        "resolved": resolved,
+        "seat_note": seat_note,
+    }
+    if not start_res.get("ok"):
+        out["error"] = _herdr_error_message(
+            start_res, fallback="herdr agent start failed"
+        )
+    if focus_ui:
+        out["launch"] = launch("", focus=True)
+    return out
 
 
 def _node_prompt(node: dag.Node) -> str:

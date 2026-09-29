@@ -380,3 +380,19 @@ Out of scope for earlier robustness PRs — track next:
 - Replacing FileView + HTTP dual bind
 - Live Herdr pane focus sync (beyond recording focus_desk_id)
 - Attention-window UI for schedule next-fire
+
+## Open in Herdr (workspace agents)
+
+Herdr agents must seat on **registered okbay workspace dirs** (e.g. BioCure under
+`Workspaces/`), never the okbay code repo (`/mnt/mac/okbay`, `~/Dev/okbay`).
+
+| Path | How |
+|------|-----|
+| okstratr panel | Workspace dropdown → **Open in Herdr** (grok preferred) |
+| Observer | Context switcher → **Open in Herdr** |
+| CLI | `okstratr herdr open-workspace biocure` or `… open-workspace --cwd /mnt/mac/Workspaces/…` |
+| API | `POST /api/herdr/open-workspace` `{workspace_id,path}` or `/api/herdr/launch` with `open_agent:true` |
+| Full-product | Super+Shift+K / `okbay-open-full-product.sh` → `ensure_herdr_slash_ready` uses active workspace cwd |
+
+Parallel work: each Open in Herdr creates a **new** Herdr workspace+agent at that cwd; existing agents on other cwds are left alone.
+

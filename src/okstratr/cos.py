@@ -342,6 +342,7 @@ def break_down(
     objective: str | None = None,
     *,
     kind: str | None = None,
+    desk_id: str | None = None,
     mark_root_done: bool = True,
     save: bool = True,
 ) -> dict[str, Any]:
@@ -430,6 +431,9 @@ def break_down(
         + f"\n(created={len(created)}, updated={len(updated)})"
     )
     tags = ["cos", "breakdown", resolved or "default"]
+    if desk_id:
+        tags.append(str(desk_id))
+        tags.append(f"desk:{desk_id}")
 
     def _plan_core(t: str) -> str:
         # Ignore trailing (created=N, updated=M) counters when matching twins.

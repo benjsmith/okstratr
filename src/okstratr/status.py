@@ -101,6 +101,82 @@ def _dag_count(summary: dict[str, Any]) -> int:
     return 0
 
 
+
+def core_health() -> dict[str, Any]:
+    """Shared CE / okstratr / wiki_build health block (contract C1).
+
+    CE may be unreachable when not co-managed — report ``stopped`` with detail
+    (task allows ``unknown``; we use stopped + detail for the closed enum).
+    wiki_build is owned by CE; okstratr reports idle unless a local hint exists.
+    """
+    import urllib.error
+    import urllib.request
+
+    from . import PORT
+    from .lifecycle import health_ok, is_serve_running, serve_url
+    from .public_base import public_base
+
+    # --- okstratr ---
+    base = serve_url()
+    pub = public_base()
+    ok_url = f"{base}{pub}" if pub else base
+    if health_ok():
+        ok_state, ok_detail = "healthy", "GET /health ok"
+    elif is_serve_running() or _port_hint():
+        ok_state, ok_detail = "starting", "process/port up; /health not ready"
+    else:
+        ok_state, ok_detail = "stopped", "serve not running"
+
+    # --- CE (optional co-managed) ---
+    ce_url = (os.environ.get("OKSTRATR_CE_URL") or os.environ.get("CE_URL") or "http://127.0.0.1:8766").rstrip("/")
+    ce_state, ce_detail = "stopped", "not co-managed / unreachable"
+    try:
+        with urllib.request.urlopen(ce_url + "/health", timeout=0.35) as resp:
+            if 200 <= int(getattr(resp, "status", None) or resp.getcode()) < 300:
+                ce_state, ce_detail = "healthy", "GET /health ok"
+            else:
+                ce_state, ce_detail = "unhealthy", f"HTTP {resp.status}"
+    except (urllib.error.URLError, TimeoutError, OSError):
+        # Distinguish "starting" only when explicitly co-managed
+        if (os.environ.get("OKSTRATR_CE_URL") or os.environ.get("CE_URL") or "").strip():
+            ce_state, ce_detail = "stopped", "configured CE URL unreachable"
+        else:
+            ce_state, ce_detail = "stopped", "unknown (not co-managed)"
+
+    # --- wiki_build (CE-owned; optional file/env hint) ---
+    wiki_state, wiki_pages, wiki_detail = "idle", None, "not co-managed by okstratr"
+    hint = (os.environ.get("OKSTRATR_WIKI_BUILD") or "").strip().lower()
+    if hint in ("building", "idle", "failed"):
+        wiki_state = hint
+        wiki_detail = f"OKSTRATR_WIKI_BUILD={hint}"
+    pages_raw = os.environ.get("OKSTRATR_WIKI_PAGES")
+    if pages_raw is not None and pages_raw.strip() != "":
+        try:
+            wiki_pages = int(pages_raw)
+        except ValueError:
+            wiki_pages = pages_raw
+
+    return {
+        "ce": {"state": ce_state, "url": ce_url, "detail": ce_detail},
+        "okstratr": {"state": ok_state, "url": ok_url, "detail": ok_detail},
+        "wiki_build": {"state": wiki_state, "pages": wiki_pages, "detail": wiki_detail},
+    }
+
+
+def _port_hint() -> bool:
+    """True if :PORT accepts TCP (serve may still be starting)."""
+    import socket
+
+    from . import PORT
+
+    try:
+        with socket.create_connection(("127.0.0.1", PORT), timeout=0.2):
+            return True
+    except OSError:
+        return False
+
+
+
 def snapshot() -> dict[str, Any]:
     mark_ready()
     # Prefer focused/active desk file so status.dag matches GET /api/dag.
@@ -316,6 +392,7 @@ def snapshot() -> dict[str, Any]:
         or (desk_brief or {}).get("standing")
         or [],
         "harness": harness_snap,
+        "health": core_health(),
         "status_channel": {
             "primary": "GET /api/status",
             "compat_file": str(status_path()),
@@ -340,8 +417,14 @@ def _mirror_enabled() -> bool:
 
 
 def write_status(data: dict[str, Any] | None = None) -> dict[str, Any]:
-    # Cheap reconcile: auto-quiet working desks whose DAG is fully terminal.
+    # Cheap reconcile: fire due schedules + auto-quiet finished desks.
     if data is None:
+        try:
+            from . import schedule as schedule_mod
+
+            schedule_mod.fire_due(emit_notify=True)
+        except Exception:  # noqa: BLE001
+            _log.warning("write_status: schedule.fire_due failed", exc_info=True)
         try:
             from . import desks as desks_mod
 

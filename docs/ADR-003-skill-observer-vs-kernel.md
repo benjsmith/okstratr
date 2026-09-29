@@ -55,3 +55,9 @@ is the only text input surface.
 
 Dark blue/black Omarchy theme; poll ~2–3s; rebuild layout on resize. Name remains
 **observer panel** (not Butter). Routes: `/observer/` and `/panel/`.
+
+
+## Related (Phase 1a)
+
+Hosted mode + reverse-proxy public base + registry SSOT for shells:
+[ADR-004-hosted-proxy-registry.md](ADR-004-hosted-proxy-registry.md).

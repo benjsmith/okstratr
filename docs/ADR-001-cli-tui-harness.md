@@ -37,6 +37,8 @@ llmgateway provider registry, routing_status provider+model effort.
 
 ### Harness registry
 
+**SSOT for shells:** Switchbay/okbay settings configure this registry via `/api/harness*` (including `switchbay-rail`); no parallel allowlist. See [ADR-004](ADR-004-hosted-proxy-registry.md).
+
 Package: `okstratr.harness`
 
 - Built-in defs: id, `herdr_kind`, bin names, `detect_installed()`

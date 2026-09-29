@@ -523,7 +523,11 @@ def set_value(key: str, value: str, *, path: Path | None = None) -> HarnessConfi
 
 
 def list_for_api(cfg: HarnessConfig | None = None) -> dict[str, Any]:
-    """Public harness rows for Panel/HTTP (enable flags, models, effort rungs)."""
+    """Public harness rows for Panel/HTTP (enable flags, models, effort rungs).
+
+    SSOT for shells: Switchbay/okbay settings write through these API helpers
+    (list/enable/disable/set); they must not maintain a parallel allowlist.
+    """
     from . import registry
 
     cfg = cfg or load()
