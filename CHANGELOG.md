@@ -10,20 +10,20 @@ Do **not** tag from the docs PR alone — Ben cuts the tag after merge.
 
 ### Added / locked (product shape)
 
-- **Skill + observer panel (ADR-003):** in-harness skill ships the kernel +
+- **Skill + observer panel:** in-harness skill ships the kernel +
   HTML **observer** (`/observer/`, `/panel/`). Observer is the **primary
   visual console** — standing desks rail, AGENT SPACE canvas, blackboard,
   workspace switcher, Desk Prompt / CoS conversation, schedule dialog.
   **No chat / objective query bar** in the observer (text I/O stays in
   Herdr / CLI harnesses).
-- **Hosted proxy contract (ADR-004):** `OKSTRATR_PUBLIC_BASE` (typical
+- **Hosted proxy contract:** `OKSTRATR_PUBLIC_BASE` (typical
   `/embed/okstratr`); strip prefix before routing; inject
   `window.OKSTRATR_PUBLIC_BASE` / `OKSTRATR_API`. Hosted mode via
   `X-Okstratr-Host: switchbay|okbay` or `?host=` hides HTML settings strip.
 - **Registry SSOT:** `okstratr.harness.registry` + `harnesses.toml` +
   `GET/POST /api/harness*` — shells are config UIs over this allowlist, not
-  a second copy (Switchbay Settings thin client — SB ADR-005).
-- **host_notify (ADR-005):** path-native envelopes for schedule fire /
+  a second copy (Switchbay Settings thin client).
+- **host_notify:** path-native envelopes for schedule fire /
   health; hosted POST to shell callback (Switchbay
   `/api/okstratr/host-notify`); bare → harness-visible stderr (or JSON lines).
 - **Health block** on `okstratr status` / `GET /api/status`: `ce`, `okstratr`,
@@ -39,7 +39,7 @@ Do **not** tag from the docs PR alone — Ben cuts the tag after merge.
 ### Clarified
 
 - Omarchy **Panel.qml** remains an optional native twin / thin client (guest);
-  prefer observer. Query bar removed from Panel per ADR-003.
+  prefer observer. Query bar removed from Panel.
 - TUI removed earlier; observer-only console.
 - Deep Switchbay parity check is **no longer “release pending”** — Switchbay
   Phase 4a/Embed v2 + core-skills auto-start consume this contract (see SB
