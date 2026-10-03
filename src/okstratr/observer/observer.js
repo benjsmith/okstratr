@@ -1107,6 +1107,8 @@
           : isDismissed
             ? "dismissed"
             : "standing";
+      // Status word only — a real objective stays muted .desk-obj.
+      const standingBadge = !d.objective && !isDismissed;
       const focused = id && id === String(state.focusDeskId) && id.indexOf("kind:") !== 0;
       const kindSel = kind === state.selectedKind;
       const startLbl = isEmpty || isDismissed ? "Start" : "Continue";
@@ -1153,7 +1155,9 @@
         esc(head) +
         stateCls +
         schedHtml +
-        '</span><span class="desk-obj" title="' +
+        '</span><span class="desk-obj' +
+        (standingBadge ? " desk-obj--standing" : "") +
+        '" title="' +
         esc(obj) +
         '">' +
         esc(obj.slice(0, 48)) +

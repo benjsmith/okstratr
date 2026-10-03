@@ -190,6 +190,8 @@ body {
   max-width: 45%;
   flex-shrink: 0;
 }
+/* Placeholder status word ("standing"), not a real objective. Same amber as .chip.idle. */
+.desk-obj.desk-obj--standing { color: var(--warn); }
 .desk-actions { display: flex; flex-wrap: wrap; gap: 0.25rem; }
 .desk-actions .btn.mini { min-width: 3.2rem; }
 

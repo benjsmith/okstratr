@@ -58,3 +58,19 @@ def test_observer_js_no_longer_hardcodes_label_fill():
     assert "OkstratrAgentSpaceTheme" in src
     html = (ROOT / "src" / "okstratr" / "observer" / "index.html").read_text()
     assert "agent_space_theme.js" in html
+
+
+def test_standing_placeholder_badge_uses_warn_not_muted():
+    """Empty desk rows label "standing" with idle amber (--warn), not gray --muted."""
+    css = (ROOT / "src" / "okstratr" / "observer" / "observer.css").read_text()
+    js = (ROOT / "src" / "okstratr" / "observer" / "observer.js").read_text()
+    assert "desk-obj--standing" in js
+    assert "standingBadge" in js
+    idx = css.index(".desk-obj.desk-obj--standing")
+    rule = css[idx:css.index("}", idx)]
+    assert "var(--warn)" in rule
+    assert "var(--muted)" not in rule
+    assert "var(--text)" not in rule
+    base = css.index(".desk-obj {")
+    base_rule = css[base:css.index("}", base)]
+    assert "var(--muted)" in base_rule
