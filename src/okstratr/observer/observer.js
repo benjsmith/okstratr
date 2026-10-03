@@ -1107,6 +1107,8 @@
           : isDismissed
             ? "dismissed"
             : "standing";
+      // Status word only — a real objective stays muted .desk-obj.
+      const standingBadge = !d.objective && !isDismissed;
       const focused = id && id === String(state.focusDeskId) && id.indexOf("kind:") !== 0;
       const kindSel = kind === state.selectedKind;
       const startLbl = isEmpty || isDismissed ? "Start" : "Continue";
@@ -1153,7 +1155,9 @@
         esc(head) +
         stateCls +
         schedHtml +
-        '</span><span class="desk-obj" title="' +
+        '</span><span class="desk-obj' +
+        (standingBadge ? " desk-obj--standing" : "") +
+        '" title="' +
         esc(obj) +
         '">' +
         esc(obj.slice(0, 48)) +
@@ -1470,6 +1474,16 @@
     const h = canvas.height / dpr;
     ctx.clearRect(0, 0, w, h);
 
+    const themeApi = window.OkstratrAgentSpaceTheme;
+    const theme =
+      themeApi && themeApi.agentSpaceThemeColors
+        ? themeApi.agentSpaceThemeColors(window.getComputedStyle(canvas))
+        : {
+            label: "#c0caf5",
+            idleEdge: "rgba(41, 46, 66, 0.95)",
+            flowingEdge: "rgba(122, 162, 247, 0.8)",
+          };
+
     const g = state.graph || { edges: [] };
     const edges = g.edges || [];
     const layout = state.layoutNodes || [];
@@ -1488,12 +1502,12 @@
       ctx.moveTo(a.x, a.y);
       ctx.lineTo(b.x, b.y);
       if (flowing) {
-        ctx.strokeStyle = "rgba(122, 162, 247, 0.8)";
+        ctx.strokeStyle = theme.flowingEdge;
         ctx.lineWidth = 1.6;
         ctx.setLineDash([5, 7]);
         ctx.lineDashOffset = -((t * 48) % 12);
       } else {
-        ctx.strokeStyle = "rgba(41, 46, 66, 0.95)";
+        ctx.strokeStyle = theme.idleEdge;
         ctx.lineWidth = 1;
         ctx.setLineDash([]);
         ctx.lineDashOffset = 0;
@@ -1550,7 +1564,7 @@
       }
       ctx.globalAlpha = 1;
 
-      ctx.fillStyle = "#c0caf5";
+      ctx.fillStyle = theme.label;
       ctx.font =
         (isCos || String(n.role) === "blackboard" ? "bold " : "") +
         "10px IBM Plex Sans, system-ui, sans-serif";
