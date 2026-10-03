@@ -1,12 +1,13 @@
 # Okstratr architecture
 
-> **Product vision:** **[ADR-003-skill-observer-vs-kernel.md](ADR-003-skill-observer-vs-kernel.md)** — skill ships kernel + **observer panel** (primary visual; no chat/query bar); Herdr/CLI = text I/O; Omarchy QML = optional thin client; TUI removed — observer only.
+> **Product vision:** skill ships kernel + **observer panel** (primary visual; no chat/query bar); Herdr/CLI = text I/O; Omarchy QML = optional thin client; TUI removed — observer only.
 >
-> Historical seating ADR: **[ADR-001-cli-tui-harness.md](ADR-001-cli-tui-harness.md)** — harness-agnostic seating + thin Omarchy client.
+> Seating: harness-agnostic seating + thin Omarchy client.
 >
-
 > Desk / kernel design authority: **[DESK-KERNEL.md](DESK-KERNEL.md)**.
-> Switchbay release pending for deep parity check.
+> Hosted embed + registry SSOT under `OKSTRATR_PUBLIC_BASE`; host_notify + health
+> on status APIs. Switchbay 0.13.0 consumes this contract. Remaining deep
+> feature-parity checklist items are stubs and non-goals.
 
 ## Intent
 
@@ -43,7 +44,7 @@ ingest — those stay in **okbay**. Desks bind the **active okbay workspace / th
 |-------|--------|----------------|
 | **Knowledge / coverage** | **okbay** | Graph, Atlas, ingest, reviews land path, workspaces |
 | **Runtime / multiplexer** | **Herdr** | Panes, workspaces, agent lifecycle (`working` / `blocked` / `idle`), socket/CLI to start / prompt / wait / stop agents |
-| **Plan + memory of the desk** | **okstratr** | Kernel + desks, durable product DAG, CoS, human blackboard, schedule, harness registry, CLI; **observer panel** = primary visual (ADR-003); Omarchy QML = optional thin client (ADR-001); TUI removed |
+| **Plan + memory of the desk** | **okstratr** | Kernel + desks, durable product DAG, CoS, human blackboard, schedule, harness registry, CLI; **observer panel** = primary visual; Omarchy QML = optional thin client; TUI removed |
 
 **okstratr** owns the plan + memory; **Herdr** owns live agent terminals. Neither replaces the other.
 
@@ -242,7 +243,7 @@ src/okstratr/
 |---------|--------|-------|
 | **Kernel daemon** (`serve` / `start`) | **Kept — core** | SSOT; HTTP `:8767` |
 | **Skill** (`skills/okstratr/`) | **Kept — core** | Ships server + observer assets |
-| **Observer panel** (`/observer/`, `/panel/`) | **Kept — primary visual** | No chat/query bar (ADR-003) |
+| **Observer panel** (`/observer/`, `/panel/`) | **Kept — primary visual** | No chat/query bar |
 | **CLI lifecycle** (`doctor/start/status/…`) | **Kept — core** | Consent-first; `--yes` for automation |
 | **Herdr / direct harness seating** | **Kept — core** | Text I/O + finite jobs |
 | **Omarchy QML** (`Panel.qml`, `DeskRail.qml`, `BarWidget.qml`) | **Kept — optional** | Native twin / bar; do not delete while guest uses them |

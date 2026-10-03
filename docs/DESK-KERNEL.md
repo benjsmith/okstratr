@@ -1,15 +1,16 @@
 # Desk kernel (Switchbay-style)
 
-> **Product vision (locked):** see **[ADR-001-cli-tui-harness.md](ADR-001-cli-tui-harness.md)** — CLI-first desk brain, harness-agnostic seating, Omarchy Panel as client.
+> **Product vision (locked):** skill + **observer panel** (primary visual; no chat/query bar);
+> Herdr/CLI = text I/O; Omarchy QML = optional thin client.
+> Hosted proxy hides HTML settings; harness registry is the SSOT.
 >
-
 > Design authority for okstratr’s hiring manager, desk lifecycle, roles, and Herdr pairing.
 > Implementation today: desk lifecycle + **live effort-bandit hire** + web egress gate +
-> kind-aware planner templates + Herdr labels/focus stub. No live Grok/Herdr model calls;
-> finite-job / dry-run Herdr rules remain. Live Herdr focus sync is still a stub.
+> kind-aware planner templates + Herdr labels/focus stub + observer desk UX. No live
+> Grok/Herdr model calls; finite-job / dry-run Herdr rules remain. Live Herdr focus sync
+> is still a stub. Switchbay 0.13.0 embeds the observer.
 >
-> **Switchbay release pending** — deep parity check against Switchbay once that tree is
-> available; vocabulary here is Switchbay-inspired and may be tightened after review.
+> Vocabulary is Switchbay-inspired; tighten after residual parity checklist items close.
 
 ## Omarchy product
 
@@ -18,7 +19,7 @@
 | Piece | Owns |
 |-------|------|
 | **okbay** | Knowledge graph, Atlas, Nautilus reveal, **work-coverage ingest**, reviews / commit land path |
-| **okstratr** | CLI desk brain + kernel, desks, workspace bind, DAG, CoS, blackboard, schedule, **harness registry**, Herdr pairing; Omarchy **Panel is a client** (see ADR-001) |
+| **okstratr** | CLI desk brain + kernel, desks, workspace bind, DAG, CoS, blackboard, schedule, **harness registry**, Herdr pairing; Omarchy **Panel is a client** |
 | **Herdr** | Normal live agent runtime / multiplexer; grouping lens later (not this slice) |
 
 Either half should remain useful alone; side-by-side is the composed desk.
@@ -258,7 +259,7 @@ keeps the existing objective when resuming a quiet desk with an empty objective.
 
 ### Focus + close
 
-- `focus_desk(desk_id)` — on focus of any **non-dismissed** desk: set `focus_id` + `active_id`, **always** sync the global DAG from that desk’s DAG file, `status.set_objective(desk.objective)`, save registry + `write_status()`. Panel refills `queryInput` from the focus API `objective` (rail click and API path). Live Herdr pane sync remains pending.
+- `focus_desk(desk_id)` — on focus of any **non-dismissed** desk: set `focus_id` + `active_id`, **always** sync the global DAG from that desk’s DAG file, `status.set_objective(desk.objective)`, save registry + `write_status()`. Focus API exposes `objective` for clients; observer has **no** query bar — Desk Prompt / CoS conversation are the in-panel text surfaces (Herdr/CLI is text I/O). Live Herdr pane sync remains a stub.
 - Switching desks in okstratr focuses that CoS in Herdr, and vice versa (live pane sync later).
 - Closing okstratr: **warn** (Panel close dialog binds `status.ui.close_warning`); on confirm, `POST /api/desk/quiet_standing` then close panel; cancel stays open.
 

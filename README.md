@@ -18,9 +18,9 @@ After three iterations (Omarchy QML plugin → CLI → skill + observer), the co
 
 Mac path: install skill + run lifecycle CLI + open the observer panel. Omarchy guest may still load the QML plugin; prefer opening the observer for the shared console.
 
-Hosted embeds (Switchbay/okbay): same-origin reverse proxy under `OKSTRATR_PUBLIC_BASE` (e.g. `/embed/okstratr`); `?host=switchbay|okbay` or `X-Okstratr-Host` hides HTML settings — see [docs/ADR-004-hosted-proxy-registry.md](docs/ADR-004-hosted-proxy-registry.md).
+Hosted embeds (Switchbay/okbay): same-origin reverse proxy under `OKSTRATR_PUBLIC_BASE` (e.g. `/embed/okstratr`); `?host=switchbay|okbay` or `X-Okstratr-Host` hides HTML settings. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (kept vs legacy surfaces), [docs/ADR-003-skill-observer-vs-kernel.md](docs/ADR-003-skill-observer-vs-kernel.md), and [docs/ADR-001-cli-tui-harness.md](docs/ADR-001-cli-tui-harness.md).
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (kept vs legacy surfaces).
 
 ## Relationship
 
@@ -91,7 +91,7 @@ Herdr pane start. Direct `grok` seats use a **positional** prompt (not `--prompt
 Every seat (Herdr + direct) labels with `desk_id` + `thread_id`. Config file:
 `~/.config/okstratr/harnesses.toml`.
 
-> **Switchbay release pending** — deep parity check against Switchbay once that tree is available.
+> **Switchbay integration:** hosted proxy + registry SSOT + host_notify are live against Switchbay 0.13.0 (core-skills auto-start). Residual stubs (e.g. live Herdr focus sync) stay in Non-goals.
 
 ### Future workspaces (vision)
 
@@ -162,7 +162,6 @@ contrib/setup.sh       Omarchy visible installer
 contrib/guest-apply-main.sh  Omarchy guest pull+restart
 contrib/hypr-bindings.lua    optional Super+Shift+O
 docs/ARCHITECTURE.md   package map + kept vs legacy surfaces
-docs/ADR-001… / ADR-003…     CLI harness + skill/observer decisions
 tests/
 ```
 
