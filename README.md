@@ -91,7 +91,7 @@ Herdr pane start. Direct `grok` seats use a **positional** prompt (not `--prompt
 Every seat (Herdr + direct) labels with `desk_id` + `thread_id`. Config file:
 `~/.config/okstratr/harnesses.toml`.
 
-> **Switchbay integration:** hosted proxy + registry SSOT + host_notify are live against Switchbay Phase 4a / Embed v2 / core-skills auto-start (see Switchbay **v0.13.0**). Residual stubs (e.g. live Herdr focus sync) stay in Non-goals — not a blocked release.
+> **Switchbay integration:** hosted proxy + registry SSOT + host_notify are live against Switchbay 0.13.0 (core-skills auto-start). Residual stubs (e.g. live Herdr focus sync) stay in Non-goals.
 
 ### Future workspaces (vision)
 

@@ -31,7 +31,7 @@
 | Schedule create/edit dialog | **Yes (1c)** | Observer modal → `POST /api/desk/schedule` (+ clear) |
 | Objective Edit dialog | **Yes (1c)** | Cheap modal → `POST /api/desk/start` with `desk_id` (no chat bar) |
 | Run transcript / kill / background | No | Stays Switchbay rail / future run SSOT — not desks |
-| Chat / query bar | **Never** | Charter / ADR-003 |
+| Chat / query bar | **Never** | Observer has no chat bar; Herdr/CLI is text I/O |
 | Workspace switcher nav | No | Switchbay shell |
 | Tools / Rules / Palettes / Skills panels | No | Shell + registry |
 | Schedule create dialog | **Yes (1c)** | Observer Schedule modal |
@@ -61,7 +61,7 @@ umbrella parity marks the row ✓/▲. Still Switchbay-owned:
 
 | Chrome | Why it stays in Switchbay |
 |--------|---------------------------|
-| Edit→rail composer (`sy:rail-set-input`) | Shell chat I/O when hosted; observer **Edit** updates `desk.objective` via dialog (no chat bar, ADR-003) |
+| Edit→rail composer (`sy:rail-set-input`) | Shell chat I/O when hosted; observer **Edit** updates `desk.objective` via dialog (no chat bar; Herdr/CLI is text I/O) |
 | Active-run transcript / cancel / background | Switchbay run registry (`/api/runs/active`) — okstratr has herdr job status only, not run SSOT |
 | Workspace switcher + open-Agents | Shell workspaces |
 | Tools / Rules / Palettes / Providers / Skills | Shell + registry settings (hosted: shell owns) |
@@ -91,6 +91,6 @@ curl -s -X POST 'http://127.0.0.1:8767/api/desk/schedule' -H 'Content-Type: appl
 
 ## Related
 
-- ADR-004 hosted proxy + registry SSOT
-- ADR-003 skill observer vs kernel (no chat on observer)
+- Hosted proxy hides HTML settings; harness registry is the SSOT
+- Observer has no chat bar; Herdr/CLI is text I/O
 - Umbrella `PARITY-CHECKLIST.md` → Agents / okstratr

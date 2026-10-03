@@ -88,5 +88,5 @@ token-flow animation while nodes are working/running.
 
 ## See also
 
-- [docs/ADR-003-skill-observer-vs-kernel.md](../../docs/ADR-003-skill-observer-vs-kernel.md)
 - [docs/DESK-KERNEL.md](../../docs/DESK-KERNEL.md)
+- [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md)

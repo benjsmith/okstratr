@@ -6,8 +6,6 @@ First meaningful minor after the skill + observer product lock. **Migration:**
 none. **Breaking:** none for bare CLI / skill installs. Hosted shells
 (Switchbay) must set `OKSTRATR_PUBLIC_BASE` / hosted headers as below.
 
-Do **not** tag from the docs PR alone — Ben cuts the tag after merge.
-
 ### Added / locked (product shape)
 
 - **Skill + observer panel:** in-harness skill ships the kernel +
@@ -41,10 +39,9 @@ Do **not** tag from the docs PR alone — Ben cuts the tag after merge.
 - Omarchy **Panel.qml** remains an optional native twin / thin client (guest);
   prefer observer. Query bar removed from Panel.
 - TUI removed earlier; observer-only console.
-- Deep Switchbay parity check is **no longer “release pending”** — Switchbay
-  Phase 4a/Embed v2 + core-skills auto-start consume this contract (see SB
-  v0.13.0). Residual gaps (live Herdr focus sync, etc.) stay listed as
-  non-goals / stubs, not as a blocked release.
+- Deep Switchbay parity: Switchbay 0.13.0 (core-skills auto-start) consumes
+  this contract. Residual gaps (live Herdr focus sync, etc.) stay listed as
+  non-goals / stubs.
 
 ### Version bumps
 

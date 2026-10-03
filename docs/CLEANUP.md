@@ -1,8 +1,8 @@
 # Cleanup — kept vs legacy surfaces
 
 Product shape after three iterations (Omarchy plugin → CLI → skill + observer).
-Authoritative product lock: [ADR-003](ADR-003-skill-observer-vs-kernel.md).
-Harness seating history: [ADR-001](ADR-001-cli-tui-harness.md).
+Observer is the primary visual console and has no chat bar; Herdr/CLI is text I/O;
+hosted proxy hides HTML settings. Omarchy QML is an optional thin client.
 Package map: [ARCHITECTURE.md](ARCHITECTURE.md#kept-vs-legacy-surfaces).
 
 ## Kept (core)

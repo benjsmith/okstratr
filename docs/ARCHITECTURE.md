@@ -6,9 +6,8 @@
 >
 > Desk / kernel design authority: **[DESK-KERNEL.md](DESK-KERNEL.md)**.
 > Hosted embed + registry SSOT under `OKSTRATR_PUBLIC_BASE`; host_notify + health
-> on status APIs. Switchbay consumes this contract (Phase 4a / Embed v2); deep
-> feature parity checklist items that remain open are stubs/non-goals, not a
-> blocked release.
+> on status APIs. Switchbay 0.13.0 consumes this contract. Remaining deep
+> feature-parity checklist items are stubs and non-goals.
 
 ## Intent
 
