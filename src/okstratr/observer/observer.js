@@ -302,23 +302,10 @@
   function bindFocusPanels() {
     const id = String(state.focusDeskId || "");
     const label = focusedDeskMetaLabel();
-    const sel = el("desk-switcher");
-    if (sel) {
-      // Keep selection in sync even before full option rebuild.
-      if (id && Array.prototype.some.call(sel.options, function (o) {
-        return o.value === id;
-      })) {
-        sel.value = id;
-      } else if (!id) {
-        sel.value = "";
-      }
-    }
+    renderContextLabel();
     const switcherMeta = el("switcher-meta");
     if (switcherMeta) {
-      switcherMeta.textContent =
-        (label || (id ? id.slice(0, 12) : "no desk")) +
-        " · ws " +
-        (state.selectedWorkspaceId || "local");
+      switcherMeta.textContent = contextLine();
     }
     const bbLabel = el("bb-desk-label");
     if (bbLabel) {
@@ -573,7 +560,7 @@
   function focusDesk(deskId) {
     if (!setFocusDesk(deskId, { sticky: true })) return;
     renderDesks();
-    renderDeskSwitcher();
+    renderContextLabel();
     bindFocusPanels();
     // Drop stale scoped content immediately — refresh() refills for focusDeskId.
     renderBlackboard({ items: [] });
@@ -1625,52 +1612,48 @@
     return label;
   }
 
-  function renderDeskSwitcher() {
-    const sel = el("desk-switcher");
-    if (!sel) return;
-    const prev = state.focusDeskId;
-    const list = (state.desks || []).filter(function (d) {
-      return d && d.id && String(d.id).indexOf("kind:") !== 0;
-    });
-    const opts = ['<option value="">Select a desk…</option>'].concat(
-      list.map(function (d) {
-        const id = String(d.id);
-        const selected = id === String(prev) ? " selected" : "";
-        return (
-          '<option value="' +
-          esc(id) +
-          '"' +
-          selected +
-          ">" +
-          esc(deskLabel(d)) +
-          "</option>"
-        );
-      })
-    );
-    sel.innerHTML = opts.join("");
-    if (prev) sel.value = String(prev);
+  function contextDeskLabel() {
+    const desk = focusedDeskRow();
+    const id = desk ? String(desk.id || "") : String(state.focusDeskId || "");
+    if (!id || id.indexOf("kind:") === 0) return "no desk";
+    const kind = desk && desk.kind ? String(desk.kind) : "";
+    return kind ? kind + " desk" : "desk";
+  }
+
+  function contextWorkspaceDisplay() {
+    const cw = state.contextWorkspace || {};
+    if (cw.display) return String(cw.display);
+    if (cw.name) return String(cw.name);
+    if (cw.id) return String(cw.id);
+    return state.selectedWorkspaceId || "work";
+  }
+
+  function contextLine() {
+    return contextDeskLabel() + " · " + contextWorkspaceDisplay();
+  }
+
+  function renderContextLabel() {
+    const line = contextLine();
+    const lab = el("context-label");
+    if (lab) lab.textContent = line;
     const meta = el("switcher-meta");
-    if (meta) {
-      const lab = focusedDeskMetaLabel();
-      meta.textContent =
-        (lab || (prev ? prev.slice(0, 12) : "no desk")) +
-        " · ws " +
-        (state.selectedWorkspaceId || "local");
-    }
+    if (meta) meta.textContent = line;
   }
 
   function workspaceOptionLabel(w) {
-    if (!w) return "local (serve cwd)";
+    if (!w) return "work";
+    if (w.display) return String(w.display);
     const id = String(w.id || w.name || "");
     const name = String(w.name || w.id || "");
     const path = String(w.path || "");
     const label = String(w.label || "").trim();
-    if (label) return label;
+    const title = String(w.title || w.display_name || "").trim();
+    if (title && name && title !== name) return name + " (" + title + ")";
+    if (label && label.indexOf(" — ") === -1) return label;
     if (id === "local" || name === "local") {
-      return path ? "local (serve cwd) — " + path : "local (serve cwd)";
+      return path ? "local — " + path : "local";
     }
-    if (name && path) return name + " — " + path;
-    return name || path || id || "workspace";
+    return name || path || id || "work";
   }
 
   function normalizeWorkspaceRows(raw) {
@@ -1681,19 +1664,30 @@
       if (typeof w === "string") {
         const path = String(w);
         const name = path.split("/").filter(Boolean).pop() || path;
-        rows.push({ id: name, name: name, path: path, label: name + " — " + path });
+        rows.push({ id: name, name: name, path: path, label: name, display: name });
         return;
       }
       const id = String(w.id || w.name || w.path || "");
       if (!id) return;
       const name = String(w.name || w.id || id);
       const path = String(w.path || "");
+      const display = workspaceOptionLabel({
+        id: id,
+        name: name,
+        path: path,
+        label: w.label,
+        title: w.title,
+        display_name: w.display_name,
+        display: w.display,
+      });
       rows.push({
         id: id,
         name: name,
         path: path,
-        label: workspaceOptionLabel({ id: id, name: name, path: path, label: w.label }),
+        label: display,
+        display: display,
         source: w.source || "",
+        title: w.title || w.display_name || "",
       });
     });
     return rows;
@@ -1719,24 +1713,37 @@
   }
 
   function rowsFromSwitchbayPayload(payload) {
-    if (!payload) return [];
-    if (Array.isArray(payload.workspaces)) return normalizeWorkspaceRows(payload.workspaces);
+    if (!payload) return { rows: [], active: "" };
+    let active = String(payload.active || "").trim();
+    if (Array.isArray(payload.workspaces)) {
+      return { rows: normalizeWorkspaceRows(payload.workspaces), active: active };
+    }
     if (Array.isArray(payload.paths)) {
-      return normalizeWorkspaceRows(
+      const rows = normalizeWorkspaceRows(
         payload.paths.map(function (p) {
           const path = String(p);
           const name = path.split("/").filter(Boolean).pop() || path;
           return { id: name, name: name, path: path, source: "switchbay" };
         })
       );
+      // Map active path → id
+      if (active) {
+        const activeNorm = active.replace(/\/$/, "");
+        rows.forEach(function (w) {
+          const p = String(w.path || "").replace(/\/$/, "");
+          if (p && (p === activeNorm || activeNorm.endsWith("/" + w.id))) {
+            active = String(w.id);
+          }
+        });
+      }
+      return { rows: rows, active: active };
     }
-    return [];
+    return { rows: [], active: active };
   }
 
   /** When embedded in Switchbay, /api/workspaces is host-reserved and lists vaults. */
   function fetchHostWorkspaces() {
-    if (!isSwitchbayHost()) return Promise.resolve([]);
-    // Absolute /api/workspaces — Switchbay fetch shim keeps this on the host.
+    if (!isSwitchbayHost()) return Promise.resolve({ rows: [], active: "" });
     return fetch("/api/workspaces", { headers: { Accept: "application/json" } })
       .then(function (r) {
         if (!r.ok) throw new Error("workspaces " + r.status);
@@ -1746,67 +1753,108 @@
         return rowsFromSwitchbayPayload(payload);
       })
       .catch(function () {
-        return [];
+        return { rows: [], active: "" };
       });
   }
 
-  function renderWorkspaceSwitcher(status, hostRows) {
-    const sel = el("workspace-switcher");
-    if (!sel) return;
-    let rows = [];
-    let selected = state.selectedWorkspaceId || "";
-    const pack =
-      (status && status.okbay_workspaces) ||
-      (state.status && state.status.okbay_workspaces) ||
+  function applyHostWorkspace(status, hostPack) {
+    const pack = hostPack && typeof hostPack === "object" ? hostPack : { rows: [], active: "" };
+    const hostRows = Array.isArray(pack.rows) ? pack.rows : Array.isArray(hostPack) ? hostPack : [];
+    state.hostWorkspaces = hostRows;
+
+    let cw =
+      (status && status.context_workspace) ||
+      (state.status && state.status.context_workspace) ||
       null;
-    if (pack) {
-      if (Array.isArray(pack.workspaces)) rows = normalizeWorkspaceRows(pack.workspaces);
-      if (!selected && pack.selected) selected = String(pack.selected);
-      if (!selected && pack.active) selected = String(pack.active.id || pack.active || "");
+
+    // Prefer live Switchbay active from host /api/workspaces when embedded.
+    if (isSwitchbayHost() && pack.active) {
+      let match = null;
+      hostRows.forEach(function (w) {
+        const id = String(w.id || w.name || "");
+        const path = String(w.path || "");
+        if (id && (id === String(pack.active) || path === String(pack.active))) match = w;
+      });
+      if (!match && String(pack.active).indexOf("/") >= 0) {
+        const base = String(pack.active).split("/").filter(Boolean).pop();
+        hostRows.forEach(function (w) {
+          if (String(w.id || "") === base || String(w.name || "") === base) match = w;
+        });
+        if (!match) {
+          match = {
+            id: base,
+            name: base,
+            path: String(pack.active),
+            display: base,
+            source: "switchbay",
+          };
+        }
+      }
+      if (match) {
+        cw = {
+          id: String(match.id || match.name || ""),
+          name: String(match.name || match.id || ""),
+          path: String(match.path || ""),
+          display: workspaceOptionLabel(match),
+          source: "switchbay-active",
+          host: "switchbay",
+          resolution: "switchbay-active",
+        };
+      }
     }
-    rows = mergeWorkspaceRows(rows, normalizeWorkspaceRows(hostRows || state.hostWorkspaces || []));
-    // Always keep local (serve cwd) as an explicit fallback option.
-    const cwd =
-      (status && (status.cwd || status.operating_cwd)) ||
-      state.cwd ||
-      "";
-    rows = mergeWorkspaceRows(rows, [
+
+    if (!cw) {
+      const okb = (status && status.okbay_workspaces) || {};
+      const active = String((okb && (okb.active || okb.selected)) || "");
+      const rows = normalizeWorkspaceRows((okb && okb.workspaces) || []);
+      let match = null;
+      rows.forEach(function (w) {
+        if (String(w.id || "") === active) match = w;
+      });
+      cw = match
+        ? {
+            id: String(match.id),
+            name: String(match.name || match.id),
+            path: String(match.path || ""),
+            display: workspaceOptionLabel(match),
+            source: match.source || "status",
+            resolution: "status-active",
+          }
+        : {
+            id: active || "work",
+            name: active || "work",
+            path: "",
+            display: active || "work",
+            source: "fallback",
+            resolution: "fallback",
+          };
+    }
+
+    state.contextWorkspace = cw;
+    state.selectedWorkspaceId = String(cw.id || cw.name || "work");
+    state.workspaces = mergeWorkspaceRows(hostRows, [
       {
-        id: "local",
-        name: "local",
-        path: cwd ? String(cwd) : "",
-        label: cwd ? "local (serve cwd) — " + cwd : "local (serve cwd)",
-        source: "local",
+        id: String(cw.id || "work"),
+        name: String(cw.name || cw.id || "work"),
+        path: String(cw.path || ""),
+        display: String(cw.display || cw.name || cw.id || "work"),
+        label: String(cw.display || cw.label || ""),
+        source: cw.source || "",
       },
     ]);
-    state.workspaces = rows;
-    if (!selected) selected = rows[0] ? String(rows[0].id) : "local";
-    state.selectedWorkspaceId = selected;
-    const seen = {};
-    const opts = [];
-    function addOpt(id, label) {
-      const v = String(id || "");
-      if (!v || seen[v]) return;
-      seen[v] = true;
-      const selAttr = v === String(selected) ? " selected" : "";
-      opts.push(
-        '<option value="' + esc(v) + '"' + selAttr + ">" + esc(label || v) + "</option>"
-      );
-    }
-    rows.forEach(function (w) {
-      addOpt(String(w.id || w.name || ""), workspaceOptionLabel(w));
-    });
-    if (!opts.length) addOpt("local", "local (serve cwd)");
-    sel.innerHTML = opts.join("");
+    renderContextLabel();
   }
 
   function openHerdrWorkspace() {
-    const wid = String(state.selectedWorkspaceId || (el("workspace-switcher") || {}).value || "");
-    let path = "";
-    (state.workspaces || []).forEach(function (w) {
-      const id = String(w.id || w.name || "");
-      if (id && id === wid && w.path) path = String(w.path);
-    });
+    const cw = state.contextWorkspace || {};
+    const wid = String(state.selectedWorkspaceId || cw.id || "");
+    let path = String(cw.path || "");
+    if (!path) {
+      (state.workspaces || []).forEach(function (w) {
+        const id = String(w.id || w.name || "");
+        if (id && id === wid && w.path) path = String(w.path);
+      });
+    }
     const msg = el("open-herdr-msg");
     if (msg) {
       msg.hidden = false;
@@ -1925,36 +1973,8 @@
       });
   }
 
-  function chooseWorkspace(id) {
-    const wid = String(id || "local");
-    state.selectedWorkspaceId = wid;
-    let path = "";
-    (state.workspaces || []).forEach(function (w) {
-      const rowId = String(w.id || w.name || "");
-      if (rowId && rowId === wid && w.path) path = String(w.path);
-    });
-    setMsg("Workspace: " + wid + (path ? " · " + path : ""));
-    api("/api/workspace/select", {
-      method: "POST",
-      body: { id: wid, workspace_id: wid, path: path || undefined },
-    })
-      .then(function (parsed) {
-        const cwd =
-          (parsed && (parsed.operating_cwd || (parsed.cwd && parsed.cwd.cwd))) ||
-          path ||
-          wid;
-        if (cwd) {
-          state.cwd = cwd;
-          setText("s-cwd", cwd);
-          setText("cwd-chip", "cwd: " + cwd);
-        }
-        setMsg("Workspace: " + wid + " · cwd " + cwd);
-        refresh();
-      })
-      .catch(function (e) {
-        setMsg(String(e.message || e));
-      });
-  }
+  // Workspace is host-resolved only; no UI picker (chooseWorkspace removed).
+
 
   function renderConversation(payload) {
     const root = el("conversation");
@@ -2138,7 +2158,7 @@
         const conv = parts[6];
         const hostWs = parts[7] || [];
         state.status = status;
-        state.hostWorkspaces = hostWs;
+        // hostWs is {rows, active} from fetchHostWorkspaces
 
         let desks = normalizeDesks(deskSession);
         if (!desks.length) desks = normalizeDesks(deskStatus);
@@ -2157,8 +2177,7 @@
         }
 
         renderDesks();
-        renderDeskSwitcher();
-        renderWorkspaceSwitcher(status, hostWs);
+        applyHostWorkspace(status, hostWs);
         bindFocusPanels();
         renderAgentSpace(status, dag);
         // Discard scoped payloads fetched for a desk we are no longer focused on
@@ -2265,26 +2284,6 @@
     rebuildLayout();
   });
 
-  const deskSwitcher = el("desk-switcher");
-  if (deskSwitcher) {
-    deskSwitcher.addEventListener("change", function () {
-      const id = deskSwitcher.value;
-      if (id) focusDesk(id);
-      else {
-        clearFocusDesk();
-        renderConversation(null);
-        renderBlackboard({});
-        renderDeskSwitcher();
-        bindFocusPanels();
-      }
-    });
-  }
-  const wsSwitcher = el("workspace-switcher");
-  if (wsSwitcher) {
-    wsSwitcher.addEventListener("change", function () {
-      chooseWorkspace(wsSwitcher.value);
-    });
-  }
   const openHerdrBtn = el("open-herdr-workspace");
   if (openHerdrBtn) {
     openHerdrBtn.addEventListener("click", function () {

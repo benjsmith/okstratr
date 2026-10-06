@@ -87,26 +87,15 @@
         </div>
       </section>
 
-      <!-- Easy switcher between desks and okbay workspaces -->
-      <section class="panel switcher-panel" id="context-switcher" aria-label="Desk and workspace switcher">
+      <!-- Context: desk from left rail card; workspace from host active (read-only) -->
+      <section class="panel switcher-panel" id="context-switcher" aria-label="Desk and workspace context">
         <div class="panel-head">
           <h2>Context</h2>
           <span class="muted" id="switcher-meta">desk · workspace</span>
         </div>
-        <div class="switcher-row">
-          <label class="switcher-field">
-            <span class="switcher-label">Desk</span>
-            <select id="desk-switcher" class="switcher-select" aria-label="Select desk">
-              <option value="">Select a desk…</option>
-            </select>
-          </label>
-          <label class="switcher-field">
-            <span class="switcher-label">Workspace</span>
-            <select id="workspace-switcher" class="switcher-select" aria-label="Select workspace">
-              <option value="local">local (serve cwd)</option>
-            </select>
-          </label>
-          <button type="button" id="open-herdr-workspace" class="btn primary" title="Start a Herdr agent (grok preferred) at the selected workspace cwd">
+        <div class="switcher-row context-row">
+          <p class="context-label" id="context-label" aria-live="polite">no desk · work</p>
+          <button type="button" id="open-herdr-workspace" class="btn primary" title="Start a Herdr agent (grok preferred) at the host active workspace cwd">
             Open in Herdr
           </button>
         </div>

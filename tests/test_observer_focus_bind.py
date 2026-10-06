@@ -38,7 +38,7 @@ def test_focus_desk_binds_panels_before_refresh(observer_js: str) -> None:
     idx = js.index("function focusDesk")
     chunk = js[idx : idx + 900]
     assert "bindFocusPanels()" in chunk
-    assert "renderDeskSwitcher()" in chunk
+    assert "renderContextLabel()" in chunk
     assert "renderBlackboard" in chunk
     assert 'api("/api/desk/focus"' in chunk
     # Sticky focus still applied.
@@ -55,9 +55,9 @@ def test_refresh_discards_stale_scoped_payloads(observer_js: str) -> None:
 
 def test_refresh_calls_bind_focus_panels(observer_js: str) -> None:
     js = observer_js
-    idx = js.index("renderDeskSwitcher();")
+    idx = js.index("applyHostWorkspace(status, hostWs)")
     # Nearby refresh render path should bind panels.
-    chunk = js[idx : idx + 600]
+    chunk = js[idx : idx + 400]
     assert "bindFocusPanels()" in chunk
 
 
@@ -65,7 +65,8 @@ def test_panel_header_ids_present(observer_html: str) -> None:
     html = observer_html
     assert 'id="bb-desk-label"' in html
     assert 'id="desk-prompt-meta"' in html
-    assert 'id="desk-switcher"' in html
+    assert 'id="context-label"' in html
+    assert 'id="desk-switcher"' not in html
     assert 'id="conversation-meta"' in html
 
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Observer/Panel **Context** is read-only: desk from rail card selection; workspace from host active resolution (Switchbay `/api/workspaces`, okbay active, or CLI `--workspace` / `OKSTRATR_WORKSPACE` / cwd / default Work). No desk or workspace input boxes.
+
 ## v0.2.0 — 2026-09-29
 
 First meaningful minor after the skill + observer product lock. **Migration:**

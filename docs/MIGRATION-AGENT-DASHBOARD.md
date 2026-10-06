@@ -38,7 +38,7 @@
 
 ## Desk chrome (2026-09-20)
 
-- Context switcher: desk + okbay workspace above AGENT SPACE
+- Context label: desk (from rail card) + host active workspace above AGENT SPACE (read-only)
 - Desk click → `GET /api/desk/conversation` (Herdr transcript when present, else stub from objective + CoS/Herdr blackboard)
 - Below DAG: desk-scoped blackboard only (`/api/blackboard?desk_id=`)
 - Config strip / Omarchy config modal scroll inside bounds; `panel_open` restore stays disabled

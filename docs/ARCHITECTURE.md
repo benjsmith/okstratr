@@ -181,6 +181,7 @@ okstratr bb post|head|search|clear
 | `OKSTRATR_HERDR_TIMEOUT` / `OKSTRATR_HERDR_WAIT_TIMEOUT` | Bounded wait seconds (default 120) |
 | `OKSTRATR_HERDR_KIND` | Agent kind for start (default `grok`) |
 | `OKSTRATR_OKBAY_WORKSPACE` | Active okbay workspace id (`work` default; `biocure` = demo) |
+| `OKSTRATR_WORKSPACE` | Host/CLI active workspace path or id (Switchbay spawn seed; CLI `--workspace`) |
 | `OKSTRATR_OKBAY_WORK_ROOT` | Override workspace path |
 | `OKSTRATR_OKBAY_THREAD_IDS` | Comma-separated okbay thread ids |
 | `OKSTRATR_OKBAY_REVIEWS` / `OKSTRATR_CURATE_COMMIT` / `OKSTRATR_OKBAY_COMMIT_PATH` | Enable curate land path (hook) |
