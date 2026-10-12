@@ -218,7 +218,7 @@ attention-window UI for next fire is the follow-up.
 | Surface | Role |
 |---------|------|
 | **Herdr** | Normal agent runtime + panes. Every agent **name/label includes `desk_id` + `thread_id`**. Desk-grouping lens is later, not this slice. |
-| **okstratr UI** | Owns desk objective query input, workspace picker, standing desk lifecycle, role Config ⚙, **left pane** desk rail, DAG + blackboard; can Open in Herdr. |
+| **okstratr UI** | Owns desk objective query input, the read-only Context line (desk · workspace), standing desk lifecycle, role Config ⚙, **left pane** desk rail, DAG + blackboard; can Open in Herdr. |
 
 ### Labeling
 
@@ -392,9 +392,14 @@ workspace (no dropdowns).
 |------|----------------------|
 | **Switchbay** (`OKSTRATR_HOSTED=switchbay`) | Live active from Switchbay `GET /api/workspaces` (`active` field). Spawn also sets `OKSTRATR_WORKSPACE` (`okstratr_supervisor.start`). When Switchbay switches workspace, the label follows on refresh. |
 | **okbay** (`OKSTRATR_HOST=okbay`) | okbay list API active/current when reachable; else same as CLI. |
-| **Bare CLI / Herdr** | `--workspace` / `OKSTRATR_WORKSPACE`, else seat cwd → nearest registered workspace, else default all-Work (`work` / `~/Work`). Shown in `okstratr status`. |
+| **Bare CLI / Herdr** | A workspace chosen with `POST /api/workspace/select`, else `--workspace` / `OKSTRATR_WORKSPACE`, else seat cwd → nearest registered workspace, else default all-Work (`work` / `~/Work`). Shown in `okstratr status`. |
 
-Panel.qml shows the same read-only Context line (CE SSOT).
+A workspace chosen with `POST /api/workspace/select` is used when the host
+has no active workspace (and always on the bare CLI). The bound desk workspace
+(`active_workspace()`) uses the same rule as the label, so a saved selection
+can't leave the desk on a different workspace from the one shown.
+
+Panel.qml shows the same read-only Context line.
 
 ## Open in Herdr (workspace agents)
 
@@ -403,7 +408,7 @@ Herdr agents must seat on **registered okbay workspace dirs** (e.g. BioCure unde
 
 | Path | How |
 |------|-----|
-| okstratr panel | Workspace dropdown → **Open in Herdr** (grok preferred) |
+| okstratr panel | Context line (host workspace) → **Open in Herdr** (grok preferred) |
 | Observer | Context label (desk card + host workspace) → **Open in Herdr** |
 | CLI | `okstratr herdr open-workspace biocure` or `… open-workspace --cwd /mnt/mac/Workspaces/…` |
 | API | `POST /api/herdr/open-workspace` `{workspace_id,path}` or `/api/herdr/launch` with `open_agent:true` |

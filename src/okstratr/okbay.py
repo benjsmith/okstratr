@@ -458,32 +458,30 @@ def active_workspace() -> dict[str, Any]:
     """
     Which okbay workspace the desk should bind.
 
-    Resolution order:
-      1. Persisted UI selection (OKSTRATR_STATE_DIR/selected_workspace.json)
-      2. OKSTRATR_OKBAY_WORKSPACE env
-      3. Default work-coverage id
+    Uses the same rule as the read-only Context label
+    (:func:`resolve_host_workspace`), so the bound desk and the label always
+    name the same workspace:
 
-    Override path with OKSTRATR_OKBAY_WORK_ROOT. Biocure is the demo
-    workspace currently in use — select it in the panel or set the env.
+      1. The host's active workspace (Switchbay or okbay), when hosted
+      2. The workspace chosen through the select API or CLI
+         (OKSTRATR_STATE_DIR/selected_workspace.json)
+      3. OKSTRATR_WORKSPACE / OKSTRATR_OKBAY_WORKSPACE
+      4. The registered workspace containing the working directory
+      5. The default all-Work workspace
+
+    OKSTRATR_OKBAY_WORK_ROOT overrides the path.
     """
     selected = get_selected_workspace_id()
-    raw_id = (os.environ.get("OKSTRATR_OKBAY_WORKSPACE") or "").strip().lower()
-    workspace_id = (selected or raw_id or DEFAULT_WORKSPACE_ID).strip().lower() or DEFAULT_WORKSPACE_ID
-    # Map okbay hub name to our default id for consistency
-    if workspace_id == "okbay":
-        workspace_id = DEFAULT_WORKSPACE_ID
-    if workspace_id == "local":
+    try:
+        resolved = resolve_host_workspace()
+    except Exception:  # noqa: BLE001
+        resolved = {}
+    workspace_id = str(resolved.get("id") or DEFAULT_WORKSPACE_ID).strip().lower() or DEFAULT_WORKSPACE_ID
+    if workspace_id in ("okbay", "local"):
         workspace_id = DEFAULT_WORKSPACE_ID
     root_raw = (os.environ.get("OKSTRATR_OKBAY_WORK_ROOT") or "").strip()
-    # Prefer path from selection file when present
-    sel_path = selected_workspace_path()
-    if sel_path.is_file() and not root_raw:
-        try:
-            sel = json.loads(sel_path.read_text(encoding="utf-8"))
-            if isinstance(sel, dict) and sel.get("path"):
-                root_raw = str(sel["path"]).strip()
-        except (OSError, json.JSONDecodeError):
-            pass
+    if not root_raw and workspace_id != DEFAULT_WORKSPACE_ID:
+        root_raw = str(resolved.get("path") or "").strip()
     if not root_raw:
         if workspace_id == DEMO_WORKSPACE_ID:
             root_raw = "~/Work/Biocure"
@@ -505,7 +503,8 @@ def active_workspace() -> dict[str, Any]:
         "owner": "okbay",
         "ingest": False,
         "stub": True,
-        "selected": bool(selected),
+        "selected": bool(selected) and resolved.get("resolution") == "selected",
+        "resolution": resolved.get("resolution") or "default-work",
         "notes": (
             "Work-coverage ingest lives in okbay (magical all-~/Work). "
             "Biocure is the current demo workspace in use, not an opt-in. "
@@ -571,6 +570,33 @@ def _row_from_path_or_id(hint: str, rows: list[dict[str, Any]] | None = None) ->
         "path": "",
         "label": _workspace_label(hint),
         "source": "env",
+    }
+
+
+def _selection_row(rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Row for the workspace chosen through the select API or CLI (empty if none)."""
+    wid = get_selected_workspace_id()
+    if not wid:
+        return {}
+    path = ""
+    try:
+        raw = json.loads(selected_workspace_path().read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            path = str(raw.get("path") or "").strip()
+    except (OSError, json.JSONDecodeError):
+        path = ""
+    for row in rows or []:
+        if isinstance(row, dict) and str(row.get("id") or row.get("name") or "") == wid:
+            out = dict(row)
+            if path:
+                out["path"] = path
+            return out
+    return {
+        "id": wid,
+        "name": wid,
+        "path": path,
+        "label": _workspace_label(wid, path) if path else _workspace_label(wid),
+        "source": "selected",
     }
 
 
@@ -698,6 +724,9 @@ def resolve_host_workspace(*, timeout: float = 0.4) -> dict[str, Any]:
                 row = _row_from_path_or_id(sy_active, sy_rows)
             if row:
                 return _finish(row, resolution="switchbay-active", host_name="switchbay")
+        picked = _selection_row(sy_rows)
+        if picked:
+            return _finish(picked, resolution="selected", host_name="switchbay")
         if hint:
             return _finish(
                 _row_from_path_or_id(hint, sy_rows),
@@ -738,6 +767,9 @@ def resolve_host_workspace(*, timeout: float = 0.4) -> dict[str, Any]:
     # Merge switchbay rows for cwd nearest matching on bare hosts
     items = _merge_workspace_rows(list(items), sy_rows)
 
+    picked = _selection_row(items)
+    if picked:
+        return _finish(picked, resolution="selected", host_name=host_name)
     if hint:
         return _finish(
             _row_from_path_or_id(hint, items),

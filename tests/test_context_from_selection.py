@@ -165,3 +165,46 @@ def test_panel_qml_context_read_only() -> None:
     assert 'text: "Context"' in qml
     assert "workspacePicker" not in qml
     assert "chooseWorkspace(modelData)" not in qml
+
+
+def test_selection_and_label_agree_bare(state_dir: Path, tmp_path: Path) -> None:
+    from okstratr import okbay, workspace
+
+    workspace.set_cwd(tmp_path)
+    picked = tmp_path / "picked"
+    picked.mkdir()
+    out = okbay.set_selected_workspace("picked", path=str(picked))
+    row = okbay.resolve_host_workspace(timeout=0.05)
+    assert row["resolution"] == "selected"
+    assert row["id"] == "picked"
+    assert out["id"] == "picked"
+    assert out["path"] == str(picked)
+    assert out["selected"] is True
+    assert okbay.active_workspace()["id"] == row["id"]
+
+
+def test_stale_selection_follows_host_active(
+    state_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from okstratr import okbay, workspace
+
+    workspace.set_cwd(tmp_path)
+    okbay.set_selected_workspace("old-pick", path=str(tmp_path / "old-pick"))
+    live = tmp_path / "live"
+    live.mkdir()
+    monkeypatch.setenv("OKSTRATR_HOSTED", "switchbay")
+    monkeypatch.setattr(
+        okbay,
+        "list_switchbay_workspaces",
+        lambda timeout=0.35: {
+            "workspaces": [{"id": "live", "name": "live", "path": str(live)}],
+            "active": "live",
+        },
+    )
+    label = okbay.resolve_host_workspace(timeout=0.05)
+    bound = okbay.active_workspace()
+    assert label["resolution"] == "switchbay-active"
+    assert label["id"] == "live"
+    assert bound["id"] == label["id"]
+    assert bound["path"] == str(live)
+    assert bound["selected"] is False
