@@ -107,6 +107,12 @@ def main(argv=None) -> int:
         action="store_true",
         help="Emit host_notify as JSON lines on bare path (also OKSTRATR_JSON_NOTIFY=1)",
     )
+    p.add_argument(
+        "--workspace",
+        dest="okstratr_workspace",
+        default=None,
+        help="Active workspace path or id (sets OKSTRATR_WORKSPACE; no picker UI)",
+    )
     sub = p.add_subparsers(dest="cmd", required=True)
 
     st = sub.add_parser("status", help="Print lifecycle status box (services, desks, tokens, …)")
@@ -415,6 +421,11 @@ def main(argv=None) -> int:
 
         host_notify.set_json_notify(True)
 
+    ws_arg = getattr(args, "okstratr_workspace", None)
+    if ws_arg:
+        import os
+
+        os.environ["OKSTRATR_WORKSPACE"] = str(ws_arg).strip()
 
     if args.cmd == "status":
         from . import lifecycle, status as status_mod

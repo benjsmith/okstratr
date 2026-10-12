@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+**Migration:** none. **Breaking:** the observer and panel no longer have desk
+or workspace dropdowns.
+
+- **Context is read-only.** Pick a desk by clicking its card in the left rail.
+  The workspace shown is the one the host has open: Switchbay's or okbay's
+  active workspace, or on the bare CLI the workspace chosen with
+  `POST /api/workspace/select`, `--workspace` / `OKSTRATR_WORKSPACE`, or the
+  registered workspace containing the current directory.
+- **Desk and label always agree.** The workspace a desk binds to follows the
+  same rule as the Context label, so an old saved selection no longer
+  overrides the host's active workspace.
+- **New `okstratr --workspace`** option and a `ws` line in `okstratr status`.
+- **Default workspace is now `work` (all of `~/Work`)** instead of `local`
+  (the directory `okstratr serve` was started in) when nothing else applies.
+
 ## v0.2.0 — 2026-09-29
 
 First meaningful minor after the skill + observer product lock. **Migration:**

@@ -350,6 +350,20 @@ def snapshot() -> dict[str, Any]:
         _log.warning("status.snapshot: harness list failed", exc_info=True)
         harness_snap = None
 
+    context_workspace = None
+    try:
+        context_workspace = okbay.resolve_host_workspace()
+    except Exception:  # noqa: BLE001
+        _log.warning("status.snapshot: context_workspace failed", exc_info=True)
+        context_workspace = {
+            "id": "work",
+            "name": "work",
+            "display": "work",
+            "resolution": "default-work",
+            "host": "cli",
+            "ok": False,
+        }
+
     return {
         "ts": time(),
         "state": display_state,
@@ -371,6 +385,7 @@ def snapshot() -> dict[str, Any]:
         "web_egress": web_egress,
         "okbay": okbay.active_workspace(),
         "okbay_workspaces": workspaces,
+        "context_workspace": context_workspace,
         "roles_config": roles_config,
         "herdr_job": herdr_job,
         "herdr_error": herdr_error,

@@ -258,11 +258,21 @@ body.hosted .shell {
   grid-template-columns: 280px minmax(0, 1fr);
 }
 
-/* —— Context switcher (desk + workspace) —— */
-.switcher-panel .switcher-row {
+/* —— Context (read-only desk · workspace label) —— */
+.switcher-panel .switcher-row,
+.switcher-panel .context-row {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 0.65rem;
+}
+.context-label {
+  flex: 1 1 12rem;
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--fg);
+  letter-spacing: 0.01em;
 }
 .switcher-field {
   display: flex;

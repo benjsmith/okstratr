@@ -605,11 +605,44 @@ function workspaceReachable(status) {
 }
 
 function selectedWorkspaceId(status) {
-    if (status && status.okbay_workspaces && status.okbay_workspaces.selected)
-        return String(status.okbay_workspaces.selected)
+    var cw = contextWorkspace(status)
+    if (cw && (cw.id || cw.name))
+        return String(cw.id || cw.name)
+    if (status && status.okbay_workspaces && status.okbay_workspaces.active)
+        return String(status.okbay_workspaces.active)
     if (status && status.okbay && status.okbay.id)
         return String(status.okbay.id)
-    return "local"
+    return "work"
+}
+
+/** Host-resolved active workspace (no UI picker). */
+function contextWorkspace(status) {
+    if (status && status.context_workspace && typeof status.context_workspace === "object")
+        return status.context_workspace
+    return null
+}
+
+function contextWorkspaceDisplay(status) {
+    var cw = contextWorkspace(status)
+    if (cw && cw.display) return String(cw.display)
+    if (cw && (cw.name || cw.id)) return String(cw.name || cw.id)
+    return selectedWorkspaceId(status)
+}
+
+function contextLine(status, focusDeskId) {
+    var deskPart = "no desk"
+    var fid = String(focusDeskId || (status && status.focus_desk_id) || "")
+    var rows = standingDesks(status) || []
+    var kind = ""
+    for (var i = 0; i < rows.length; i++) {
+        if (String(rows[i].id || "") === fid && fid.indexOf("kind:") !== 0) {
+            kind = String(rows[i].kind || "")
+            break
+        }
+    }
+    if (fid && fid.indexOf("kind:") !== 0)
+        deskPart = kind ? (kind + " desk") : "desk"
+    return deskPart + " · " + contextWorkspaceDisplay(status)
 }
 
 function roleConfigRows(status) {

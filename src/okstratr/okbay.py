@@ -458,32 +458,30 @@ def active_workspace() -> dict[str, Any]:
     """
     Which okbay workspace the desk should bind.
 
-    Resolution order:
-      1. Persisted UI selection (OKSTRATR_STATE_DIR/selected_workspace.json)
-      2. OKSTRATR_OKBAY_WORKSPACE env
-      3. Default work-coverage id
+    Uses the same rule as the read-only Context label
+    (:func:`resolve_host_workspace`), so the bound desk and the label always
+    name the same workspace:
 
-    Override path with OKSTRATR_OKBAY_WORK_ROOT. Biocure is the demo
-    workspace currently in use — select it in the panel or set the env.
+      1. The host's active workspace (Switchbay or okbay), when hosted
+      2. The workspace chosen through the select API or CLI
+         (OKSTRATR_STATE_DIR/selected_workspace.json)
+      3. OKSTRATR_WORKSPACE / OKSTRATR_OKBAY_WORKSPACE
+      4. The registered workspace containing the working directory
+      5. The default all-Work workspace
+
+    OKSTRATR_OKBAY_WORK_ROOT overrides the path.
     """
     selected = get_selected_workspace_id()
-    raw_id = (os.environ.get("OKSTRATR_OKBAY_WORKSPACE") or "").strip().lower()
-    workspace_id = (selected or raw_id or DEFAULT_WORKSPACE_ID).strip().lower() or DEFAULT_WORKSPACE_ID
-    # Map okbay hub name to our default id for consistency
-    if workspace_id == "okbay":
-        workspace_id = DEFAULT_WORKSPACE_ID
-    if workspace_id == "local":
+    try:
+        resolved = resolve_host_workspace()
+    except Exception:  # noqa: BLE001
+        resolved = {}
+    workspace_id = str(resolved.get("id") or DEFAULT_WORKSPACE_ID).strip().lower() or DEFAULT_WORKSPACE_ID
+    if workspace_id in ("okbay", "local"):
         workspace_id = DEFAULT_WORKSPACE_ID
     root_raw = (os.environ.get("OKSTRATR_OKBAY_WORK_ROOT") or "").strip()
-    # Prefer path from selection file when present
-    sel_path = selected_workspace_path()
-    if sel_path.is_file() and not root_raw:
-        try:
-            sel = json.loads(sel_path.read_text(encoding="utf-8"))
-            if isinstance(sel, dict) and sel.get("path"):
-                root_raw = str(sel["path"]).strip()
-        except (OSError, json.JSONDecodeError):
-            pass
+    if not root_raw and workspace_id != DEFAULT_WORKSPACE_ID:
+        root_raw = str(resolved.get("path") or "").strip()
     if not root_raw:
         if workspace_id == DEMO_WORKSPACE_ID:
             root_raw = "~/Work/Biocure"
@@ -505,7 +503,8 @@ def active_workspace() -> dict[str, Any]:
         "owner": "okbay",
         "ingest": False,
         "stub": True,
-        "selected": bool(selected),
+        "selected": bool(selected) and resolved.get("resolution") == "selected",
+        "resolution": resolved.get("resolution") or "default-work",
         "notes": (
             "Work-coverage ingest lives in okbay (magical all-~/Work). "
             "Biocure is the current demo workspace in use, not an opt-in. "
@@ -513,6 +512,274 @@ def active_workspace() -> dict[str, Any]:
             "okstratr only binds desk/thread ids."
         ),
     }
+
+
+
+def _env_workspace_hint() -> str:
+    """Explicit workspace path or id from OKSTRATR_WORKSPACE / OKSTRATR_OKBAY_WORKSPACE."""
+    for key in ("OKSTRATR_WORKSPACE", "OKSTRATR_OKBAY_WORKSPACE"):
+        raw = (os.environ.get(key) or "").strip()
+        if raw:
+            return raw
+    return ""
+
+
+def _row_from_path_or_id(hint: str, rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Build a workspace row from an absolute path or known id."""
+    hint = (hint or "").strip()
+    items = list(rows or [])
+    if not hint:
+        return {}
+    # Match id/name first
+    for row in items:
+        if not isinstance(row, dict):
+            continue
+        rid = str(row.get("id") or row.get("name") or "")
+        if rid and rid == hint:
+            return dict(row)
+    # Path-like hint
+    try:
+        p = Path(hint).expanduser()
+        if p.exists() or "/" in hint or hint.startswith("~"):
+            resolved = str(p.resolve()) if p.exists() else str(p.expanduser())
+            name = Path(resolved).name or hint
+            for row in items:
+                if not isinstance(row, dict):
+                    continue
+                rpath = str(row.get("path") or "").strip()
+                if not rpath:
+                    continue
+                try:
+                    if str(Path(rpath).expanduser().resolve()) == str(Path(resolved).expanduser().resolve()):
+                        return dict(row)
+                except OSError:
+                    if rpath == resolved or rpath == hint:
+                        return dict(row)
+            return {
+                "id": name,
+                "name": name,
+                "path": resolved,
+                "label": _workspace_label(name, resolved),
+                "source": "env",
+            }
+    except OSError:
+        pass
+    return {
+        "id": hint,
+        "name": hint,
+        "path": "",
+        "label": _workspace_label(hint),
+        "source": "env",
+    }
+
+
+def _selection_row(rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Row for the workspace chosen through the select API or CLI (empty if none)."""
+    wid = get_selected_workspace_id()
+    if not wid:
+        return {}
+    path = ""
+    try:
+        raw = json.loads(selected_workspace_path().read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            path = str(raw.get("path") or "").strip()
+    except (OSError, json.JSONDecodeError):
+        path = ""
+    for row in rows or []:
+        if isinstance(row, dict) and str(row.get("id") or row.get("name") or "") == wid:
+            out = dict(row)
+            if path:
+                out["path"] = path
+            return out
+    return {
+        "id": wid,
+        "name": wid,
+        "path": path,
+        "label": _workspace_label(wid, path) if path else _workspace_label(wid),
+        "source": "selected",
+    }
+
+
+def _nearest_workspace_row(cwd: str, rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Map seat cwd to the nearest registered workspace root (longest prefix win)."""
+    if not cwd:
+        return None
+    try:
+        cwd_p = Path(cwd).expanduser().resolve()
+    except OSError:
+        return None
+    best: dict[str, Any] | None = None
+    best_len = -1
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        rid = str(row.get("id") or row.get("name") or "")
+        if rid == "local" or str(row.get("source") or "") == "local":
+            continue
+        raw = str(row.get("path") or "").strip()
+        if not raw:
+            continue
+        try:
+            root = Path(raw).expanduser().resolve()
+        except OSError:
+            continue
+        try:
+            cwd_p.relative_to(root)
+        except ValueError:
+            continue
+        n = len(str(root))
+        if n > best_len:
+            best_len = n
+            best = dict(row)
+    return best
+
+
+def _default_work_row() -> dict[str, Any]:
+    path = str(Path(DEFAULT_WORK_ROOT).expanduser())
+    return {
+        "id": DEFAULT_WORKSPACE_ID,
+        "name": DEFAULT_WORKSPACE_ID,
+        "path": DEFAULT_WORK_ROOT,
+        "expanded_path": path,
+        "label": _workspace_label(DEFAULT_WORKSPACE_ID, DEFAULT_WORK_ROOT),
+        "source": "default",
+    }
+
+
+def context_workspace_display(row: dict[str, Any] | None) -> str:
+    """Short read-only label, e.g. ``biocure-membership (Biotech)`` or ``work``."""
+    if not row:
+        return "work"
+    title = str(row.get("title") or row.get("display_name") or "").strip()
+    name = str(row.get("name") or row.get("id") or "").strip()
+    path = str(row.get("path") or row.get("expanded_path") or "").strip()
+    if not name and path:
+        name = Path(path).expanduser().name or path
+    if not name:
+        name = "work"
+    # Drop long hash suffixes from directory basenames when no title.
+    if not title and "-" in name:
+        parts = name.rsplit("-", 1)
+        if len(parts) == 2 and len(parts[1]) >= 7 and all(c in "0123456789abcdef" for c in parts[1].lower()):
+            name = parts[0]
+    if title and title != name:
+        return f"{name} ({title})"
+    return name
+
+
+def resolve_host_workspace(*, timeout: float = 0.4) -> dict[str, Any]:
+    """Resolve the host's currently active workspace (no UI picker).
+
+    * **Switchbay** (``OKSTRATR_HOSTED``/``OKSTRATR_HOST=switchbay``): live active
+      from Switchbay ``GET /api/workspaces`` (or ``~/.config/switchbay/workspaces.json``).
+      Spawn-time ``OKSTRATR_WORKSPACE`` is a seed when Switchbay is unreachable.
+      When Switchbay's active path changes, this follows on the next resolve.
+    * **okbay** host: okbay list API ``active`` / ``current`` when reachable;
+      otherwise same fallbacks as bare CLI.
+    * **Bare CLI / Herdr**: ``OKSTRATR_WORKSPACE`` (or ``--workspace`` → that env),
+      else seat cwd mapped to the nearest registered workspace, else default
+      all-Work workspace (``work`` / ``~/Work``).
+
+    Returns a row dict with ``id``, ``name``, ``path``, ``label``, ``display``,
+    ``source``, ``host``, and ``resolution`` explaining which rule won.
+    """
+    from .public_base import hosted_shell_from_env
+
+    host = hosted_shell_from_env() or ""
+    hint = _env_workspace_hint()
+    sy = list_switchbay_workspaces(timeout=min(timeout, 0.35))
+    sy_rows = list(sy.get("workspaces") or [])
+    sy_active = str(sy.get("active") or "").strip()
+
+    cwd = ""
+    try:
+        from . import workspace as ws_mod
+
+        cwd = str(ws_mod.get_cwd() or "").strip()
+    except Exception:  # noqa: BLE001
+        cwd = ""
+
+    def _finish(row: dict[str, Any], *, resolution: str, host_name: str) -> dict[str, Any]:
+        out = dict(row)
+        out.setdefault("id", str(out.get("name") or "work"))
+        out.setdefault("name", str(out.get("id") or "work"))
+        path = str(out.get("path") or out.get("expanded_path") or "").strip()
+        if path and not out.get("expanded_path"):
+            try:
+                out["expanded_path"] = str(Path(path).expanduser())
+            except OSError:
+                out["expanded_path"] = path
+        out["label"] = str(out.get("label") or _workspace_label(out["name"], path))
+        out["display"] = context_workspace_display(out)
+        out["host"] = host_name
+        out["resolution"] = resolution
+        out["ok"] = True
+        return out
+
+    # --- Switchbay hosted ---
+    if host == "switchbay":
+        if sy_active:
+            row = next((r for r in sy_rows if str(r.get("id") or "") == sy_active), None)
+            if row is None and sy_active:
+                row = _row_from_path_or_id(sy_active, sy_rows)
+            if row:
+                return _finish(row, resolution="switchbay-active", host_name="switchbay")
+        picked = _selection_row(sy_rows)
+        if picked:
+            return _finish(picked, resolution="selected", host_name="switchbay")
+        if hint:
+            return _finish(
+                _row_from_path_or_id(hint, sy_rows),
+                resolution="OKSTRATR_WORKSPACE",
+                host_name="switchbay",
+            )
+        nearest = _nearest_workspace_row(cwd, sy_rows)
+        if nearest:
+            return _finish(nearest, resolution="cwd-nearest", host_name="switchbay")
+        return _finish(_default_work_row(), resolution="default-work", host_name="switchbay")
+
+    # --- okbay hosted ---
+    if host == "okbay":
+        pack = list_workspaces(timeout=timeout)
+        items = list(pack.get("workspaces") or [])
+        active = str(pack.get("raw_active") or pack.get("active") or "").strip()
+        current = pack.get("current")
+        if isinstance(current, dict):
+            cid = str(current.get("id") or current.get("name") or "").strip()
+            if cid:
+                active = active or cid
+        if active:
+            row = next(
+                (r for r in items if str(r.get("id") or r.get("name") or "") == active),
+                None,
+            )
+            if row is None:
+                row = _row_from_path_or_id(active, items)
+            if row and str(row.get("id") or "") != "local":
+                return _finish(row, resolution="okbay-active", host_name="okbay")
+        # Fall through like CLI when okbay active is unknown
+        host_name = "okbay"
+    else:
+        host_name = host or "cli"
+        pack = list_workspaces(timeout=timeout)
+        items = list(pack.get("workspaces") or [])
+
+    # Merge switchbay rows for cwd nearest matching on bare hosts
+    items = _merge_workspace_rows(list(items), sy_rows)
+
+    picked = _selection_row(items)
+    if picked:
+        return _finish(picked, resolution="selected", host_name=host_name)
+    if hint:
+        return _finish(
+            _row_from_path_or_id(hint, items),
+            resolution="OKSTRATR_WORKSPACE",
+            host_name=host_name,
+        )
+    nearest = _nearest_workspace_row(cwd, items)
+    if nearest:
+        return _finish(nearest, resolution="cwd-nearest", host_name=host_name)
+    return _finish(_default_work_row(), resolution="default-work", host_name=host_name)
 
 
 def split_workspace(folders: list[str] | None = None, *, name: str | None = None) -> dict[str, Any]:

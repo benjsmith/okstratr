@@ -667,6 +667,13 @@ def status_payload() -> dict[str, Any]:
         cwd = str(ws.get("cwd") or ws.get("path") or "n/a")
     except Exception:  # noqa: BLE001
         pass
+    context_workspace: dict = {}
+    try:
+        from . import okbay
+
+        context_workspace = okbay.resolve_host_workspace()
+    except Exception:  # noqa: BLE001
+        context_workspace = {}
     try:
         from .harness import config as harness_config
 
@@ -701,6 +708,8 @@ def status_payload() -> dict[str, Any]:
         "board_duration_chip": board_chip,
         "web_egress": web_chip,
         "cwd": cwd,
+        "context_workspace": context_workspace,
+        "workspace": (context_workspace or {}).get("display") or (context_workspace or {}).get("id") or "n/a",
         "backend": backend,
         "harnesses": harnesses,
         "desks": desks,
@@ -771,6 +780,7 @@ def format_status_box(payload: dict[str, Any] | None = None) -> str:
         row("board ", str(p.get("board_duration_chip"))),
         row("web   ", str(p.get("web_egress"))),
         row("cwd   ", str(p.get("cwd"))),
+        row("ws    ", str(p.get("workspace") or ((p.get("context_workspace") or {}).get("display")) or "n/a")),
         row("back  ", str(p.get("backend"))),
         row("harn  ", harness),
         row("desks ", f"kinds[{kind_bits}]"),

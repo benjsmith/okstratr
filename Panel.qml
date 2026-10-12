@@ -54,7 +54,9 @@ Item {
   readonly property var dagGraph: Model.dagGraph(status)
   readonly property var workspaceRows: Model.workspaceRows(status)
   readonly property bool workspaceReachable: Model.workspaceReachable(status)
+  readonly property var contextWorkspace: Model.contextWorkspace(status)
   property string selectedWorkspaceId: Model.selectedWorkspaceId(status)
+  readonly property string contextLabel: Model.contextLine(status, focusDeskId)
   property string selectedKind: "auto"
   property bool workspaceMenuOpen: false
   property bool configOpen: false
@@ -328,18 +330,10 @@ Item {
     Model.postJson(root.apiUrl + "/api/desk/delete", {desk_id: String(deskId)}, root.afterDeskAction)
   }
 
+  // Workspace is host-resolved (status.context_workspace); no picker.
   function chooseWorkspace(item) {
-    if (!item) return
-    root.selectedWorkspaceId = String(item.id || item.name || "local")
     root.workspaceMenuOpen = false
-    Model.postJson(root.apiUrl + "/api/workspace/select", {
-      id: root.selectedWorkspaceId,
-      path: item.path || ""
-    }, function(parsed) {
-      root.actionMsg = "Workspace: " + root.selectedWorkspaceId
-      root.refreshStatus()
-      root.refreshLive()
-    })
+    root.actionMsg = "Workspace follows host · " + root.contextLabel
   }
 
   function openSchedule(deskId, kind) {
@@ -708,7 +702,7 @@ Item {
                 spacing: 14
 
                 Text {
-                  text: "Workspace"
+                  text: "Context"
                   color: root.themeMuted
                   font.pixelSize: 11
                   font.bold: true
@@ -718,28 +712,14 @@ Item {
                   width: parent.width
                   spacing: 8
 
-                  Rectangle {
-                    id: workspacePicker
-                    width: Math.min(220, parent.width - 140)
-                    height: 42
-                    radius: 9
-                    color: root.themeBg
-                    border.width: 1
-                    border.color: root.workspaceMenuOpen ? root.themeAccent : root.themeBorder
-                    Text {
-                      anchors.centerIn: parent
-                      width: parent.width - 20
-                      horizontalAlignment: Text.AlignHCenter
-                      elide: Text.ElideRight
-                      text: (root.workspaceReachable ? "⌂ " : "") + root.selectedWorkspaceId + " ▾"
-                      color: root.themeFg
-                      font.pixelSize: 12
-                    }
-                    MouseArea {
-                      anchors.fill: parent
-                      cursorShape: Qt.PointingHandCursor
-                      onClicked: root.workspaceMenuOpen = !root.workspaceMenuOpen
-                    }
+                  Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: Math.min(360, parent.width - 140)
+                    text: root.contextLabel
+                    color: root.themeFg
+                    font.pixelSize: 13
+                    font.bold: true
+                    elide: Text.ElideRight
                   }
 
                   Chip {
@@ -751,52 +731,9 @@ Item {
 
                   Text {
                     anchors.verticalCenter: parent.verticalCenter
-                    text: "Start desks from the rail · text via Herdr / CoS"
+                    text: "Desk from rail · workspace from host"
                     color: root.themeMuted
                     font.pixelSize: 11
-                  }
-                }
-
-                Rectangle {
-                  visible: root.workspaceMenuOpen
-                  width: 280
-                  height: Math.min(240, workspaceListCol.implicitHeight + 16)
-                  radius: 9
-                  color: root.themeBg
-                  border.width: 1
-                  border.color: root.themeBorder
-                  z: 20
-                  Column {
-                    id: workspaceListCol
-                    anchors.fill: parent
-                    anchors.margins: 8
-                    spacing: 3
-                    Repeater {
-                      model: root.workspaceRows
-                      delegate: Rectangle {
-                        required property var modelData
-                        width: workspaceListCol.width
-                        height: 30
-                        radius: 6
-                        color: workspaceMa.containsMouse ? "#33ffffff" : "transparent"
-                        Text {
-                          anchors.fill: parent
-                          anchors.leftMargin: 8
-                          text: (modelData.label || ((modelData.name || modelData.id || "local") + (modelData.path ? "  ·  " + modelData.path : "")))
-                          color: root.themeFg
-                          font.pixelSize: 11
-                          verticalAlignment: Text.AlignVCenter
-                          elide: Text.ElideRight
-                        }
-                        MouseArea {
-                          id: workspaceMa
-                          anchors.fill: parent
-                          hoverEnabled: true
-                          cursorShape: Qt.PointingHandCursor
-                          onClicked: root.chooseWorkspace(modelData)
-                        }
-                      }
-                    }
                   }
                 }
 

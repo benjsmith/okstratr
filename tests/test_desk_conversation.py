@@ -135,8 +135,9 @@ def test_blackboard_desk_scoped(env: Path, http_server: str) -> None:
 def test_observer_chrome_has_switcher_and_conversation(http_server: str) -> None:
     text = _get_text(http_server, "/observer/")
     assert 'id="context-switcher"' in text
-    assert 'id="desk-switcher"' in text
-    assert 'id="workspace-switcher"' in text
+    assert 'id="context-label"' in text
+    assert 'id="desk-switcher"' not in text
+    assert 'id="workspace-switcher"' not in text
     assert 'id="conversation-panel"' in text
     assert 'id="conversation"' in text
     assert 'id="bb-desk-label"' in text

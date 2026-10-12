@@ -55,7 +55,9 @@ def test_observer_html_agents_ux_affordances() -> None:
     assert 'id="agents-guidance"' in html
     assert "Files written" in html
     assert "Lines written" in html
-    assert "local (serve cwd)" in html
+    assert 'id="context-label"' in html
+    assert 'id="desk-switcher"' not in html
+    assert 'id="workspace-switcher"' not in html
     assert 'id="desk-prompt"' in html
     dash = html.split("Desk dashboard", 1)[1].split("Context", 1)[0]
     assert "Links" not in dash
