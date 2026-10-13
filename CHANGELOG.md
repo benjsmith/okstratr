@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.2.1 — 2026-10-13
+
 **Migration:** none. **Breaking:** the observer and panel no longer have desk
 or workspace dropdowns.
 
