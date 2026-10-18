@@ -212,6 +212,11 @@ def test_okbay_workspace_framing(monkeypatch: pytest.MonkeyPatch) -> None:
     from okstratr import okbay
 
     monkeypatch.delenv("OKSTRATR_OKBAY_WORKSPACE", raising=False)
+    # No host: a live okbay or Switchbay on this machine must not pick the workspace.
+    monkeypatch.setattr(okbay, "OKBAY_API_URL", "http://127.0.0.1:1")
+    monkeypatch.setenv("OKSTRATR_SWITCHBAY_URL", "http://127.0.0.1:1")
+    monkeypatch.setenv("OKSTRATR_SWITCHBAY_WORKSPACES", "/nonexistent/workspaces.json")
+    monkeypatch.setattr(okbay, "get_selected_workspace_id", lambda: "")
     ws = okbay.active_workspace()
     assert ws["default_work_coverage"] is True
     assert ws["id"] == "work"

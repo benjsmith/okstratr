@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / "src" / "okstratr" / "observer" / "agent_space_theme.js"
 
 
 def _resolve(vars: dict[str, str]) -> dict:
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed")
     script = f"""
 const t = require({json.dumps(str(HELPER))});
 function mock(vars) {{
