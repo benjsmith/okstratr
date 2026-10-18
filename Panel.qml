@@ -76,12 +76,25 @@ Item {
   property string conversationHint: ""
   readonly property var focusedBlackboardGroups: Model.blackboardGroupsForDesk(status, focusDeskId)
 
+  function maximizeInHyprland() {
+    if (!Quickshell.env("HYPRLAND_INSTANCE_SIGNATURE"))
+      return
+    Quickshell.execDetached([
+      "hyprctl", "dispatch",
+      'hl.dsp.window.fullscreen({ window = "title:^Okstratr$", mode = "maximized", action = "set" })'
+    ])
+  }
+
   function persistPanelUi() {
     // Explicit close → panel_open false → stay closed after shell restart.
     uiFile.setText(JSON.stringify({ panel_open: !!root.opened }) + "\n")
   }
 
   function open(payloadJson) {
+    // If the window was closed under us while opened stayed true, flip it so
+    // the visible binding changes and Quickshell maps the window again.
+    if (opened && !win.visible)
+      opened = false
     opened = true
     persistPanelUi()
     root.refreshStatus()
@@ -554,9 +567,44 @@ Item {
     minimumSize: Qt.size(720, 480)
 
     onVisibleChanged: {
-      // Window hide / compositor close — same as explicit close (do not re-open after restart).
-      if (!visible && root.opened)
-        root.close()
+      // The compositor closed the window (Super+W, hyprctl closewindow). The
+      // window is gone, so the close dialog can't show: mark the panel closed
+      // so the next summon maps it again. Standing desks are left as they are;
+      // only the in-panel close quiets them, after confirmation.
+      if (!visible && root.opened) {
+        root.closeDialogVisible = false
+        root.opened = false
+        root.httpLive = false
+        root.statusSource = "none"
+        root.persistPanelUi()
+      }
+      if (visible) {
+        maximizeTimer.attempt = 0
+        maximizeTimer.interval = 150
+        maximizeTimer.restart()
+      }
+    }
+
+    // Omarchy suppresses client maximize requests on every window, so
+    // maximized above is ignored there. The panel then tiles behind any
+    // floating windows on the workspace (the okbay desk layout floats its
+    // windows) and looks like it never opened. Ask Hyprland to maximize it
+    // directly. "set" is idempotent, so retry a few times in case the window
+    // hasn't mapped yet when the first request goes out.
+    Timer {
+      id: maximizeTimer
+      property int attempt: 0
+      interval: 150
+      repeat: true
+      onTriggered: {
+        attempt += 1
+        if (!win.visible || attempt > 4) {
+          stop()
+          return
+        }
+        interval = 150 * attempt * attempt
+        root.maximizeInHyprland()
+      }
     }
 
     Rectangle {

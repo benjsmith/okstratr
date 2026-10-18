@@ -43,3 +43,31 @@ def test_config_harness_editor_exists() -> None:
     text = path.read_text(encoding="utf-8")
     assert "modelCommit" in text
     assert "default_model" in text
+
+
+def test_panel_reopens_after_compositor_close() -> None:
+    """Closing the window from Hyprland must not leave opened stuck true."""
+    text = (ROOT / "Panel.qml").read_text(encoding="utf-8")
+    vis = text[text.index("onVisibleChanged"):]
+    vis = vis[: vis.index("}\n    }") + 1]
+    assert "root.opened = false" in vis
+    assert "root.close()" not in vis  # the close dialog can't show without a window
+    opener = text[text.index("function open(payloadJson)"):]
+    opener = opener[: opener.index("\n  }\n")]
+    assert "!win.visible" in opener
+
+
+def test_panel_asks_hyprland_to_maximize_on_map() -> None:
+    """Omarchy suppresses client maximize requests, so the panel would tile
+    behind floating desk windows. It must ask Hyprland to maximize it."""
+    qml = (Path(__file__).resolve().parents[1] / "Panel.qml").read_text(encoding="utf-8")
+    fn = qml.split("function maximizeInHyprland()", 1)[1].split("\n  }\n", 1)[0]
+    assert "HYPRLAND_INSTANCE_SIGNATURE" in fn
+    assert 'title:^Okstratr$' in fn
+    assert 'mode = "maximized"' in fn
+    assert 'action = "set"' in fn  # idempotent, safe to retry
+    vis = qml.split("onVisibleChanged: {", 1)[1].split("\n    }\n", 1)[0]
+    assert "maximizeTimer.restart()" in vis
+    timer = qml.split("id: maximizeTimer", 1)[1].split("\n    }\n", 1)[0]
+    assert "root.maximizeInHyprland()" in timer
+    assert "stop()" in timer
