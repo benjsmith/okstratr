@@ -82,6 +82,10 @@ Item {
   }
 
   function open(payloadJson) {
+    // If the window was closed under us while opened stayed true, flip it so
+    // the visible binding changes and Quickshell maps the window again.
+    if (opened && !win.visible)
+      opened = false
     opened = true
     persistPanelUi()
     root.refreshStatus()
@@ -554,9 +558,17 @@ Item {
     minimumSize: Qt.size(720, 480)
 
     onVisibleChanged: {
-      // Window hide / compositor close — same as explicit close (do not re-open after restart).
-      if (!visible && root.opened)
-        root.close()
+      // The compositor closed the window (Super+W, hyprctl closewindow). The
+      // window is gone, so the close dialog can't show: mark the panel closed
+      // so the next summon maps it again. Standing desks are left as they are;
+      // only the in-panel close quiets them, after confirmation.
+      if (!visible && root.opened) {
+        root.closeDialogVisible = false
+        root.opened = false
+        root.httpLive = false
+        root.statusSource = "none"
+        root.persistPanelUi()
+      }
     }
 
     Rectangle {

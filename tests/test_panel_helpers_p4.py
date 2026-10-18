@@ -43,3 +43,15 @@ def test_config_harness_editor_exists() -> None:
     text = path.read_text(encoding="utf-8")
     assert "modelCommit" in text
     assert "default_model" in text
+
+
+def test_panel_reopens_after_compositor_close() -> None:
+    """Closing the window from Hyprland must not leave opened stuck true."""
+    text = (ROOT / "Panel.qml").read_text(encoding="utf-8")
+    vis = text[text.index("onVisibleChanged"):]
+    vis = vis[: vis.index("}\n    }") + 1]
+    assert "root.opened = false" in vis
+    assert "root.close()" not in vis  # the close dialog can't show without a window
+    opener = text[text.index("function open(payloadJson)"):]
+    opener = opener[: opener.index("\n  }\n")]
+    assert "!win.visible" in opener
