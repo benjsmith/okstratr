@@ -417,6 +417,8 @@ def test_herdr_launch_omarchy_fallback_no_objective_argv(
     term_herdr.chmod(0o755)
     # No uwsm/foot/xdg-terminal-exec/herdr — only omarchy wrapper
     monkeypatch.setenv("PATH", str(tmp_path))
+    # launch() adds ~/.local/bin to PATH; keep a real Herdr install out of the test.
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(herdr, "systemd_user_environment", lambda: {})
 
     cands = herdr._launch_candidates("do not put this on argv", path=str(tmp_path))
@@ -453,7 +455,9 @@ def test_herdr_launch_omarchy_fallback_no_objective_argv(
 def test_herdr_launch_dry_when_missing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from okstratr import herdr
 
-    monkeypatch.setenv("PATH", str(tmp_path))  # empty dir — no herdr/uwsm/xdg
+    monkeypatch.setenv("PATH", str(tmp_path))
+    # launch() adds ~/.local/bin to PATH; keep a real Herdr install out of the test.
+    monkeypatch.setenv("HOME", str(tmp_path))  # empty dir — no herdr/uwsm/xdg
     monkeypatch.setattr(herdr, "systemd_user_environment", lambda: {})
     out = herdr.launch("x")
     assert out["ok"] is False
@@ -474,6 +478,8 @@ def test_herdr_launch_ok_when_herdr_present(
         p.write_text("#!/bin/sh\nexit 0\n")
         p.chmod(0o755)
     monkeypatch.setenv("PATH", str(tmp_path))
+    # launch() adds ~/.local/bin to PATH; keep a real Herdr install out of the test.
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(herdr, "systemd_user_environment", lambda: {"WAYLAND_DISPLAY": "wayland-1"})
 
     def fake_popen(cmd, env=None, stdout=None, stderr=None, start_new_session=False):  # noqa: ANN001
@@ -500,6 +506,8 @@ def test_http_herdr_launch(state_dir: Path, monkeypatch: pytest.MonkeyPatch, tmp
     fake.write_text("#!/bin/sh\nexit 0\n")
     fake.chmod(0o755)
     monkeypatch.setenv("PATH", str(tmp_path))
+    # launch() adds ~/.local/bin to PATH; keep a real Herdr install out of the test.
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(herdr, "systemd_user_environment", lambda: {})
 
     popped: list[list[str]] = []

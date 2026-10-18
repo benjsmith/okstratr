@@ -36,6 +36,8 @@ def test_list_workspaces_uses_switchbay_file_when_okbay_down(
     monkeypatch.setenv("OKSTRATR_SWITCHBAY_WORKSPACES", str(cfg))
     monkeypatch.setenv("OKSTRATR_SWITCHBAY_URL", "http://127.0.0.1:1")  # force HTTP miss
     monkeypatch.setenv("OKSTRATR_OKBAY_URL", "http://127.0.0.1:1")
+    # OKBAY_API_URL is read at import; point it at a closed port too.
+    monkeypatch.setattr(okbay, "OKBAY_API_URL", "http://127.0.0.1:1")
 
     workspace.set_cwd(tmp_path)
     pack = okbay.list_workspaces(timeout=0.05)
