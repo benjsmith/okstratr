@@ -1484,99 +1484,99 @@ Item {
           } // configFlick
         }
       }
-    }
-  }
 
-  // Close-warning dialog (status.ui.close_warning / root.closeWarning)
-  Rectangle {
-    id: closeDialogOverlay
-    anchors.fill: parent
-    visible: root.closeDialogVisible && root.opened
-    z: 9999
-    color: "#99000000"
+      // Close-warning dialog (status.ui.close_warning / root.closeWarning).
+      // It has to sit inside the window to be visible; the title-bar ✕ opens it.
+      Rectangle {
+        id: closeDialogOverlay
+        anchors.fill: parent
+        visible: root.closeDialogVisible && root.opened
+        z: 9999
+        color: "#99000000"
 
-    MouseArea {
-      anchors.fill: parent
-      onClicked: root.cancelClose()
-    }
-
-    Rectangle {
-      anchors.centerIn: parent
-      width: Math.min(520, parent.width - 48)
-      height: closeDialogCol.height + 36
-      radius: 12
-      color: root.themePanel
-      border.color: root.themeBorder
-      border.width: 1
-
-      MouseArea { anchors.fill: parent } // swallow clicks
-
-      Column {
-        id: closeDialogCol
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.top: parent.top
-        anchors.margins: 18
-        spacing: 14
-
-        Text {
-          text: "Close Okstratr?"
-          color: root.themeFg
-          font.pixelSize: 16
-          font.bold: true
+        MouseArea {
+          anchors.fill: parent
+          onClicked: root.cancelClose()
         }
-        Text {
-          width: parent.width
-          text: root.closeWarning
-          color: root.themeMuted
-          font.pixelSize: 13
-          wrapMode: Text.Wrap
-        }
-        Row {
-          spacing: 10
-          anchors.right: parent.right
 
-          Rectangle {
-            width: cancelCloseTxt.width + 24
-            height: 34
-            radius: 8
-            color: "#22000000"
-            border.color: root.themeBorder
+        Rectangle {
+          anchors.centerIn: parent
+          width: Math.min(520, parent.width - 48)
+          height: closeDialogCol.height + 36
+          radius: 12
+          color: root.themePanel
+          border.color: root.themeBorder
+          border.width: 1
+
+          MouseArea { anchors.fill: parent } // swallow clicks
+
+          Column {
+            id: closeDialogCol
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: 18
+            spacing: 14
+
             Text {
-              id: cancelCloseTxt
-              anchors.centerIn: parent
-              text: "Cancel"
+              text: "Close Okstratr?"
               color: root.themeFg
-              font.pixelSize: 13
-            }
-            MouseArea {
-              anchors.fill: parent
-              cursorShape: Qt.PointingHandCursor
-              onClicked: root.cancelClose()
-            }
-          }
-          Rectangle {
-            width: confirmCloseTxt.width + 24
-            height: 34
-            radius: 8
-            color: root.themeAccent
-            Text {
-              id: confirmCloseTxt
-              anchors.centerIn: parent
-              text: "Close & quiet desks"
-              color: "#ffffff"
-              font.pixelSize: 13
+              font.pixelSize: 16
               font.bold: true
             }
-            MouseArea {
-              anchors.fill: parent
-              cursorShape: Qt.PointingHandCursor
-              onClicked: root.confirmClose()
+            Text {
+              width: parent.width
+              text: root.closeWarning
+              color: root.themeMuted
+              font.pixelSize: 13
+              wrapMode: Text.Wrap
+            }
+            Row {
+              spacing: 10
+              anchors.right: parent.right
+
+              Rectangle {
+                width: cancelCloseTxt.width + 24
+                height: 34
+                radius: 8
+                color: "#22000000"
+                border.color: root.themeBorder
+                Text {
+                  id: cancelCloseTxt
+                  anchors.centerIn: parent
+                  text: "Cancel"
+                  color: root.themeFg
+                  font.pixelSize: 13
+                }
+                MouseArea {
+                  anchors.fill: parent
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.cancelClose()
+                }
+              }
+              Rectangle {
+                width: confirmCloseTxt.width + 24
+                height: 34
+                radius: 8
+                color: root.themeAccent
+                Text {
+                  id: confirmCloseTxt
+                  anchors.centerIn: parent
+                  text: "Close & quiet desks"
+                  color: "#ffffff"
+                  font.pixelSize: 13
+                  font.bold: true
+                }
+                MouseArea {
+                  anchors.fill: parent
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.confirmClose()
+                }
+              }
             }
           }
         }
       }
     }
   }
-
 }
