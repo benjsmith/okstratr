@@ -60,7 +60,7 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.chip.running { color: var(--ok); border-color: #3d5a3a; }
+.chip.running { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--border)); }
 .chip.idle { color: var(--warn); }
 .chip.cwd { max-width: 14rem; font-family: ui-monospace, monospace; font-size: 0.7rem; }
 
@@ -79,7 +79,7 @@ body {
 .btn:hover { border-color: var(--accent); color: var(--fg); }
 .btn:disabled { opacity: 0.35; cursor: default; }
 .btn.primary {
-  background: #3344aa55;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
   border-color: var(--accent);
   color: var(--fg);
 }
@@ -91,7 +91,7 @@ body {
   font-weight: 500;
 }
 .btn.mini.active {
-  background: #3344aa55;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
   border-color: var(--accent);
 }
 .btn-row { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.35rem; }
@@ -443,11 +443,11 @@ body.hosted .shell {
   cursor: pointer;
 }
 .kind-chip:hover { border-color: var(--accent); color: var(--fg); }
-.kind-chip.active { border-color: var(--accent); color: var(--fg); background: #3344aa44; }
+.kind-chip.active { border-color: var(--accent); color: var(--fg); background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .kind-chip .n { color: var(--accent); font-weight: 700; margin-left: 0.2rem; }
-.kind-chip.has-working { border-color: #3d5a3a; color: var(--ok); }
+.kind-chip.has-working { border-color: color-mix(in srgb, var(--ok) 40%, var(--border)); color: var(--ok); }
 
-.desk-row[data-state="working"] { border-color: #3d5a3a; }
+.desk-row[data-state="working"] { border-color: color-mix(in srgb, var(--ok) 40%, var(--border)); }
 .desk-row .desk-state {
   font-size: 0.6rem;
   font-weight: 700;
@@ -458,9 +458,9 @@ body.hosted .shell {
   margin-left: 0.25rem;
   vertical-align: middle;
 }
-.desk-state--working { background: #3d5a3a55; color: var(--ok); }
-.desk-state--quiet { background: #3a3a2a55; color: var(--warn); }
-.desk-state--dismissed { background: #5a3a3a55; color: var(--bad); }
+.desk-state--working { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
+.desk-state--quiet { background: color-mix(in srgb, var(--warn) 14%, transparent); color: var(--warn); }
+.desk-state--dismissed { background: color-mix(in srgb, var(--bad) 14%, transparent); color: var(--bad); }
 .desk-sched {
   font-size: 0.6rem;
   color: var(--purple);

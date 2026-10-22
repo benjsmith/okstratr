@@ -43,7 +43,7 @@ Item {
     width: Math.max(48, chipLabel.implicitWidth + 16)
     height: 26
     radius: 7
-    color: chip.primary ? "#3344aa55" : "transparent"
+    color: chip.primary ? Qt.rgba(root.themeAccent.r, root.themeAccent.g, root.themeAccent.b, 0.16) : "transparent"
     border.width: 1
     border.color: chipMa.containsMouse || chip.primary ? root.themeAccent : root.themeBorder
     opacity: enabled ? 1 : 0.35
@@ -107,7 +107,7 @@ Item {
           property bool isQuiet: String(modelData.state || "") === "quiet"
           property bool isBusy: String(modelData.state || "") === "working"
           property string stateLabel: root.stateLabel(modelData.state)
-          color: (String(modelData.id) === String(root.focusDeskId)) ? "#3344aa88" : "#22000000"
+          color: (String(modelData.id) === String(root.focusDeskId)) ? Qt.rgba(root.themeAccent.r, root.themeAccent.g, root.themeAccent.b, 0.12) : "#22000000"
           border.color: (String(modelData.id) === String(root.focusDeskId) || String(modelData.kind) === root.selectedKind) ? root.themeAccent : root.themeBorder
           border.width: 1
 
@@ -131,7 +131,7 @@ Item {
                 text: deskRow.stateLabel
                       ? ((modelData.kind || "desk") + " · " + deskRow.stateLabel)
                       : (modelData.kind || "desk")
-                color: root.themeAccent
+                color: (String(modelData.id) === String(root.focusDeskId)) ? root.themeAccent : root.themeFg
                 font.pixelSize: 12
                 font.bold: true
                 width: Math.max(90, parent.width - deskObjective.width - 8)

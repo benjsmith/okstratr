@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **The panel's ✕ works.** It opens the "Close Okstratr?" dialog again;
+  "Close & quiet desks" closes the panel.
+- **Colours follow the Omarchy theme.** The panel and the observer take their
+  colours from the applied Omarchy theme the same way okbay's Atlas does:
+  lines, borders and agent-space edges use the theme's muted colour, edges
+  carrying work use its light foreground, the accent is kept for the focused
+  desk and selected controls, and agent roles use the theme's named colours.
+  They update when the theme changes. `GET /api/theme` returns these colours.
+  When the observer runs inside Switchbay, Switchbay's colours still apply.
+
 ## v0.2.1 — 2026-10-13
 
 **Migration:** none. **Breaking:** the observer and panel no longer have desk
