@@ -132,6 +132,7 @@ State directory: `~/.local/state/okstratr/` (override with `OKSTRATR_STATE_DIR` 
 
 - `GET /health` — liveness
 - `GET /api/status` — objective + desk brief + **desk_session** + harness allowlist + effort + herdr_labels + dag + blackboard
+- `GET /api/theme` — colours from the applied Omarchy theme (`colors.toml`) for the panel and observer: `ui` (lines and borders from `muted`, agent-space edges from `muted` / `light_foreground`, `accent` for focus) and `roles` (agent role colours from the theme's named colours)
 - `GET /api/desk_session` — DeskSession-only standing desks + seats + DAG slice
 - `GET /api/harness` · `POST /api/harness/enable|disable|reload|set` — harnesses.toml editor API
 - `POST /api/desk/start` — `{objective, kind?, reset?, cos?, effort?, herdr?, drive_herdr?, herdr_limit?}` — UI Start with objective sets `drive_herdr` and **kicks async** bounded `herdr.run_ready` (response includes `herdr_job`; poll `/api/status` or `GET /api/herdr/job`)

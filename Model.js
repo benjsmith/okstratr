@@ -566,15 +566,24 @@ function dagGraph(status) {
     }
 }
 
-function nodeColorForRole(role) {
+// Agent role colours. With a theme (GET /api/theme roles) they follow the
+// applied Omarchy theme's named colours; the hex values are the fallback.
+function nodeColorForRole(role, themeRoles) {
     var r = String(role || "").toLowerCase()
-    if (r === "cos" || r === "root") return "#2dd4bf"      // cyan/teal
-    if (r === "blackboard") return "#a78bfa"              // purple
-    if (r === "investigator" || r === "researcher") return "#60a5fa"  // blue
-    if (r === "verifier") return "#fbbf24"                // amber
-    if (r === "synthesizer") return "#4ade80"             // green
-    if (r === "planner" || r.indexOf("curator") === 0) return "#94a3b8"
-    return "#7dd3fc"
+    var key = "default"
+    if (r === "cos" || r === "root") key = "cos"
+    else if (r === "blackboard") key = "blackboard"
+    else if (r === "investigator" || r === "researcher") key = "investigator"
+    else if (r === "verifier") key = "verifier"
+    else if (r === "synthesizer") key = "synthesizer"
+    else if (r === "planner" || r.indexOf("curator") === 0) key = "planner"
+    if (themeRoles && themeRoles[key])
+        return String(themeRoles[key])
+    var fallback = {
+        cos: "#2dd4bf", blackboard: "#a78bfa", investigator: "#60a5fa",
+        verifier: "#fbbf24", synthesizer: "#4ade80", planner: "#94a3b8", "default": "#7dd3fc"
+    }
+    return fallback[key]
 }
 
 function workspaceRows(status) {

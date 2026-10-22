@@ -45,10 +45,23 @@
     var label = prop("--fg", prop("--text", "#c0caf5"));
     var border = prop("--border", "#292e42");
     var accent = prop("--accent", "#7aa2f7");
+    // Standalone, the observer sets --edge / --edge-active from the Omarchy
+    // theme (muted / light foreground) so edges stay neutral like Atlas and
+    // Herdr. Hosted shells that only set --border / --accent keep those.
+    var edge = prop("--edge", border);
+    var edgeActive = prop("--edge-active", accent);
+    var cos = prop("--role-cos", "#2dd4bf");
+    var recessed = prop("--recessed", "#1f2937");
     return {
       label: label,
-      idleEdge: colorWithAlpha(border, 0.95),
-      flowingEdge: colorWithAlpha(accent, 0.8),
+      idleEdge: colorWithAlpha(edge, 0.95),
+      flowingEdge: colorWithAlpha(edgeActive, 0.8),
+      particle: colorWithAlpha(edgeActive, 0.95),
+      activeRing: colorWithAlpha(edgeActive, 0.7),
+      cosGlow: colorWithAlpha(cos, 0.12),
+      cosRing: colorWithAlpha(cos, 0.4),
+      cosStroke: edgeActive,
+      nodeStroke: recessed,
     };
   }
 

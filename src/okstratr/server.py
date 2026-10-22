@@ -9,7 +9,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from . import PORT
-from . import blackboard, conversation, cos, dag, desks, herdr, herdr_jobs, okbay, roles, status, web_egress
+from . import blackboard, conversation, cos, dag, desks, herdr, herdr_jobs, okbay, roles, status, theme, web_egress
 from .lifecycle import observer_asset_dir, status_payload as lifecycle_status_payload
 from .public_base import (
     HOST_HEADER,
@@ -121,6 +121,10 @@ class Handler(BaseHTTPRequestHandler):
             if base:
                 extra["X-Okstratr-Public-Base"] = base
             return self._send(200, data, ctype, extra_headers=extra or None)
+
+        if path == "/api/theme":
+            code, body, ct = _json_bytes(theme.resolve())
+            return self._send(code, body, ct)
 
         if path == "/api/status":
             snap = status.write_status()
@@ -782,7 +786,7 @@ def serve(host: str = "127.0.0.1", port: int = PORT) -> int:
     base_note = f" public_base={base}" if base else ""
     print(
         f"okstratr listening on http://{host}:{port}{base_note}  "
-        "(/health /observer/ /panel/ /api/lifecycle /api/status /api/desk/* /api/web /api/workspaces /api/config/roles /api/harness /api/desk_session "
+        "(/health /observer/ /panel/ /api/lifecycle /api/status /api/theme /api/desk/* /api/web /api/workspaces /api/config/roles /api/harness /api/desk_session "
         "/api/seat /api/dag /api/blackboard /api/blackboard/clear /api/blackboard/prune /api/audit "
         "/api/desk/conversation /api/herdr/conversation "
         "/api/cos/break /api/herdr/launch /api/herdr/open-workspace /api/herdr/run-ready; hosted via X-Okstratr-Host or ?host=)"

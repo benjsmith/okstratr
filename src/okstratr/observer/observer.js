@@ -1204,15 +1204,69 @@
   }
 
   /* —— AGENT SPACE (Model.dagGraph + Panel.qml canvas) —— */
-  function nodeColorForRole(role) {
+  // Agent role colours: the applied Omarchy theme's named colours when
+  // /api/theme answered (see applyOmarchyTheme), else these defaults.
+  const ROLE_FALLBACK = {
+    cos: "#2dd4bf", blackboard: "#a78bfa", investigator: "#60a5fa",
+    verifier: "#fbbf24", synthesizer: "#4ade80", planner: "#94a3b8", default: "#7dd3fc",
+  };
+  let themeRoles = null;
+  function roleKey(role) {
     const r = String(role || "").toLowerCase();
-    if (r === "cos" || r === "root") return "#2dd4bf";
-    if (r === "blackboard") return "#a78bfa";
-    if (r === "investigator" || r === "researcher") return "#60a5fa";
-    if (r === "verifier") return "#fbbf24";
-    if (r === "synthesizer") return "#4ade80";
-    if (r === "planner" || r.indexOf("curator") === 0) return "#94a3b8";
-    return "#7dd3fc";
+    if (r === "cos" || r === "root") return "cos";
+    if (r === "blackboard") return "blackboard";
+    if (r === "investigator" || r === "researcher") return "investigator";
+    if (r === "verifier") return "verifier";
+    if (r === "synthesizer") return "synthesizer";
+    if (r === "planner" || r.indexOf("curator") === 0) return "planner";
+    return "default";
+  }
+  function nodeColorForRole(role) {
+    const key = roleKey(role);
+    return (themeRoles && themeRoles[key]) || ROLE_FALLBACK[key];
+  }
+
+  // Standalone observer: follow the applied Omarchy theme the way okbay's
+  // Atlas does (poll /api/theme, set CSS variables). A hosting shell owns the
+  // theme, so nothing is applied when hosted.
+  const THEME_VARS = {
+    bg: "--bg", panel: "--panel", recessed: "--recessed", chip: "--chip",
+    border: "--border", divider: "--divider", text: "--text", fg: "--fg",
+    muted: "--muted", accent: "--accent", focus_border: "--focus-border",
+    ok: "--ok", warn: "--warn", bad: "--bad", purple: "--purple",
+    edge: "--edge", edge_active: "--edge-active",
+  };
+  function applyOmarchyTheme(t) {
+    if (!t || !t.ui || currentHosted()) return false;
+    const rootEl = document.documentElement;
+    Object.keys(THEME_VARS).forEach(function (k) {
+      if (t.ui[k]) rootEl.style.setProperty(THEME_VARS[k], t.ui[k]);
+    });
+    const themeApi = window.OkstratrAgentSpaceTheme;
+    if (t.ui.accent && themeApi && themeApi.colorWithAlpha) {
+      rootEl.style.setProperty("--focus", themeApi.colorWithAlpha(t.ui.accent, 0.18));
+    }
+    themeRoles = t.roles || null;
+    if (themeRoles && themeRoles.cos) rootEl.style.setProperty("--role-cos", themeRoles.cos);
+    rootEl.dataset.theme = t.mode === "light" ? "light" : "dark";
+    return true;
+  }
+  let lastThemeKey = "";
+  function loadOmarchyTheme() {
+    if (currentHosted()) return Promise.resolve(null);
+    return fetch(API + "/api/theme", { headers: { Accept: "application/json" } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (t) {
+        if (!t) return null;
+        const key = JSON.stringify([t.ui, t.roles]);
+        if (key !== lastThemeKey && applyOmarchyTheme(t)) {
+          lastThemeKey = key;
+          if (state.graph) rebuildLayout();
+          if (typeof paintAgentSpace === "function") paintAgentSpace();
+        }
+        return t;
+      })
+      .catch(function () { return null; });
   }
 
   function dagSummaryText(status, graph) {
@@ -1468,7 +1522,13 @@
         : {
             label: "#c0caf5",
             idleEdge: "rgba(41, 46, 66, 0.95)",
-            flowingEdge: "rgba(122, 162, 247, 0.8)",
+            flowingEdge: "rgba(169, 177, 214, 0.8)",
+            particle: "rgba(169, 177, 214, 0.95)",
+            activeRing: "rgba(169, 177, 214, 0.7)",
+            cosGlow: "rgba(45, 212, 191, 0.12)",
+            cosRing: "rgba(45, 212, 191, 0.4)",
+            cosStroke: "#a9b1d6",
+            nodeStroke: "#1f2937",
           };
 
     const g = state.graph || { edges: [] };
@@ -1510,7 +1570,7 @@
           const u = (t * 0.6 + p / 3) % 1;
           ctx.beginPath();
           ctx.arc(a.x + dx * u, a.y + dy * u, 2.5, 0, Math.PI * 2);
-          ctx.fillStyle = "rgba(158, 206, 106, 0.95)";
+          ctx.fillStyle = theme.particle;
           ctx.fill();
         }
       }
@@ -1524,11 +1584,11 @@
       if (isCos) {
         ctx.beginPath();
         ctx.arc(n.x, n.y, 26, 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(45, 212, 191, 0.12)";
+        ctx.fillStyle = theme.cosGlow;
         ctx.fill();
         ctx.beginPath();
         ctx.arc(n.x, n.y, 22, 0, Math.PI * 2);
-        ctx.strokeStyle = "rgba(45, 212, 191, 0.4)";
+        ctx.strokeStyle = theme.cosRing;
         ctx.lineWidth = 2;
         ctx.stroke();
       }
@@ -1539,13 +1599,13 @@
       ctx.fillStyle = n.color;
       ctx.fill();
       ctx.lineWidth = isCos ? 2 : 1;
-      ctx.strokeStyle = isCos ? "#99f6e4" : "#1f2937";
+      ctx.strokeStyle = isCos ? theme.cosStroke : theme.nodeStroke;
       ctx.stroke();
 
       if (active && !graphAtRest(state.graph)) {
         ctx.beginPath();
         ctx.arc(n.x, n.y, 14 + Math.sin(t * 6) * 1.5, 0, Math.PI * 2);
-        ctx.strokeStyle = "rgba(158, 206, 106, 0.7)";
+        ctx.strokeStyle = theme.activeRing;
         ctx.lineWidth = 1.5;
         ctx.stroke();
       }
@@ -2382,7 +2442,9 @@
   }
   window.__okstratrObserverTeardown = stopObserver;
 
+  loadOmarchyTheme();
   refresh();
+  let themeTick = 0;
   pollTimer = setInterval(function () {
     if (!mountAlive) {
       if (pollTimer) {
@@ -2392,5 +2454,10 @@
       return;
     }
     refresh();
+    themeTick += POLL_MS;
+    if (themeTick >= 4000) {
+      themeTick = 0;
+      loadOmarchyTheme();
+    }
   }, POLL_MS);
 })();

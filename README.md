@@ -131,7 +131,7 @@ Schedule / desk progress uses **path-native** I/O via `okstratr.host_notify` v1 
 - **Persistent DAG** + **blackboard**
 - **Planner** kind-aware templates; **Herdr** `herdr run-ready` finite jobs
 - CLI: `status | start|restart|shutdown | desk … | web | seat (deprecated) | cos | herdr | dag | bb | serve | observer`
-- HTTP: `/health`, `/api/status`, `/api/desk/*`, `/observer/`, `/api/seat` (deprecated alias), …
+- HTTP: `/health`, `/api/status`, `/api/theme`, `/api/desk/*`, `/observer/`, `/api/seat` (deprecated alias), …
 - **Observer panel** is the primary visual: standing rail, AGENT SPACE canvas, blackboard — **no query bar**
 - Omarchy **Panel.qml** remains a native twin / optional client (may still show a query box for guest; prefer observer)
 

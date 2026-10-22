@@ -27,22 +27,27 @@ Item {
   property bool restoringPanel: false
   readonly property string statusPath: (Quickshell.env("HOME") || "") + "/.local/state/okstratr/status.json"
   readonly property string uiPath: (Quickshell.env("HOME") || "") + "/.local/state/okstratr/ui.json"
-  // Omarchy Color (qs.Commons) loads ~/.local/state/omarchy/current/theme/colors.toml.
-  // Fallbacks: Tokyo Night / Switchbay — never flat #181818.
-  readonly property color themePanel: (typeof Color !== "undefined" && Color.background) ? Color.background : "#1a1b26"
-  readonly property color themeBg: (typeof Color !== "undefined" && Color.popups && Color.popups.background) ? Color.popups.background : "#13141c"
-  readonly property color themeFg: (typeof Color !== "undefined" && Color.foreground) ? Color.foreground : "#a9b1d6"
-  readonly property color themeMuted: (typeof Color !== "undefined" && Color.muted) ? Color.muted : "#565f89"
-  readonly property color themeAccent: (typeof Color !== "undefined" && Color.accent) ? Color.accent : "#7aa2f7"
-  readonly property color themeBorder: (typeof Color !== "undefined" && Color.popups && Color.popups.border) ? Color.popups.border : "#292e42"
-  // Quiet chrome hairlines (match Herdr grey dividers) — not accent-heavy popups.border.
-  readonly property color themeDivider: (typeof Color !== "undefined" && Color.muted)
-    ? Qt.rgba(Color.muted.r, Color.muted.g, Color.muted.b, 0.35)
-    : "#292e42"
-  // Color singleton has no darker_background; recess AGENT SPACE like Switchbay.
-  readonly property color themeRecessed: (typeof Color !== "undefined" && Color.background)
-    ? Qt.darker(Color.background, 1.45)
-    : "#0e0e14"
+  // Colours come from the applied Omarchy theme (colors.toml), mapped the same
+  // way as okbay's Atlas: GET /api/theme on the okstratr daemon returns them
+  // (ui.* roles + per-agent-role colours). Lines, borders and agent-space
+  // edges use the theme's muted colour, edges carrying work use its light
+  // foreground, and accent is kept for focus and selected states. Until the
+  // daemon answers, Omarchy's Color singleton (same colors.toml) is used.
+  property var omTheme: null
+  readonly property var themeUi: (omTheme && omTheme.ui) ? omTheme.ui : ({})
+  readonly property var themeRoles: (omTheme && omTheme.roles) ? omTheme.roles : null
+  readonly property bool hasColor: typeof Color !== "undefined"
+  readonly property color themePanel: themeUi.panel ? themeUi.panel : ((hasColor && Color.background) ? Color.background : "#1a1b26")
+  readonly property color themeBg: themeUi.bg ? themeUi.bg : ((hasColor && Color.background) ? Qt.darker(Color.background, 1.2) : "#13141c")
+  readonly property color themeFg: themeUi.fg ? themeUi.fg : ((hasColor && Color.foreground) ? Color.foreground : "#c0caf5")
+  readonly property color themeMuted: themeUi.muted ? themeUi.muted : ((hasColor && Color.muted) ? Color.muted : "#565f89")
+  readonly property color themeAccent: themeUi.accent ? themeUi.accent : ((hasColor && Color.accent) ? Color.accent : "#7aa2f7")
+  readonly property color themeBorder: themeUi.border ? themeUi.border : ((hasColor && Color.muted) ? Color.muted : "#292e42")
+  readonly property color themeDivider: Qt.rgba(themeBorder.r, themeBorder.g, themeBorder.b, 0.6)
+  readonly property color themeRecessed: themeUi.recessed ? themeUi.recessed : ((hasColor && Color.background) ? Qt.darker(Color.background, 1.45) : "#0f1017")
+  readonly property color themeEdge: themeUi.edge ? themeUi.edge : themeBorder
+  readonly property color themeEdgeActive: themeUi.edge_active ? themeUi.edge_active : themeFg
+  readonly property color themeCos: Model.nodeColorForRole("cos", themeRoles)
   readonly property string apiUrl: (status && status.api_url) ? status.api_url : "http://127.0.0.1:8767"
   readonly property string deskKind: Model.deskKind(status)
   readonly property string deskState: Model.deskState(status)
@@ -76,6 +81,13 @@ Item {
   property string conversationHint: ""
   readonly property var focusedBlackboardGroups: Model.blackboardGroupsForDesk(status, focusDeskId)
 
+  function loadTheme() {
+    Model.getJson(root.apiUrl + "/api/theme", function (parsed) {
+      if (parsed && parsed.ok !== false && parsed.ui)
+        root.omTheme = parsed
+    })
+  }
+
   function maximizeInHyprland() {
     if (!Quickshell.env("HYPRLAND_INSTANCE_SIGNATURE"))
       return
@@ -97,6 +109,7 @@ Item {
       opened = false
     opened = true
     persistPanelUi()
+    root.loadTheme()
     root.refreshStatus()
     refreshLive()
   }
@@ -516,6 +529,14 @@ Item {
     onTriggered: root.refreshLive()
   }
 
+  // Follow theme changes (omarchy-theme-set) while the panel is open.
+  Timer {
+    interval: 4000
+    repeat: true
+    running: root.opened
+    onTriggered: root.loadTheme()
+  }
+
 
   // Omarchy-native chip control (mint accent) — replaces Qt Quick Controls Button
   component Chip: Rectangle {
@@ -532,7 +553,7 @@ Item {
         var a = chipMa.containsMouse ? 0.38 : 0.22
         return Qt.rgba(root.themeAccent.r, root.themeAccent.g, root.themeAccent.b, a)
       }
-      return chipMa.containsMouse ? "#33ffffff" : root.themeBg
+      return chipMa.containsMouse ? Qt.rgba(root.themeFg.r, root.themeFg.g, root.themeFg.b, 0.08) : root.themeBg
     }
     border.width: 1
     border.color: (primary || chipMa.containsMouse) ? root.themeAccent : root.themeBorder
@@ -874,7 +895,7 @@ Item {
                           virtual: !!node.virtual,
                           x: x,
                           y: y,
-                          color: Model.nodeColorForRole(node.role || node.kind)
+                          color: Model.nodeColorForRole(node.role || node.kind, root.themeRoles)
                         })
                       }
                     }
@@ -935,7 +956,7 @@ Item {
                         var layout = agentSpace.layoutNodes || []
                         for (var i = 0; i < layout.length; i++)
                           pos[layout[i].id] = layout[i]
-                        ctx.strokeStyle = Qt.rgba(root.themeBorder.r, root.themeBorder.g, root.themeBorder.b, 0.55)
+                        ctx.strokeStyle = Qt.rgba(root.themeEdge.r, root.themeEdge.g, root.themeEdge.b, 0.95)
                         ctx.lineWidth = 1
                         for (var e = 0; e < edges.length; e++) {
                           var a = pos[edges[e].from]
@@ -967,7 +988,7 @@ Item {
                           radius: 22
                           color: "transparent"
                           border.width: 2
-                          border.color: "#662dd4bf"
+                          border.color: Qt.rgba(root.themeCos.r, root.themeCos.g, root.themeCos.b, 0.4)
                         }
                         Rectangle {
                           visible: String(modelData.role) === "cos"
@@ -975,7 +996,7 @@ Item {
                           width: 52
                           height: 52
                           radius: 26
-                          color: "#222dd4bf"
+                          color: Qt.rgba(root.themeCos.r, root.themeCos.g, root.themeCos.b, 0.12)
                         }
 
                         Rectangle {
@@ -986,7 +1007,7 @@ Item {
                           radius: 11
                           color: modelData.color
                           border.width: String(modelData.role) === "cos" ? 2 : 1
-                          border.color: String(modelData.role) === "cos" ? "#99f6e4" : "#1f2937"
+                          border.color: String(modelData.role) === "cos" ? root.themeEdgeActive : root.themeRecessed
                           opacity: (modelData.state === "done") ? 0.55 : 1.0
                         }
 
@@ -1115,7 +1136,7 @@ Item {
                           property bool expanded: false
                           width: parent.width
                           radius: 8
-                          color: bbMa.containsMouse ? "#22ffffff" : "transparent"
+                          color: bbMa.containsMouse ? Qt.rgba(root.themeFg.r, root.themeFg.g, root.themeFg.b, 0.06) : "transparent"
                           border.width: 1
                           border.color: root.themeDivider
                           implicitHeight: bbCol.implicitHeight + 10
@@ -1411,7 +1432,7 @@ Item {
                       width: 60
                       height: 32
                       radius: 8
-                      color: roleRow.rowEnabled ? "#3344aa88" : "transparent"
+                      color: roleRow.rowEnabled ? Qt.rgba(root.themeAccent.r, root.themeAccent.g, root.themeAccent.b, 0.14) : "transparent"
                       border.width: 1
                       border.color: roleRow.rowEnabled ? root.themeAccent : root.themeBorder
                       Text {
@@ -1484,99 +1505,99 @@ Item {
           } // configFlick
         }
       }
-    }
-  }
 
-  // Close-warning dialog (status.ui.close_warning / root.closeWarning)
-  Rectangle {
-    id: closeDialogOverlay
-    anchors.fill: parent
-    visible: root.closeDialogVisible && root.opened
-    z: 9999
-    color: "#99000000"
+      // Close-warning dialog (status.ui.close_warning / root.closeWarning).
+      // It has to sit inside the window to be visible; the title-bar ✕ opens it.
+      Rectangle {
+        id: closeDialogOverlay
+        anchors.fill: parent
+        visible: root.closeDialogVisible && root.opened
+        z: 9999
+        color: "#99000000"
 
-    MouseArea {
-      anchors.fill: parent
-      onClicked: root.cancelClose()
-    }
-
-    Rectangle {
-      anchors.centerIn: parent
-      width: Math.min(520, parent.width - 48)
-      height: closeDialogCol.height + 36
-      radius: 12
-      color: root.themePanel
-      border.color: root.themeBorder
-      border.width: 1
-
-      MouseArea { anchors.fill: parent } // swallow clicks
-
-      Column {
-        id: closeDialogCol
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.top: parent.top
-        anchors.margins: 18
-        spacing: 14
-
-        Text {
-          text: "Close Okstratr?"
-          color: root.themeFg
-          font.pixelSize: 16
-          font.bold: true
+        MouseArea {
+          anchors.fill: parent
+          onClicked: root.cancelClose()
         }
-        Text {
-          width: parent.width
-          text: root.closeWarning
-          color: root.themeMuted
-          font.pixelSize: 13
-          wrapMode: Text.Wrap
-        }
-        Row {
-          spacing: 10
-          anchors.right: parent.right
 
-          Rectangle {
-            width: cancelCloseTxt.width + 24
-            height: 34
-            radius: 8
-            color: "#22000000"
-            border.color: root.themeBorder
+        Rectangle {
+          anchors.centerIn: parent
+          width: Math.min(520, parent.width - 48)
+          height: closeDialogCol.height + 36
+          radius: 12
+          color: root.themePanel
+          border.color: root.themeBorder
+          border.width: 1
+
+          MouseArea { anchors.fill: parent } // swallow clicks
+
+          Column {
+            id: closeDialogCol
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: 18
+            spacing: 14
+
             Text {
-              id: cancelCloseTxt
-              anchors.centerIn: parent
-              text: "Cancel"
+              text: "Close Okstratr?"
               color: root.themeFg
-              font.pixelSize: 13
-            }
-            MouseArea {
-              anchors.fill: parent
-              cursorShape: Qt.PointingHandCursor
-              onClicked: root.cancelClose()
-            }
-          }
-          Rectangle {
-            width: confirmCloseTxt.width + 24
-            height: 34
-            radius: 8
-            color: root.themeAccent
-            Text {
-              id: confirmCloseTxt
-              anchors.centerIn: parent
-              text: "Close & quiet desks"
-              color: "#ffffff"
-              font.pixelSize: 13
+              font.pixelSize: 16
               font.bold: true
             }
-            MouseArea {
-              anchors.fill: parent
-              cursorShape: Qt.PointingHandCursor
-              onClicked: root.confirmClose()
+            Text {
+              width: parent.width
+              text: root.closeWarning
+              color: root.themeMuted
+              font.pixelSize: 13
+              wrapMode: Text.Wrap
+            }
+            Row {
+              spacing: 10
+              anchors.right: parent.right
+
+              Rectangle {
+                width: cancelCloseTxt.width + 24
+                height: 34
+                radius: 8
+                color: "#22000000"
+                border.color: root.themeBorder
+                Text {
+                  id: cancelCloseTxt
+                  anchors.centerIn: parent
+                  text: "Cancel"
+                  color: root.themeFg
+                  font.pixelSize: 13
+                }
+                MouseArea {
+                  anchors.fill: parent
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.cancelClose()
+                }
+              }
+              Rectangle {
+                width: confirmCloseTxt.width + 24
+                height: 34
+                radius: 8
+                color: root.themeAccent
+                Text {
+                  id: confirmCloseTxt
+                  anchors.centerIn: parent
+                  text: "Close & quiet desks"
+                  color: root.themeBg
+                  font.pixelSize: 13
+                  font.bold: true
+                }
+                MouseArea {
+                  anchors.fill: parent
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.confirmClose()
+                }
+              }
             }
           }
         }
       }
     }
   }
-
 }
