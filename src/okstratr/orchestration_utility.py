@@ -902,3 +902,203 @@ def decompose_tasks(objective: str, n: int, features: TaskFeatures | None = None
             rq = retrieval_query_for(obj, hint)
         tasks.append({"description": desc, "difficulty": diff, "retrieval_query": rq, "method_hint": hint})
     return tasks
+
+
+# ---------------------------------------------------------------------------
+# Expansion and the stop rule
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ExpansionDecision:
+    expand: bool
+    n_extra: int
+    reason: str
+    objectives: list[str] = field(default_factory=list)
+
+
+def choose_expansion(
+    *,
+    preference: float,
+    independence: str,
+    allow_expand: bool,
+    verification: dict[str, Any] | None,
+    findings_n: int,
+    expansions_so_far: int,
+    nodes_so_far: int,
+    remaining_nodes: int,
+    consequence: float = 0.1,
+    unique_sources: int | None = None,
+    max_expansions: int | None = None,
+    max_nodes: int | None = None,
+) -> ExpansionDecision:
+    """Buy another computation only while ΔU > threshold. Hard caps first."""
+    from . import limits
+
+    if not allow_expand:
+        return ExpansionDecision(False, 0, "expansion disabled by policy")
+    cap = limits.MAX_EXPANSIONS if max_expansions is None else int(max_expansions)
+    if expansions_so_far >= cap:
+        return ExpansionDecision(False, 0, "expansion cap reached")
+    hard_nodes = limits.MAX_NODES if max_nodes is None else int(max_nodes)
+    if remaining_nodes < 2 or nodes_so_far + 2 > hard_nodes:
+        return ExpansionDecision(False, 0, "node budget exhausted")
+    s = clamp_preference(preference)
+    v = verification or {}
+    unresolved = v.get("unresolved") or []
+    if not isinstance(unresolved, list):
+        unresolved = []
+
+    kw = dict(
+        verification=v,
+        findings_n=findings_n,
+        consequence=consequence,
+        unique_sources=unique_sources,
+        nodes_so_far=nodes_so_far,
+    )
+    action = "diverse_investigator" if independence != "low" else "investigator"
+    dq = estimate_marginal_quality(action=action, **kw)
+    dc, dl = estimate_marginal_cost_latency(action)
+    du = marginal_utility(dq, dc, dl, s)
+    # The same remaining gaps are worth less on each later wave.
+    du -= 0.045 * max(0, expansions_so_far)
+    if du <= EXPANSION_THRESHOLD:
+        return ExpansionDecision(False, 0, f"ΔU={du:.3f} ≤ threshold (ΔQ={dq:.3f}); stop")
+
+    objectives: list[str] = []
+    reasons: list[str] = []
+    conflicts = int(v.get("conflicts") or 0)
+    unsupported = int(v.get("unsupported") or 0)
+    if conflicts > 0:
+        reasons.append(f"{conflicts} verification conflict(s)")
+        objectives.append(
+            "Resolve conflicting findings using source evidence. "
+            "Re-read the cited sources and report which claim is supported."
+        )
+    if unsupported > 0 and findings_n > 0 and unsupported / max(1, findings_n) >= 0.4:
+        reasons.append(f"{unsupported} unsupported finding(s)")
+        objectives.append(
+            "Gather additional evidence for claims currently marked "
+            "insufficient. Cite sources; do not restate unsupported claims."
+        )
+    if unresolved:
+        reasons.append(f"{len(unresolved)} unresolved item(s)")
+        for u in unresolved[:2]:
+            objectives.append(f"Investigate unresolved point: {str(u)[:240]}")
+    try:
+        conf = float(v.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        conf = 0.0
+    if conf < 0.4 and findings_n >= 2:
+        reasons.append(f"low verifier confidence ({conf:.2f})")
+        objectives.append(
+            "Independent second look at the original question; focus on evidence the first pass missed."
+        )
+    if not objectives:
+        objectives.append("Independent second look at remaining gaps; cite sources.")
+        reasons.append(f"ΔU={du:.3f}")
+    extra = 1
+    # A second extra worker must clear the threshold on its own.
+    room = min(remaining_nodes - 1, hard_nodes - nodes_so_far - 1)
+    if extra < room:
+        dq2 = estimate_marginal_quality(
+            action="redundant_copy" if independence == "low" else "investigator", **kw
+        )
+        dc2, dl2 = estimate_marginal_cost_latency("investigator")
+        if marginal_utility(dq2, dc2, dl2, s) > EXPANSION_THRESHOLD:
+            extra = 2
+    extra = min(extra, room)
+    if extra < 1:
+        return ExpansionDecision(False, 0, "no room for extra nodes")
+    return ExpansionDecision(True, extra, "; ".join(reasons) or f"ΔU={du:.3f}", objectives[:extra])
+
+
+def should_continue(
+    *,
+    preference: float,
+    allow_expand: bool,
+    objective_met: bool | None,
+    gap: str = "",
+    verification: dict[str, Any] | None = None,
+    findings_n: int = 0,
+    expansions_so_far: int = 0,
+    nodes_so_far: int = 0,
+    remaining_nodes: int = 0,
+    consequence: float = 0.1,
+    unique_sources: int | None = None,
+    last_wave_new_findings: int = 1,
+    concat: bool = False,
+    max_continuations: int | None = None,
+) -> ExpansionDecision:
+    """After a synthesizer: keep going only on an explicit 'no' *and* ΔU.
+
+    A missing OBJECTIVE_MET line stops the run, so nothing idles by accident.
+    """
+    from . import limits
+
+    if concat:
+        return ExpansionDecision(False, 0, "concat merge is terminal")
+    if objective_met is True:
+        return ExpansionDecision(False, 0, "OBJECTIVE_MET: yes")
+    if objective_met is None:
+        return ExpansionDecision(False, 0, "no stop token; auto-stop")
+    if last_wave_new_findings <= 0:
+        return ExpansionDecision(False, 0, "no new evidence this wave")
+    if not allow_expand:
+        return ExpansionDecision(False, 0, "expansion disabled by policy")
+    cap = limits.MAX_EXPANSIONS if max_continuations is None else int(max_continuations)
+    if expansions_so_far >= cap:
+        return ExpansionDecision(False, 0, "continuation cap reached")
+    v = dict(verification or {})
+    gap_s = (gap or "").strip()
+    if gap_s:
+        unresolved = v.get("unresolved") or []
+        unresolved = list(unresolved) if isinstance(unresolved, list) else []
+        unresolved.append(gap_s)
+        v["unresolved"] = unresolved
+        try:
+            conf = float(v.get("confidence") or 0.0)
+        except (TypeError, ValueError):
+            conf = 0.0
+        if conf >= 0.85:
+            # The synthesizer still sees a gap; a high verifier score must not hide it.
+            v["confidence"] = min(conf, 0.5)
+    return choose_expansion(
+        preference=preference,
+        independence="high",
+        allow_expand=allow_expand,
+        verification=v,
+        findings_n=findings_n,
+        expansions_so_far=expansions_so_far,
+        nodes_so_far=nodes_so_far,
+        remaining_nodes=remaining_nodes,
+        consequence=consequence,
+        unique_sources=unique_sources,
+        max_expansions=cap,
+    )
+
+
+_OBJECTIVE_MET_RE = re.compile(
+    # Horizontal whitespace only, so one line never swallows the next.
+    r"^OBJECTIVE_MET:[ \t]*(yes|no)\b(?:[ \t]*[—\-:]*[ \t]*(.*))?$",
+    re.I | re.M,
+)
+
+OBJECTIVE_MET_INSTRUCTION = (
+    "End with one line: OBJECTIVE_MET: yes, or OBJECTIVE_MET: no — <what is still missing>."
+)
+
+
+def parse_objective_met(text: str) -> tuple[bool | None, str]:
+    """Last OBJECTIVE_MET line → (True/False/None, gap). None means missing."""
+    last = None
+    for m in _OBJECTIVE_MET_RE.finditer(text or ""):
+        last = m
+    if last is None:
+        return None, ""
+    return last.group(1).lower() == "yes", (last.group(2) or "").strip()
+
+
+def strip_objective_met(text: str) -> str:
+    cleaned = _OBJECTIVE_MET_RE.sub("", text or "")
+    return re.sub(r"\n{3,}", "\n\n", cleaned).rstrip()

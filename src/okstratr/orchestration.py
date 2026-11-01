@@ -411,7 +411,20 @@ class NodeResult:
 
 Runner = Callable[[PlanNode, dict[str, NodeResult]], NodeResult]
 # Called after each node finishes; may return new nodes to append.
-AfterNode = Callable[[OrchestrationPlan, "RunState", NodeResult], list[PlanNode]]
+AfterNode = Callable[[OrchestrationPlan, "RunState", NodeResult], "list[PlanNode] | Extension"]
+
+
+@dataclass
+class Extension:
+    """Nodes to add as one unit, plus dependency rewiring for unstarted nodes.
+
+    Applied atomically: if the result would break a limit or the plan
+    checks, nothing changes.
+    """
+
+    nodes: list[PlanNode]
+    rewire: dict[str, list[str]] = field(default_factory=dict)
+    reason: str = ""
 
 
 @dataclass
@@ -522,7 +535,12 @@ def run_plan(
             except Exception as exc:  # noqa: BLE001
                 extra = []
                 state.stopped = f"after_node error: {exc}"
-            _append_nodes(plan, extra, bounds)
+            if isinstance(extra, Extension):
+                started = set(state.results) | {nid for nid, _ in running.values()}
+                if _apply_extension(plan, extra, bounds, started):
+                    state.expansions += 1
+            else:
+                _append_nodes(plan, extra, bounds)
         if checkpoint is not None:
             save_checkpoint(checkpoint, state)
 
@@ -598,6 +616,27 @@ def _append_nodes(plan: OrchestrationPlan, extra: list[PlanNode], bounds: Bounds
             continue
         added.append(n)
     return added
+
+
+def _apply_extension(plan: OrchestrationPlan, ext: Extension, bounds: Bounds, started: set[str]) -> bool:
+    if not ext.nodes or len(plan.nodes) + len(ext.nodes) > bounds.max_nodes:
+        return False
+    if any(nid in started for nid in ext.rewire):
+        return False
+    ids = plan.node_map()
+    if any(n.node_id in ids for n in ext.nodes):
+        return False
+    saved = {nid: list(ids[nid].dependencies) for nid in ext.rewire if nid in ids}
+    plan.nodes.extend(ext.nodes)
+    for nid, deps in ext.rewire.items():
+        if nid in ids:
+            ids[nid].dependencies = list(deps)
+    if validate_plan(plan):
+        del plan.nodes[-len(ext.nodes):]
+        for nid, deps in saved.items():
+            ids[nid].dependencies = deps
+        return False
+    return True
 
 
 # ── plan from a utility decision ───────────────────────────────────
@@ -759,3 +798,285 @@ def add_reducers(nodes: list[PlanNode], investigators: list[PlanNode]) -> list[s
         )
     nodes.extend(reducers)
     return [x.node_id for x in reducers]
+
+
+# ── expansion: more investigators while ΔU > threshold ─────────────
+
+
+def _least_used_harnesses(plan: OrchestrationPlan, harnesses: list[str] | None, k: int) -> list[str | None]:
+    """Spread new seats over the harnesses used least so far."""
+    harns = [h for h in (harnesses or []) if h]
+    if not harns:
+        return [None] * k
+    counts = {h: 0 for h in harns}
+    for n in plan.nodes:
+        if n.harness in counts:
+            counts[n.harness] += 1
+    out: list[str | None] = []
+    for _ in range(k):
+        h = min(harns, key=lambda x: (counts[x], harns.index(x)))
+        counts[h] += 1
+        out.append(h)
+    return out
+
+
+def _unique_id(base: str, existing: set[str]) -> str:
+    nid, k = base, 2
+    while nid in existing:
+        nid = f"{base}-{k}"
+        k += 1
+    existing.add(nid)
+    return nid
+
+
+def _investigator(
+    nid: str, objective: str, hint: str, independence: str, harness: str | None, model: str | None
+) -> PlanNode:
+    return PlanNode(
+        node_id=nid,
+        node_type="investigate",
+        objective=objective,
+        role="investigator",
+        independence=independence if independence in INDEPENDENCE_LEVELS else "high",
+        method_hint=hint,
+        retrieval_query=ou.retrieval_query_for(objective, hint),
+        harness=harness,
+        model=model,
+    )
+
+
+def expansion_nodes(
+    plan: OrchestrationPlan,
+    decision: ou.ExpansionDecision,
+    *,
+    harnesses: list[str] | None = None,
+    models_by_harness: dict[str, str] | None = None,
+) -> Extension:
+    """Targeted investigators plus a re-verify; the synthesizer waits on it."""
+    existing = set(plan.node_map())
+    feat = ou.TaskFeatures.from_dict(plan.features) if plan.features else None
+    n_extra = max(1, decision.n_extra)
+    hints = ou.method_hints_for(max(2, n_extra), "high", feat)
+    objectives = list(decision.objectives or [plan.objective] * n_extra)[:n_extra]
+    alloc = _least_used_harnesses(plan, harnesses, len(objectives) + 1)
+    models = models_by_harness or {}
+    indep = str((plan.decision or {}).get("independence") or "high")
+    new: list[PlanNode] = []
+    for i, obj in enumerate(objectives):
+        nid = _unique_id(f"inv-x{len(existing)}", existing)
+        h = alloc[i]
+        new.append(_investigator(nid, obj, hints[i % len(hints)], indep, h, models.get(h) if h else None))
+    prev_verify = next((n for n in reversed(plan.nodes) if n.node_type == "verify"), None)
+    vid = _unique_id("verify-x1", existing)
+    vh = alloc[-1]
+    new.append(
+        PlanNode(
+            node_id=vid,
+            node_type="verify",
+            objective="Re-verify after targeted expansion",
+            dependencies=[n.node_id for n in new] + ([prev_verify.node_id] if prev_verify else []),
+            role="verifier",
+            difficulty="hard",
+            independence="high",
+            output_contract="verification",
+            harness=vh,
+            model=models.get(vh) if vh else None,
+        )
+    )
+    rewire = {n.node_id: [vid] for n in plan.nodes if n.node_type == "synthesize"}
+    return Extension(nodes=new, rewire=rewire, reason=decision.reason)
+
+
+def continue_wave(
+    plan: OrchestrationPlan,
+    decision: ou.ExpansionDecision,
+    *,
+    harnesses: list[str] | None = None,
+    models_by_harness: dict[str, str] | None = None,
+) -> Extension:
+    """A fresh investigate → verify → synthesize subgraph after 'OBJECTIVE_MET: no'.
+
+    It does not hang off the previous synthesizer, so depth stays flat.
+    The newest synthesizer is the run's answer.
+    """
+    existing = set(plan.node_map())
+    wave = 1 + sum(1 for n in plan.nodes if n.node_type == "synthesize")
+    feat = ou.TaskFeatures.from_dict(plan.features) if plan.features else None
+    n_extra = max(1, decision.n_extra)
+    hints = ou.method_hints_for(max(2, n_extra), "high", feat)
+    objectives = list(decision.objectives or [plan.objective] * n_extra)[:n_extra]
+    alloc = _least_used_harnesses(plan, harnesses, len(objectives) + 1)
+    models = models_by_harness or {}
+    new: list[PlanNode] = []
+    for i, obj in enumerate(objectives):
+        nid = _unique_id(f"inv-c{wave}-{i}", existing)
+        h = alloc[i]
+        new.append(_investigator(nid, obj, hints[i % len(hints)], "high", h, models.get(h) if h else None))
+    vid = _unique_id(f"verify-c{wave}", existing)
+    vh = alloc[-1]
+    new.append(
+        PlanNode(
+            node_id=vid,
+            node_type="verify",
+            objective="Re-verify after continue wave",
+            dependencies=[n.node_id for n in new],
+            role="verifier",
+            difficulty="hard",
+            independence="high",
+            output_contract="verification",
+            harness=vh,
+            model=models.get(vh) if vh else None,
+        )
+    )
+    new.append(
+        PlanNode(
+            node_id=_unique_id(f"synth-c{wave}", existing),
+            node_type="synthesize",
+            objective=plan.objective,
+            dependencies=[vid],
+            role="synthesizer",
+            difficulty="hard",
+            independence="low",
+            output_contract="synthesis",
+        )
+    )
+    return Extension(nodes=new, reason=decision.reason)
+
+
+class AdaptiveRun:
+    """``after_node`` hook: collect evidence, expand on ΔU, stop on OBJECTIVE_MET.
+
+    - After each investigator: its findings go into this run's evidence store.
+    - After a verifier: buy targeted investigators + a re-verify while
+      ΔU > threshold (and within the expansion cap and node limit).
+    - After a synthesizer: continue only on an explicit ``OBJECTIVE_MET: no``
+      that still clears ΔU; a missing line stops the run.
+    """
+
+    def __init__(
+        self,
+        plan: OrchestrationPlan,
+        *,
+        store: Any | None = None,
+        harnesses: list[str] | None = None,
+        models_by_harness: dict[str, str] | None = None,
+    ) -> None:
+        from . import evidence as ev
+
+        self.store = store if store is not None else ev.RunEvidence(plan.run_id)
+        self.harnesses = list(harnesses or [])
+        self.models_by_harness = dict(models_by_harness or {})
+        self.expansions = 0
+        self.continuations = 0
+        self.findings_at_last_synth = 0
+        self.stop_reason = ""
+        self.objective_met: bool | None = None
+        self.events: list[dict[str, Any]] = []
+
+    def context_for(self, node: PlanNode) -> str:
+        """Evidence a verifier or synthesizer should read (JSON text)."""
+        return self.store.compact_for_prompt()
+
+    def _consequence(self, plan: OrchestrationPlan) -> float:
+        try:
+            return float((plan.features or {}).get("consequence") or 0.1)
+        except (TypeError, ValueError):
+            return 0.1
+
+    def __call__(self, plan: OrchestrationPlan, state: RunState, res: NodeResult) -> list[PlanNode] | Extension:
+        from . import evidence as ev
+
+        node = plan.node_map().get(res.node_id)
+        if node is None or not res.ok:
+            return []
+        t = node.node_type
+        if t in ("investigate", "execute", "reduce"):
+            if t == "reduce":
+                self.store.mark_replaced(node.dependencies)
+            self.store.append_findings(ev.parse_findings(res.text, node_id=node.node_id))
+            return []
+        bounds = plan.bounds.clamp()
+        remaining = bounds.max_nodes - len(plan.nodes)
+        if t == "verify":
+            rec = self.store.append_verification(ev.parse_verification(res.text, node_id=node.node_id))
+            synth_waiting = any(
+                n.node_type == "synthesize" and n.node_id not in state.results and node.node_id in n.dependencies
+                for n in plan.nodes
+            )
+            if not synth_waiting:
+                return []
+            exp = ou.choose_expansion(
+                preference=plan.preference,
+                independence=str((plan.decision or {}).get("independence") or "medium"),
+                allow_expand=plan.allow_expand,
+                verification=rec.to_dict(),
+                findings_n=len(self.store.candidates()),
+                expansions_so_far=self.expansions,
+                nodes_so_far=len(plan.nodes),
+                remaining_nodes=remaining,
+                consequence=self._consequence(plan),
+                max_expansions=bounds.max_expansions,
+                max_nodes=bounds.max_nodes,
+            )
+            self.events.append({"after": node.node_id, "kind": "expand", "expand": exp.expand, "reason": exp.reason})
+            if not exp.expand:
+                return []
+            self.expansions += 1
+            return expansion_nodes(
+                plan, exp, harnesses=self.harnesses, models_by_harness=self.models_by_harness
+            )
+        if t == "synthesize":
+            met, gap = ou.parse_objective_met(res.text)
+            self.objective_met = met
+            v = self.store.latest_verification()
+            n_findings = len(self.store.findings)
+            wave_new = n_findings if self.findings_at_last_synth == 0 else n_findings - self.findings_at_last_synth
+            cont = ou.should_continue(
+                preference=plan.preference,
+                allow_expand=plan.allow_expand,
+                objective_met=met,
+                gap=gap,
+                verification=v.to_dict() if v else None,
+                findings_n=max(len(self.store.candidates()), n_findings),
+                expansions_so_far=self.continuations,
+                nodes_so_far=len(plan.nodes),
+                remaining_nodes=remaining,
+                consequence=self._consequence(plan),
+                unique_sources=self.store.unique_source_count(),
+                last_wave_new_findings=wave_new,
+                concat=node.output_contract == "concat",
+                max_continuations=bounds.max_expansions,
+            )
+            self.events.append({"after": node.node_id, "kind": "continue", "expand": cont.expand, "reason": cont.reason})
+            if not cont.expand:
+                self.stop_reason = cont.reason
+                return []
+            self.continuations += 1
+            self.findings_at_last_synth = n_findings
+            return continue_wave(plan, cont, harnesses=self.harnesses, models_by_harness=self.models_by_harness)
+        return []
+
+
+def prompt_for(node: PlanNode, inputs: dict[str, NodeResult], context: str = "") -> str:
+    """Plain worker prompt for a plan node (used by harness runners)."""
+    parts = [node.objective.strip()]
+    if node.method_hint:
+        parts.append(f"Method: {node.method_hint}")
+    if node.retrieval_query:
+        parts.append(f"Start your lookup with: {node.retrieval_query}")
+    if node.node_type == "investigate":
+        parts.append('Reply with JSON: {"findings": [{"claim": ..., "evidence": [{"source": ...}], "confidence": 0-1}]}')
+    elif node.node_type == "verify":
+        parts.append(
+            'Reply with JSON: {"classifications": [{"finding_id": ..., "verdict": '
+            '"supported|contradicted|insufficient|inconsistent"}], "confidence": 0-1, "unresolved": []}'
+        )
+    elif node.node_type == "synthesize":
+        parts.append("Use only supported findings.")
+        parts.append(ou.OBJECTIVE_MET_INSTRUCTION)
+    if context:
+        parts.append("Evidence so far:\n" + context)
+    for nid, r in inputs.items():
+        if r.text:
+            parts.append(f"From {nid}:\n{r.text[:4000]}")
+    return "\n\n".join(p for p in parts if p)
