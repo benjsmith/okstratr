@@ -83,6 +83,8 @@ def clamp_effort(effort: float | None) -> float:
 
 
 def utility_weights(effort: float | None) -> dict[str, float]:
+    from . import orchestration_utility as ou
+
     e = clamp_effort(effort)
     return {
         "effort": e,
@@ -91,6 +93,9 @@ def utility_weights(effort: float | None) -> dict[str, float]:
         "cost_unit": COST_UNIT,
         "lambda_n": LAMBDA_N,
         "mu_effort": MU_EFFORT,
+        # Orchestration utility weights (U = Q − λc·C − λl·L).
+        "lambda_c": ou.cost_weight(e),
+        "lambda_l": ou.latency_weight(e),
     }
 
 
@@ -265,7 +270,10 @@ def marginal_utility(
         role_id, granted, model_hint=model_hint, granted_hints=granted_hints
     )
     c_scaled = COST_UNIT * (1.0 + LAMBDA_N * n_non_cos) / (1.0 + MU_EFFORT * w["effort"])
-    delta = w["w_quality"] * i_m - w["w_cost"] * c_scaled
+    # Cost weight never reaches zero, so even Maximum refuses a hire that
+    # adds no independent value.
+    w_cost = max(w["w_cost"], w["lambda_c"])
+    delta = w["w_quality"] * i_m - w_cost * c_scaled
     return {
         "role": role_id,
         "I_marginal": i_m,
