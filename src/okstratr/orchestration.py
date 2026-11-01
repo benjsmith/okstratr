@@ -1057,6 +1057,54 @@ class AdaptiveRun:
         return []
 
 
+def run_telemetry(state: RunState, run: AdaptiveRun | None = None, *, explored: bool = False) -> dict[str, Any]:
+    """Outcome numbers for the learner (no transcripts, no prompts)."""
+    plan = state.plan
+    synths = [n for n in plan.nodes if n.node_type == "synthesize"]
+    completed = bool(synths) and any(n.node_id in state.completed for n in synths)
+    if not synths:
+        completed = bool(state.results) and not state.failed
+    tel: dict[str, Any] = {
+        "completed": completed,
+        "tokens": state.tokens(),
+        "latency_s": state.critical_path_s(),
+        "final_nodes": len(plan.nodes),
+        "failed_nodes": len(state.failed),
+        "explored": bool(explored),
+    }
+    if run is not None:
+        store = run.store
+        v = store.latest_verification()
+        tel.update(
+            candidate_findings_n=len(store.candidates()),
+            findings_n=len(store.findings),
+            unsupported_rejected=store.unsupported_count(),
+            verification_conflicts=store.conflict_count(),
+            verifier_confidence=(v.confidence if v else None),
+            unique_sources=store.unique_source_count(),
+            expansions=run.expansions,
+            continuations=run.continuations,
+            objective_met=run.objective_met,
+        )
+    return tel
+
+
+def record_run(
+    state: RunState,
+    run: AdaptiveRun | None = None,
+    *,
+    desk_id: str | None = None,
+) -> dict[str, Any]:
+    """Feed one finished run back into this desk's recipe learner."""
+    from . import bandit
+
+    decision = state.plan.decision or {}
+    feat = ou.TaskFeatures.from_dict(state.plan.features or decision.get("features") or {})
+    arm = str(decision.get("arm_id") or "single")
+    tel = run_telemetry(state, run, explored=bool(decision.get("explored")))
+    return bandit.record_recipe_outcome(arm, feat, tel, desk_id=desk_id)
+
+
 def prompt_for(node: PlanNode, inputs: dict[str, NodeResult], context: str = "") -> str:
     """Plain worker prompt for a plan node (used by harness runners)."""
     parts = [node.objective.strip()]

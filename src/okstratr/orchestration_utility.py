@@ -1102,3 +1102,135 @@ def parse_objective_met(text: str) -> tuple[bool | None, str]:
 def strip_objective_met(text: str) -> str:
     cleaned = _OBJECTIVE_MET_RE.sub("", text or "")
     return re.sub(r"\n{3,}", "\n\n", cleaned).rstrip()
+
+
+# ---------------------------------------------------------------------------
+# Learning: realized quality, recipe keys, and the exploit/explore choice
+# ---------------------------------------------------------------------------
+
+
+def quality_proxy(telemetry: dict[str, Any]) -> float:
+    """Quality from what the run produced, not from agent agreement.
+
+    Raw node count is not quality. Verifier confidence counts only when
+    unsupported claims are not dominating. More nodes than distinct sources
+    is penalised so the learner does not conclude bigger swarms win.
+    Provider outages are not quality.
+    """
+    if telemetry.get("cancelled"):
+        return 0.0
+    q = 0.55
+    if telemetry.get("completed"):
+        q += 0.2
+    unsupported = int(telemetry.get("unsupported_rejected") or 0)
+    findings = max(1, int(
+        telemetry.get("candidate_findings_n") or telemetry.get("findings_n") or 1,
+    ))
+    vc = telemetry.get("verifier_confidence")
+    try:
+        if vc is not None and unsupported / findings <= 0.4:
+            q += 0.15 * max(0.0, min(1.0, float(vc)))
+    except (TypeError, ValueError):
+        pass
+    q -= 0.25 * min(1.0, unsupported / findings)
+    conflicts = int(telemetry.get("verification_conflicts") or 0)
+    q -= 0.15 * min(1.0, conflicts / findings)
+    if telemetry.get("retry_after"):
+        q -= 0.25
+    if telemetry.get("deterministic_ok"):
+        q += 0.2
+    unique_sources = telemetry.get("unique_sources")
+    nodes = int(telemetry.get("final_nodes") or 0)
+    if unique_sources is not None and nodes > 1:
+        try:
+            us = int(unique_sources)
+        except (TypeError, ValueError):
+            us = -1
+        if us >= 0 and us < max(1, nodes - 1):
+            q -= 0.08 * min(1.0, (nodes - 1 - us) / max(1, nodes))
+
+    def _count(key: str) -> int:
+        try:
+            return max(0, int(telemetry.get(key) or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    q += 0.05 * min(4, _count("pages_landed"))
+    if _count("reports_landed"):
+        q += 0.08
+    q += 0.04 * min(4, _count("reused_sources"))
+    return max(0.0, min(1.2, q))
+
+
+def recipe_key(features: TaskFeatures) -> str:
+    """Learner key: task type plus the coarse feature bucket."""
+    task_type = (features.task_type or "").strip().lower() or "auto"
+    return f"{task_type}|{features.bucket()}"
+
+
+def exploration_rate(features: TaskFeatures, arms: dict[str, Any] | None = None) -> float:
+    """ε for one decision: small, lower when stakes are high or data is ample."""
+    s = features.preference
+    base = 0.04 + 0.08 * s
+    if features.consequence >= 0.5:
+        base *= 0.35
+    if features.prompt_len < 80 and s < 0.4:
+        base *= 1.4
+    n = sum(int(a.get("n") or 0) for a in (arms or {}).values() if isinstance(a, dict))
+    if n >= 8:
+        base *= 0.5
+    if n >= 20:
+        base *= 0.5
+    return max(0.01, min(0.12, base))
+
+
+def decide(
+    features: TaskFeatures,
+    *,
+    arms: dict[str, Any] | None = None,
+    effort: float | None = None,
+    rng: Any | None = None,
+    explore: bool = True,
+) -> PolicyDecision:
+    """Utility prior, nudged by what worked for this key; explore neighbours only.
+
+    ``arms`` maps recipe id → stats (``n``, ``sum_reward``,
+    ``sum_quality_per_node``). Learning never raises the hire_cap ceiling.
+    """
+    import random as _random
+
+    prior = choose_initial_policy(features, effort=effort)
+    if not arms:
+        arms = {}
+    rng = rng or _random.Random()
+    valid = {c.policy_id for c in candidates_within_ceiling(features, effort)}
+    valid.add(prior.arm_id)
+    best_arm, best_score = prior.arm_id, None
+    for arm, stats in arms.items():
+        if not isinstance(stats, dict) or arm not in valid:
+            continue
+        n = int(stats.get("n") or 0)
+        if n < 2:
+            continue
+        mean = float(stats.get("sum_reward") or 0.0) / n
+        qpn = float(stats.get("sum_quality_per_node") or 0.0) / n
+        score = mean + 0.1 * qpn
+        if best_score is None or score > best_score:
+            best_arm, best_score = arm, score
+    chosen = prior
+    if best_arm != prior.arm_id:
+        chosen = decision_for_arm(best_arm, features, reason=f"learned {best_arm} for similar tasks; {prior.reason}") or prior
+        chosen.candidates = prior.candidates
+    # Do not explore extra computation on easy work.
+    if chosen.arm_id == "single" and features.difficulty < 0.4 and not features.research:
+        return chosen
+    if explore and rng.random() < exploration_rate(features, arms):
+        neighbours = [a for a in NEIGHBORS.get(chosen.arm_id, ("single",)) if a in valid]
+        if neighbours:
+            alt = rng.choice(neighbours)
+            explored = decision_for_arm(alt, features, reason=f"explore {alt} (near {chosen.arm_id}); {chosen.reason}")
+            if explored is not None:
+                explored.explored = True
+                explored.candidates = prior.candidates
+                return explored
+    return chosen

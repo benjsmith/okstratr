@@ -17,6 +17,10 @@ Info-theory flavored utility (documented in docs/DESK-KERNEL.md):
     c_scaled = COST_UNIT · (1 + λ · n_non_cos) / (1 + μ · e)
                (effort scales down effective cost so high effort buys more)
 
+Recipe learning (``recipes`` section): per desk, per task key, per recipe,
+the mean realized utility of past runs. It only nudges the utility prior and
+never lifts hire_cap(e). Files without the section load as before.
+
 Hard ceiling remains hire_cap(e). Bandit arms are hire policies
 (N workers × model-diversity on/off × role-set key); UCB1 selects among
 arms feasible under the cap. Rewards: done=+1, failed/timeout=−1,
@@ -128,6 +132,8 @@ def _default_store() -> dict[str, Any]:
         "version": 1,
         "global": {"arms": arms, "last_decision": None, "total_pulls": 0},
         "desks": {},
+        # Recipe learning: scope (desk id or "_global") → key → arms → stats.
+        "recipes": {},
     }
 
 
@@ -151,6 +157,7 @@ def _load(*, force: bool = False) -> dict[str, Any]:
                             bucket,
                         )
                 store["desks"] = desks
+                store["recipes"] = _clean_recipes(raw.get("recipes"))
         except (OSError, json.JSONDecodeError):
             pass
     _CACHE = store
@@ -491,8 +498,153 @@ def snapshot(effort: float | None = None, *, desk_id: str | None = None) -> dict
         "active_arm": bucket.get("active_arm"),
         "total_pulls": bucket.get("total_pulls") or 0,
         "desk_id": desk_id,
+        "recipes": recipe_snapshot(desk_id=desk_id)["recipes"],
         "formula": (
             "ΔU = w_quality·I_marginal − w_cost·c_scaled > 0; "
             "w_quality=e, w_cost=1−e; c_scaled=COST_UNIT·(1+λn)/(1+μe)"
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# Recipe learning (per desk → task key → recipe)
+# ---------------------------------------------------------------------------
+
+GLOBAL_SCOPE = "_global"
+_STAT_KEYS = (
+    "sum_reward", "sum_quality", "sum_cost", "sum_latency", "sum_nodes",
+    "sum_quality_per_node",
+)
+
+
+def _empty_recipe_stats() -> dict[str, Any]:
+    out: dict[str, Any] = {"n": 0}
+    out.update({k: 0.0 for k in _STAT_KEYS})
+    return out
+
+
+def _clean_recipes(raw: Any) -> dict[str, Any]:
+    """Keep well-formed recipe stats; drop anything malformed."""
+    out: dict[str, Any] = {}
+    if not isinstance(raw, dict):
+        return out
+    for scope, keys in raw.items():
+        if not isinstance(keys, dict):
+            continue
+        sc: dict[str, Any] = {}
+        for key, rec in keys.items():
+            arms = (rec or {}).get("arms") if isinstance(rec, dict) else None
+            if not isinstance(arms, dict):
+                continue
+            clean_arms: dict[str, Any] = {}
+            for aid, st in arms.items():
+                if not isinstance(st, dict):
+                    continue
+                cur = _empty_recipe_stats()
+                try:
+                    cur["n"] = max(0, int(st.get("n") or 0))
+                    for k in _STAT_KEYS:
+                        cur[k] = float(st.get(k) or 0.0)
+                except (TypeError, ValueError):
+                    continue
+                clean_arms[str(aid)] = cur
+            sc[str(key)] = {"arms": clean_arms}
+        out[str(scope)] = sc
+    return out
+
+
+def _scope(desk_id: str | None) -> str:
+    return str(desk_id) if desk_id else GLOBAL_SCOPE
+
+
+def recipe_arms(features: Any, *, desk_id: str | None = None) -> dict[str, Any]:
+    """Stats for this desk and task key only (never another desk's)."""
+    from . import orchestration_utility as ou
+
+    store = _load()
+    rec = ((store.get("recipes") or {}).get(_scope(desk_id)) or {}).get(ou.recipe_key(features)) or {}
+    return dict(rec.get("arms") or {})
+
+
+def choose_recipe(
+    features: Any,
+    *,
+    desk_id: str | None = None,
+    effort: float | None = None,
+    rng: Any | None = None,
+    explore: bool = True,
+) -> Any:
+    """Recipe for this task: utility prior nudged by this desk's history."""
+    from . import orchestration_utility as ou
+
+    return ou.decide(
+        features, arms=recipe_arms(features, desk_id=desk_id), effort=effort, rng=rng, explore=explore,
+    )
+
+
+def record_recipe_outcome(
+    arm_id: str,
+    features: Any,
+    telemetry: dict[str, Any] | None = None,
+    *,
+    desk_id: str | None = None,
+) -> dict[str, Any]:
+    """Reward = realized utility of the run at the run's own effort."""
+    from . import orchestration_utility as ou
+
+    tel = dict(telemetry or {})
+    quality = ou.quality_proxy(tel)
+    tokens = float(tel.get("tokens") or 0)
+    latency = float(tel.get("latency_s") or 0)
+    reward = ou.realized_utility(
+        quality=quality, cost_tokens=tokens, latency_s=latency, preference=features.preference,
+    )
+    nodes = max(1, int(tel.get("final_nodes") or 1))
+    store = _load(force=True)
+    recipes = store.setdefault("recipes", {})
+    key = ou.recipe_key(features)
+    rec = recipes.setdefault(_scope(desk_id), {}).setdefault(key, {"arms": {}})
+    stats = rec.setdefault("arms", {}).setdefault(str(arm_id), _empty_recipe_stats())
+    stats["n"] = int(stats.get("n") or 0) + 1
+    stats["sum_reward"] = float(stats.get("sum_reward") or 0.0) + reward
+    stats["sum_quality"] = float(stats.get("sum_quality") or 0.0) + quality
+    stats["sum_cost"] = float(stats.get("sum_cost") or 0.0) + tokens
+    stats["sum_latency"] = float(stats.get("sum_latency") or 0.0) + latency
+    stats["sum_nodes"] = float(stats.get("sum_nodes") or 0.0) + nodes
+    stats["sum_quality_per_node"] = float(stats.get("sum_quality_per_node") or 0.0) + quality / nodes
+    _save(store)
+    return {
+        "ok": True,
+        "arm_id": str(arm_id),
+        "key": key,
+        "desk_id": desk_id,
+        "quality": quality,
+        "reward": reward,
+        "n": stats["n"],
+        "explored": bool(tel.get("explored")),
+    }
+
+
+def reset_recipes(desk_id: str | None = None) -> dict[str, Any]:
+    """Forget recipe history for one desk (or the no-desk scope)."""
+    store = _load(force=True)
+    removed = (store.setdefault("recipes", {})).pop(_scope(desk_id), None)
+    _save(store)
+    return {"ok": True, "desk_id": desk_id, "removed_keys": len(removed or {})}
+
+
+def recipe_snapshot(*, desk_id: str | None = None) -> dict[str, Any]:
+    store = _load()
+    scope = (store.get("recipes") or {}).get(_scope(desk_id)) or {}
+    rows = []
+    for key, rec in sorted(scope.items()):
+        for aid, st in sorted((rec.get("arms") or {}).items()):
+            n = int(st.get("n") or 0)
+            rows.append({
+                "key": key,
+                "recipe": aid,
+                "n": n,
+                "mean_reward": (float(st.get("sum_reward") or 0.0) / n) if n else 0.0,
+                "mean_quality": (float(st.get("sum_quality") or 0.0) / n) if n else 0.0,
+            })
+    return {"desk_id": desk_id, "recipes": rows}

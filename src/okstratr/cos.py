@@ -298,8 +298,13 @@ def plan_for(
     models_by_harness: dict[str, str] | None = None,
     desk_id: str | None = None,
     run_id: str | None = None,
+    task_type: str = "",
 ) -> tuple[Any, Any]:
-    """Pick a recipe by utility and build its plan → (decision, plan)."""
+    """Pick a recipe by utility and build its plan → (decision, plan).
+
+    Desk runs use what this desk has learned but do not explore: desk panes
+    do not report the structured outcomes exploration would learn from.
+    """
     from . import bandit, orchestration, orchestration_utility as ou
 
     harns = [
@@ -314,10 +319,12 @@ def plan_for(
             if m:
                 models_by[h] = m
     e = bandit.clamp_effort(effort)
-    feat = ou.extract_features(objective, preference=e, provider_diversity=len(harns) or 1)
-    choose = getattr(bandit, "choose_recipe", None)
-    decision = choose(feat, desk_id=desk_id, effort=e) if choose is not None else None
-    if decision is None:
+    feat = ou.extract_features(
+        objective, preference=e, provider_diversity=len(harns) or 1, task_type=task_type
+    )
+    try:
+        decision = bandit.choose_recipe(feat, desk_id=desk_id, effort=e, explore=False)
+    except Exception:  # noqa: BLE001 — a bad bandit file must not block planning
         decision = ou.choose_initial_policy(feat, effort=e)
     plan = orchestration.plan_from_decision(
         objective, decision, harnesses=harns, models_by_harness=models_by, run_id=run_id
@@ -519,7 +526,9 @@ def break_down(
             (n.run_id for n in g.nodes.values() if n.run_id and n.role in _AUTO_ROLES), None
         )
         try:
-            decision, plan = plan_for(obj, effort=effort, desk_id=desk_id, run_id=prior_run)
+            decision, plan = plan_for(
+                obj, effort=effort, desk_id=desk_id, run_id=prior_run, task_type=resolved or ""
+            )
             steps = steps_from_plan(plan)
         except Exception:  # noqa: BLE001 — never block a desk on planning
             decision, plan = None, None
