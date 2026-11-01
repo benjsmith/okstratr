@@ -30,9 +30,23 @@ class Node:
     """Pin this seat to a harness id (multi-harness fan-out)."""
     prefer_model: str | None = None
     """Pin this seat to a model id for the preferred harness."""
+    node_type: str | None = None
+    """Typed role in an orchestration plan (investigate, verify, …)."""
+    run_id: str | None = None
+    """Orchestration run this node belongs to (its own evidence store)."""
+    method_hint: str = ""
+    """Method this seat should use so sibling seats stay independent."""
+    retrieval_query: str = ""
+    """Narrow query for this seat's own lookups."""
+    independence: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        # Keep dag.json in its old shape when the plan fields are unused.
+        for k in _OPTIONAL_FIELDS:
+            if not d.get(k):
+                d.pop(k, None)
+        return d
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Node:
@@ -56,7 +70,15 @@ class Node:
             role=str(data["role"]) if data.get("role") else None,
             prefer_harness=str(prefer_harness).strip().lower() if prefer_harness else None,
             prefer_model=str(prefer_model).strip() if prefer_model else None,
+            node_type=str(data["node_type"]) if data.get("node_type") else None,
+            run_id=str(data["run_id"]) if data.get("run_id") else None,
+            method_hint=str(data.get("method_hint") or ""),
+            retrieval_query=str(data.get("retrieval_query") or ""),
+            independence=str(data["independence"]) if data.get("independence") else None,
         )
+
+
+_OPTIONAL_FIELDS = ("node_type", "run_id", "method_hint", "retrieval_query", "independence")
 
 
 class CycleError(ValueError):
@@ -122,6 +144,11 @@ class Dag:
         role: str | None = None,
         prefer_harness: str | None = None,
         prefer_model: str | None = None,
+        node_type: str | None = None,
+        run_id: str | None = None,
+        method_hint: str = "",
+        retrieval_query: str = "",
+        independence: str | None = None,
         save: bool = True,
     ) -> Node:
         now = time()
@@ -140,6 +167,11 @@ class Dag:
             role=role,
             prefer_harness=(prefer_harness or "").strip().lower() or None,
             prefer_model=(prefer_model or "").strip() or None,
+            node_type=node_type or None,
+            run_id=run_id or None,
+            method_hint=method_hint or "",
+            retrieval_query=retrieval_query or "",
+            independence=independence or None,
         )
         self.nodes[node_id] = n
         self.refresh_ready(save=False)
