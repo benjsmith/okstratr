@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Effort now picks the orchestration shape.** `/auto` and `/work` choose
+  between a single worker and several investigators from the effort slider
+  and the task, within the hire cap. Trivial tasks no longer fan out just
+  because several harnesses are installed.
+- **Findings are verified before the answer.** Each run keeps its own
+  findings; only verified ones are used. Runs add targeted follow-up work
+  while it is worth the cost and stop when nothing new turns up.
+- **Learned shapes per desk and task type** are stored in a new `recipes`
+  section of `bandit.json`. Existing `bandit.json` and `dag.json` files load
+  unchanged; older okstratr versions ignore the new section.
+- **Offline benchmark:** `python -m okstratr.orchestration_bench` compares
+  the new shapes with the old fixed template on fake harnesses.
+
 ## v0.2.1 — 2026-10-13
 
 **Migration:** none. **Breaking:** the observer and panel no longer have desk

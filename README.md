@@ -130,6 +130,7 @@ Schedule / desk progress uses **path-native** I/O via `okstratr.host_notify` v1 
 - **Schedule parse**: named cadences + intervals
 - **Persistent DAG** + **blackboard**
 - **Planner** kind-aware templates; **Herdr** `herdr run-ready` finite jobs
+- **Orchestration shape follows effort**: `/auto` and `/work` pick how many investigators to run (or a single strong worker) from the effort slider and the task, never above the hire cap; findings are checked before they reach the answer, and the plan grows only while more work is worth it. The kernel learns which shape works best per desk and task type. Offline comparison with the old fixed template: `python -m okstratr.orchestration_bench`
 - CLI: `status | start|restart|shutdown | desk … | web | seat (deprecated) | cos | herdr | dag | bb | serve | observer`
 - HTTP: `/health`, `/api/status`, `/api/desk/*`, `/observer/`, `/api/seat` (deprecated alias), …
 - **Observer panel** is the primary visual: standing rail, AGENT SPACE canvas, blackboard — **no query bar**
