@@ -434,6 +434,8 @@ class RunState:
     expansions: int = 0
     stopped: str = ""
     started_at: float = 0.0
+    # Node added mid-run → the node whose result added it (it could not start earlier).
+    added_after: dict[str, str] = field(default_factory=dict)
 
     @property
     def completed(self) -> set[str]:
@@ -448,7 +450,12 @@ class RunState:
 
     def critical_path_s(self) -> float:
         lat = {k: r.latency_s for k, r in self.results.items()}
-        return ou.critical_path_latency(self.plan.nodes, lambda n: lat.get(n.node_id, 0.0))
+        after = self.added_after
+        return ou.critical_path_latency(
+            self.plan.nodes,
+            lambda n: lat.get(n.node_id, 0.0),
+            deps_of=lambda n: list(n.dependencies) + ([after[n.node_id]] if n.node_id in after else []),
+        )
 
     def final(self) -> NodeResult | None:
         """Result of the last-finished synthesize node, if any."""
@@ -465,6 +472,7 @@ class RunState:
             "results": {k: r.to_dict() for k, r in self.results.items()},
             "expansions": self.expansions,
             "stopped": self.stopped,
+            "added_after": dict(self.added_after),
         }
 
     @classmethod
@@ -475,6 +483,9 @@ class RunState:
             results={k: NodeResult.from_dict(v) for k, v in res.items() if isinstance(v, dict)},
             expansions=int(raw.get("expansions") or 0),
             stopped=str(raw.get("stopped") or ""),
+            added_after={
+                str(k): str(v) for k, v in (raw.get("added_after") or {}).items()
+            } if isinstance(raw.get("added_after"), dict) else {},
         )
 
 
@@ -539,8 +550,11 @@ def run_plan(
                 started = set(state.results) | {nid for nid, _ in running.values()}
                 if _apply_extension(plan, extra, bounds, started):
                     state.expansions += 1
+                    for n in extra.nodes:
+                        state.added_after[n.node_id] = res.node_id
             else:
-                _append_nodes(plan, extra, bounds)
+                for n in _append_nodes(plan, extra, bounds):
+                    state.added_after[n.node_id] = res.node_id
         if checkpoint is not None:
             save_checkpoint(checkpoint, state)
 
@@ -804,19 +818,32 @@ def add_reducers(nodes: list[PlanNode], investigators: list[PlanNode]) -> list[s
 
 
 def _least_used_harnesses(plan: OrchestrationPlan, harnesses: list[str] | None, k: int) -> list[str | None]:
-    """Spread new seats over the harnesses used least so far."""
+    """Spread new seats over the harnesses used least so far.
+
+    The first ``k - 1`` seats are investigators: they go to the harnesses
+    that have investigated least (a harness that only verified is a fresh
+    source). The last seat is the verifier: it prefers a harness none of the
+    new investigators use.
+    """
     harns = [h for h in (harnesses or []) if h]
     if not harns:
         return [None] * k
-    counts = {h: 0 for h in harns}
+    inv_counts = {h: 0 for h in harns}
+    all_counts = {h: 0 for h in harns}
     for n in plan.nodes:
-        if n.harness in counts:
-            counts[n.harness] += 1
+        if n.harness in all_counts:
+            all_counts[n.harness] += 1
+            if n.node_type in ("investigate", "execute"):
+                inv_counts[n.harness] += 1
     out: list[str | None] = []
-    for _ in range(k):
-        h = min(harns, key=lambda x: (counts[x], harns.index(x)))
-        counts[h] += 1
+    for _ in range(max(0, k - 1)):
+        h = min(harns, key=lambda x: (inv_counts[x], all_counts[x], harns.index(x)))
+        inv_counts[h] += 1
+        all_counts[h] += 1
         out.append(h)
+    if k >= 1:
+        fresh = [h for h in harns if h not in out] or harns
+        out.append(min(fresh, key=lambda x: (all_counts[x], harns.index(x))))
     return out
 
 
@@ -851,8 +878,13 @@ def expansion_nodes(
     *,
     harnesses: list[str] | None = None,
     models_by_harness: dict[str, str] | None = None,
+    after: str | None = None,
 ) -> Extension:
-    """Targeted investigators plus a re-verify; the synthesizer waits on it."""
+    """Targeted investigators plus a re-verify; the synthesizer waits on it.
+
+    ``after`` is the verifier that asked for more; only synthesizers waiting
+    on it are rewired (finished ones from earlier waves are left alone).
+    """
     existing = set(plan.node_map())
     feat = ou.TaskFeatures.from_dict(plan.features) if plan.features else None
     n_extra = max(1, decision.n_extra)
@@ -866,7 +898,10 @@ def expansion_nodes(
         nid = _unique_id(f"inv-x{len(existing)}", existing)
         h = alloc[i]
         new.append(_investigator(nid, obj, hints[i % len(hints)], indep, h, models.get(h) if h else None))
-    prev_verify = next((n for n in reversed(plan.nodes) if n.node_type == "verify"), None)
+    nodes_by_id = plan.node_map()
+    prev_verify = nodes_by_id.get(after) if after else None
+    if prev_verify is None:
+        prev_verify = next((n for n in reversed(plan.nodes) if n.node_type == "verify"), None)
     vid = _unique_id("verify-x1", existing)
     vh = alloc[-1]
     new.append(
@@ -883,7 +918,11 @@ def expansion_nodes(
             model=models.get(vh) if vh else None,
         )
     )
-    rewire = {n.node_id: [vid] for n in plan.nodes if n.node_type == "synthesize"}
+    rewire = {
+        n.node_id: [vid]
+        for n in plan.nodes
+        if n.node_type == "synthesize" and (prev_verify is None or prev_verify.node_id in n.dependencies)
+    }
     return Extension(nodes=new, rewire=rewire, reason=decision.reason)
 
 
@@ -969,6 +1008,9 @@ class AdaptiveRun:
         self.expansions = 0
         self.continuations = 0
         self.findings_at_last_synth = 0
+        self.claims_at_last_expansion: int | None = None
+        self.claims_at_last_synth: int | None = None
+        self.stalled = False
         self.stop_reason = ""
         self.objective_met: bool | None = None
         self.events: list[dict[str, Any]] = []
@@ -976,6 +1018,10 @@ class AdaptiveRun:
     def context_for(self, node: PlanNode) -> str:
         """Evidence a verifier or synthesizer should read (JSON text)."""
         return self.store.compact_for_prompt()
+
+    def unique_claims(self) -> int:
+        """Distinct claims so far; repeats of the same claim are not new work."""
+        return len({" ".join(f.claim.lower().split()) for f in self.store.findings if f.claim.strip()})
 
     def _consequence(self, plan: OrchestrationPlan) -> float:
         try:
@@ -1005,6 +1051,13 @@ class AdaptiveRun:
             )
             if not synth_waiting:
                 return []
+            if self.claims_at_last_expansion is not None and self.unique_claims() <= self.claims_at_last_expansion:
+                self.stalled = True
+                self.events.append(
+                    {"after": node.node_id, "kind": "expand", "expand": False,
+                     "reason": "last expansion found nothing new"}
+                )
+                return []
             exp = ou.choose_expansion(
                 preference=plan.preference,
                 independence=str((plan.decision or {}).get("independence") or "medium"),
@@ -1022,15 +1075,24 @@ class AdaptiveRun:
             if not exp.expand:
                 return []
             self.expansions += 1
+            self.claims_at_last_expansion = self.unique_claims()
             return expansion_nodes(
-                plan, exp, harnesses=self.harnesses, models_by_harness=self.models_by_harness
+                plan, exp, harnesses=self.harnesses, models_by_harness=self.models_by_harness,
+                after=node.node_id,
             )
         if t == "synthesize":
             met, gap = ou.parse_objective_met(res.text)
             self.objective_met = met
+            if met is False and self.stalled:
+                # More of the same already came back empty; another wave would too.
+                self.stop_reason = "last expansion found nothing new"
+                self.events.append({"after": node.node_id, "kind": "continue", "expand": False,
+                                    "reason": self.stop_reason})
+                return []
             v = self.store.latest_verification()
             n_findings = len(self.store.findings)
-            wave_new = n_findings if self.findings_at_last_synth == 0 else n_findings - self.findings_at_last_synth
+            claims = self.unique_claims()
+            wave_new = claims if self.claims_at_last_synth is None else claims - self.claims_at_last_synth
             cont = ou.should_continue(
                 preference=plan.preference,
                 allow_expand=plan.allow_expand,
@@ -1053,6 +1115,7 @@ class AdaptiveRun:
                 return []
             self.continuations += 1
             self.findings_at_last_synth = n_findings
+            self.claims_at_last_synth = claims
             return continue_wave(plan, cont, harnesses=self.harnesses, models_by_harness=self.models_by_harness)
         return []
 
