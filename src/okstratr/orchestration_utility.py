@@ -808,3 +808,97 @@ def critical_path_latency(
         return memo[nid]
 
     return max((finish(i, frozenset()) for i in items), default=0.0)
+
+
+# ---------------------------------------------------------------------------
+# Independent slices: method hints, retrieval queries, decomposition
+# ---------------------------------------------------------------------------
+
+METHOD_HINTS = (
+    "primary-sources: start from the original documents; cite each one.",
+    "related-material: follow links and references outward from the obvious sources.",
+    "corroboration: find a second, independent source for each key claim.",
+    "contradiction-seeking: look for claims that disagree; record each conflict.",
+)
+
+METHOD_HINTS_FINANCE = (
+    "filings: material changes in 10-K/10-Q/8-K; going concern, restatements, auditor changes.",
+    "earnings: EPS/revenue vs consensus, guidance, tone vs prior period; cite the transcript.",
+    "insider/13F: cluster buys/sells and new institutional positions; cite the form.",
+    "sector: competitor, supplier, and regulatory moves that reprice the whole group.",
+    "confirmation: a claim is high-conviction only with 2+ independent evidence paths.",
+)
+
+METHOD_HINTS_SCIENCE = (
+    "prior-art: existing notes and sources for the hypothesis and known failure modes.",
+    "protocol: methods, controls, instruments, and what would falsify the claim.",
+    "measurement: data, units, replicates, and provenance of each number.",
+    "contradiction-seeking: results that disagree with the hypothesis or each other.",
+)
+
+_RETRIEVAL_EXTRA = {
+    "primary-sources": "source original",
+    "related-material": "related references linked",
+    "corroboration": "independent corroboration",
+    "contradiction-seeking": "contradict disagree conflict",
+    "filings": "10-K 10-Q 8-K filing",
+    "earnings": "earnings EPS guidance transcript",
+    "insider/13f": "Form 4 13F insider",
+    "sector": "competitor sector regulatory",
+    "confirmation": "independent corroboration",
+    "prior-art": "prior art hypothesis",
+    "protocol": "protocol controls method",
+    "measurement": "measurement data units replicate",
+}
+
+
+def method_hints_for(n: int, independence: str, features: TaskFeatures | None = None) -> list[str]:
+    """One distinct method per sibling so parallel seats do not converge."""
+    if n <= 1 or independence == "low":
+        return [""] * max(0, n)
+    if features and features.finance:
+        hints = METHOD_HINTS_FINANCE
+    elif features and features.science:
+        hints = METHOD_HINTS_SCIENCE
+    else:
+        hints = METHOD_HINTS
+    return [hints[i % len(hints)] for i in range(n)]
+
+
+def retrieval_query_for(objective: str, hint: str = "") -> str:
+    """Short, method-specific lookup query, not a copy of the prompt."""
+    words = re.findall(r"[A-Za-z0-9_./-]{2,}", objective or "")
+    core = " ".join(words[:12])
+    head = (hint or "").split(":", 1)[0].strip().lower()
+    return f"{core} {_RETRIEVAL_EXTRA.get(head, '')}".strip()[:240]
+
+
+def _split_subproblems(text: str) -> list[str]:
+    items = re.findall(r"(?:^|\n)\s*(?:\d+[\.\)]\s+|[-*]\s+)(.+)", text or "")
+    cleaned = [i.strip() for i in items if len(i.strip()) > 8]
+    if len(cleaned) >= 2:
+        return cleaned
+    parts = [p.strip() for p in re.split(r"(?<=[?])\s+", text or "") if p.strip()]
+    questions = [p for p in parts if p.endswith("?") and len(p) > 8]
+    return questions if len(questions) >= 2 else []
+
+
+def decompose_tasks(objective: str, n: int, features: TaskFeatures | None = None) -> list[dict[str, Any]]:
+    """Deterministic independent slices (no planner model)."""
+    n = max(1, int(n))
+    obj = (objective or "").strip()
+    slices = _split_subproblems(obj)
+    independence = estimate_independence(features) if features else "medium"
+    hints = method_hints_for(n, "high" if n > 1 else independence, features)
+    diff = "hard" if features and features.difficulty >= 0.6 else "normal"
+    tasks: list[dict[str, Any]] = []
+    for i in range(n):
+        hint = hints[i] if i < len(hints) else ""
+        if i < len(slices):
+            desc = f"{obj}\n\nFocus independently on this subproblem only:\n{slices[i]}"
+            rq = retrieval_query_for(slices[i], hint)
+        else:
+            desc = obj
+            rq = retrieval_query_for(obj, hint)
+        tasks.append({"description": desc, "difficulty": diff, "retrieval_query": rq, "method_hint": hint})
+    return tasks

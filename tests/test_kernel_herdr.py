@@ -77,12 +77,26 @@ def test_desk_org_persists_model_hints_and_effort(state_dir: Path) -> None:
 def test_work_auto_breakdown_uses_switchbay_roles(state_dir: Path) -> None:
     from okstratr import dag, desks
 
+    # A research brief gets investigators → verifier → synthesizer.
+    desks.start("Compare the evidence on remote work across sources; which claims disagree and why?", kind="work")
+    g = dag.default_dag(force_reload=True)
+    inv = sorted(n for n in g.nodes if n.startswith("investigator"))
+    assert len(inv) >= 2
+    assert {"synthesizer", "verifier"}.issubset(g.nodes)
+    assert "cos-clarify" not in g.nodes
+    assert all(g.nodes[i].role == "investigator" for i in inv)
+    assert sorted(g.nodes["verifier"].depends_on) == inv
+    assert g.nodes["synthesizer"].depends_on == ["verifier"]
+
+
+def test_work_trivial_breakdown_is_one_investigator(state_dir: Path) -> None:
+    from okstratr import dag, desks
+
     desks.start("Do the thing", kind="work")
     g = dag.default_dag(force_reload=True)
-    assert set(["investigator", "synthesizer", "verifier"]).issubset(g.nodes)
-    assert "cos-clarify" not in g.nodes
+    workers = [n for n in g.nodes if n != "root"]
+    assert workers == ["investigator"]
     assert g.nodes["investigator"].role == "investigator"
-    assert g.nodes["synthesizer"].depends_on == ["investigator"]
 
 
 def test_hire_cap_refuses_over_limit(state_dir: Path) -> None:

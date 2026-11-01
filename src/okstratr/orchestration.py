@@ -598,3 +598,164 @@ def _append_nodes(plan: OrchestrationPlan, extra: list[PlanNode], bounds: Bounds
             continue
         added.append(n)
     return added
+
+
+# ── plan from a utility decision ───────────────────────────────────
+
+
+def plan_from_decision(
+    objective: str,
+    decision: ou.PolicyDecision,
+    *,
+    tasks: list[dict[str, Any]] | None = None,
+    harnesses: list[str] | None = None,
+    models_by_harness: dict[str, str] | None = None,
+    run_id: str | None = None,
+) -> OrchestrationPlan:
+    """Build the DAG for a chosen recipe.
+
+    Shape: investigators (and an executor) in parallel → optional reducers
+    → optional verifier → synthesizer. The verifier always runs before the
+    synthesizer, so the synthesizer only sees checked findings.
+    Diverse recipes spread investigators across the given harnesses.
+    """
+    rid = run_id or new_run_id()
+    plain_single = (
+        decision.n_investigators <= 1 and not decision.include_verify and not decision.include_execute
+    )
+    if plain_single:
+        p = plan_single(objective, run_id=rid, preference=decision.preference)
+        p.decision = decision.to_dict()
+        p.features = decision.features
+        if harnesses:
+            p.nodes[0].harness = harnesses[0]
+            p.nodes[0].model = (models_by_harness or {}).get(harnesses[0])
+        return p
+
+    feat = ou.TaskFeatures.from_dict(decision.features) if decision.features else None
+    n = max(1, decision.n_investigators)
+    tasks = list(tasks or ou.decompose_tasks(objective, n, feat))
+    while len(tasks) < n:
+        tasks.append({"description": objective, "difficulty": "normal"})
+    hints = ou.method_hints_for(n, decision.independence, feat)
+    harns = [h for h in (harnesses or []) if h]
+    models = models_by_harness or {}
+    diverse = decision.diversity == "diverse" and len(harns) >= 2
+
+    def _alloc(i: int) -> tuple[str | None, str | None]:
+        if not harns:
+            return None, None
+        h = harns[i % len(harns)] if diverse else harns[0]
+        return h, models.get(h)
+
+    nodes: list[PlanNode] = []
+    investigators: list[PlanNode] = []
+    for i in range(n):
+        t = tasks[i]
+        hint = str(t.get("method_hint") or (hints[i] if i < len(hints) else ""))
+        rq = str(t.get("retrieval_query") or "").strip() or ou.retrieval_query_for(
+            str(t.get("description") or objective), hint
+        )
+        h, m = _alloc(i)
+        diff = str(t.get("difficulty") or "normal")
+        investigators.append(
+            PlanNode(
+                node_id=f"inv-{i}",
+                node_type="investigate",
+                objective=str(t.get("description") or objective),
+                role="investigator",
+                difficulty=diff if diff in DIFFICULTIES else "normal",
+                independence=decision.independence,
+                method_hint=hint,
+                retrieval_query=rq[:240],
+                harness=h,
+                model=m,
+            )
+        )
+    nodes.extend(investigators)
+    tails = [x.node_id for x in investigators]
+
+    exec_id: str | None = None
+    if decision.include_execute:
+        exec_id = "exec"
+        nodes.append(
+            PlanNode(
+                node_id=exec_id,
+                node_type="execute",
+                objective=f"Run the measurement or protocol needed to resolve: {objective[:240]}",
+                role="executor",
+                access="write",
+                independence="low",
+            )
+        )
+
+    if decision.include_reduce and n >= 5:
+        tails = add_reducers(nodes, investigators)
+
+    join = list(tails) + ([exec_id] if exec_id else [])
+    if decision.include_verify:
+        # Prefer a harness none of the investigators used.
+        used = {x.harness for x in investigators if x.harness}
+        spare = [h for h in harns if h not in used]
+        vh = spare[0] if spare else (harns[-1] if harns else None)
+        nodes.append(
+            PlanNode(
+                node_id="verify",
+                node_type="verify",
+                objective=f"Check each finding against its sources for: {objective[:240]}",
+                dependencies=list(join),
+                role="verifier",
+                difficulty="hard",
+                independence="high",
+                output_contract="verification",
+                harness=vh,
+                model=models.get(vh) if vh else None,
+            )
+        )
+        join = ["verify"]
+
+    nodes.append(
+        PlanNode(
+            node_id="synth",
+            node_type="synthesize",
+            objective=objective,
+            dependencies=list(join),
+            role="synthesizer",
+            difficulty="hard" if decision.include_verify else "normal",
+            independence="low",
+            output_contract="synthesis",
+        )
+    )
+    wave = n + (1 if exec_id else 0)
+    return OrchestrationPlan(
+        run_id=rid,
+        strategy=decision.strategy,
+        nodes=nodes,
+        objective=objective,
+        preference=decision.preference,
+        features=decision.features,
+        decision=decision.to_dict(),
+        allow_expand=decision.allow_expand,
+        bounds=Bounds(max_concurrency=max(1, wave)).clamp(),
+    )
+
+
+def add_reducers(nodes: list[PlanNode], investigators: list[PlanNode]) -> list[str]:
+    """Pairwise reducers between a wide fan-out and the verifier."""
+    reducers: list[PlanNode] = []
+    for r, start in enumerate(range(0, len(investigators), 2)):
+        group = investigators[start : start + 2]
+        reducers.append(
+            PlanNode(
+                node_id=f"red-{r}",
+                node_type="reduce",
+                objective="Merge sibling findings without adding claims; keep conflicts.",
+                dependencies=[g.node_id for g in group],
+                role="reducer",
+                difficulty="trivial",
+                independence="low",
+                output_contract="reduction",
+            )
+        )
+    nodes.extend(reducers)
+    return [x.node_id for x in reducers]

@@ -787,6 +787,12 @@ def _node_prompt(node: dag.Node) -> str:
     parts = [node.title or node.id]
     if node.objective:
         parts.append(node.objective)
+    hint = getattr(node, "method_hint", "") or ""
+    if hint:
+        parts.append(f"Method: {hint}")
+    query = getattr(node, "retrieval_query", "") or ""
+    if query:
+        parts.append(f"Start your lookup with: {query}")
     return " — ".join(parts)
 
 

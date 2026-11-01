@@ -72,7 +72,7 @@ def test_break_down_persists_prefer(env: Path, monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setenv("OKSTRATR_HARNESS_PREFER", "grok,claude")
     monkeypatch.setenv("OKSTRATR_MODEL_BY_HARNESS", "grok:grok-4.6,claude:haiku")
 
-    out = cos.break_down("dual brief", kind="work")
+    out = cos.break_down("Compare the evidence on remote work across sources; which claims disagree and why?", kind="work", effort=0.6)
     assert out["ok"]
     g = dag.default_dag(force_reload=True)
     assert "investigator-grok" in g.nodes
@@ -81,10 +81,13 @@ def test_break_down_persists_prefer(env: Path, monkeypatch: pytest.MonkeyPatch) 
     assert g.nodes["investigator-grok"].prefer_model == "grok-4.6"
     assert g.nodes["investigator-claude"].prefer_harness == "claude"
     assert g.nodes["investigator-claude"].prefer_model == "haiku"
-    assert g.nodes["synthesizer"].depends_on == [
+    assert g.nodes["verifier"].depends_on == [
         "investigator-grok",
         "investigator-claude",
     ]
+    assert g.nodes["synthesizer"].depends_on == ["verifier"]
+    # each investigator gets its own method
+    assert g.nodes["investigator-grok"].method_hint != g.nodes["investigator-claude"].method_hint
     # both ready after root done
     ready = {n.id for n in g.ready()}
     assert "investigator-grok" in ready

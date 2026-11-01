@@ -96,7 +96,7 @@ def test_cos_break_cli(state_dir: Path) -> None:
     from okstratr.cli import main
     from okstratr import dag
 
-    assert main(["seat", "--reset", "CLI break obj"]) == 0
+    assert main(["seat", "--reset", "Compare the evidence on remote work across sources; which claims disagree and why?"]) == 0
     # seat auto-broke already; reset path: seat --reset creates only root then auto-breaks
     g = dag.default_dag(force_reload=True)
     assert "synthesizer" in g.nodes
@@ -268,7 +268,7 @@ def test_http_cos_and_herdr_run_ready(state_dir: Path) -> None:
 
         req = urllib.request.Request(
             base + "/api/seat",
-            data=json.dumps({"objective": "HTTP CoS", "cos": True}).encode(),
+            data=json.dumps({"objective": "Compare the evidence on remote work across sources; which claims disagree and why?", "cos": True}).encode(),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
@@ -575,8 +575,8 @@ def test_dag_graph_view_idle_and_switchbay(state_dir: Path) -> None:
     assert ids == ["cos", "blackboard"]
     assert idle["edges"] == [{"from": "cos", "to": "blackboard"}]
 
-    dag.seat_root("Graph obj")
-    cos.break_down("Graph obj", kind="auto")
+    dag.seat_root("Compare the evidence on remote work across sources; which claims disagree and why?")
+    cos.break_down("Compare the evidence on remote work across sources; which claims disagree and why?", kind="auto")
     g = dag.default_dag(force_reload=True)
     view = g.graph_view()
     assert view["idle"] is False
