@@ -1,4 +1,4 @@
-"""Which models a desk may use.
+"""Which models a desk may use, and which one each node gets.
 
 Each workspace can allow or deny models. Keys are ``harness/model``,
 ``harness/*`` (every model on that harness) or a bare ``model`` (that
@@ -7,11 +7,19 @@ model on any harness). Deny wins over allow. An empty allow list means
 global entry.
 
 Stored in ``<state>/model_policy.json``. No model is called here.
+
+Picking: the verifier (critic) gets the strongest allowed model,
+whatever the effort slider says. Authors (investigators, writers,
+synthesizer) get a model from their harness's allowed pool by effort:
+low effort → cheapest, high effort → strongest other than the critic,
+otherwise the middle of the pool. ``model_strength`` is a name heuristic,
+not a price list.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -149,8 +157,13 @@ def is_allowed(harness: str, model: str | None, workspace_id: str | None = None,
     return not allowed or any(_matches(k, harness, model) for k in allowed)
 
 
-def filter_pairs(pairs: list[tuple[str, str | None]], workspace_id: str | None = None) -> list[tuple[str, str | None]]:
-    pol = get(workspace_id)
+def filter_pairs(
+    pairs: list[tuple[str, str | None]],
+    workspace_id: str | None = None,
+    *,
+    policy: dict[str, Any] | None = None,
+) -> list[tuple[str, str | None]]:
+    pol = policy or get(workspace_id)
     return [(h, m) for h, m in pairs if is_allowed(h, m, policy=pol)]
 
 
@@ -172,3 +185,151 @@ def current_workspace_id(desk_id: str | None = None) -> str | None:
         if v:
             return v
     return None
+
+
+# ── strength and picking ───────────────────────────────────────────
+
+Pair = tuple[str, "str | None"]
+
+_CHEAP = ("mini", "nano", "haiku", "flash", "small", "tiny", "lite", "luna")
+_FLAGSHIP = ("opus", "o3", "o1", "gpt-5.5", "gpt-5.4", "gpt-5", "grok-4", "ultra")
+
+
+def model_strength(model: str | None) -> float:
+    """0..1 guess at how strong a model is from its name.
+
+    Cheap or small names (mini, haiku, flash, ≤8b …) score low; opus,
+    o3, gpt-5, grok-4 score high; sonnet / *-pro sit between.
+    """
+    m = (model or "").strip().lower()
+    if not m:
+        return 0.35
+    token = m.partition("/")[2] or m
+    score = 0.48
+    cheap = any(s in token for s in _CHEAP)
+    size = re.search(r"(\d+)\s*b\b", token)
+    if size:
+        n = int(size.group(1))
+        if n <= 8:
+            cheap = True
+            score -= 0.08
+        elif n >= 27:
+            score += 0.12
+    if cheap:
+        score -= 0.22
+    elif any(s in token for s in _FLAGSHIP):
+        score += 0.28
+    elif "sonnet" in token or token.endswith("-pro") or "-pro-" in token or "pro-preview" in token:
+        score += 0.18
+    elif "gemini" in token:
+        score += 0.12
+    return max(0.05, min(1.0, score))
+
+
+def candidate_pairs(
+    harnesses: list[str],
+    workspace_id: str | None = None,
+    *,
+    cfg: Any = None,
+    policy: dict[str, Any] | None = None,
+) -> list[Pair]:
+    """Allowed (harness, model) pairs from each harness's configured pool."""
+    if cfg is None:
+        try:
+            from .harness import config as harness_config
+
+            cfg = harness_config.load()
+        except Exception:  # noqa: BLE001
+            cfg = None
+    pairs: list[Pair] = []
+    for h in harnesses:
+        h = (h or "").strip().lower()
+        if not h:
+            continue
+        models: list[str] = []
+        if cfg is not None:
+            try:
+                models = [ms.id for ms in cfg.models_for(h)]
+                dm = cfg.default_model_for(h)
+                if dm and dm not in models:
+                    models.append(dm)
+            except Exception:  # noqa: BLE001
+                models = []
+        if not models:
+            pairs.append((h, None))
+        else:
+            pairs.extend((h, m) for m in models if (h, m) not in pairs)
+    return filter_pairs(pairs, workspace_id, policy=policy)
+
+
+def pick_critic(pairs: list[Pair], *, avoid_harnesses: Any = ()) -> Pair | None:
+    """Strongest allowed pair. Ties go to a harness the authors did not use,
+    then to the earlier harness in ``pairs`` (preference order)."""
+    if not pairs:
+        return None
+    avoid = {str(h) for h in avoid_harnesses or () if h}
+    order = {h: i for i, h in enumerate(dict.fromkeys(h for h, _ in pairs))}
+    return max(
+        pairs,
+        key=lambda p: (model_strength(p[1]), p[0] not in avoid, -order[p[0]]),
+    )
+
+
+def author_model(
+    harness: str,
+    effort: float | None,
+    pairs: list[Pair],
+    *,
+    critic: Pair | None = None,
+) -> str | None:
+    """Model for an author seat on ``harness``, by effort band."""
+    pool = [p for p in pairs if p[0] == harness]
+    if not pool:
+        return None
+    if critic is not None and len(pool) > 1:
+        pool = [p for p in pool if p != critic] or pool
+    asc = sorted(pool, key=lambda p: model_strength(p[1]))  # stable: config order on ties
+    e = 0.5 if effort is None else max(0.0, min(1.0, float(effort)))
+    if e <= 0.25:
+        return asc[0][1]
+    if e >= 0.8:
+        return asc[-1][1]
+    # Middle strength tier, so aliases of one model (haiku, claude-haiku) count once.
+    tiers = sorted({model_strength(p[1]) for p in asc})
+    mid = tiers[len(tiers) // 2]
+    return next(p[1] for p in asc if model_strength(p[1]) == mid)
+
+
+def assign_models(
+    harnesses: list[str],
+    effort: float | None,
+    *,
+    workspace_id: str | None = None,
+    pinned: dict[str, str] | None = None,
+    cfg: Any = None,
+    policy: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Pick models for one run.
+
+    Returns ``{"harnesses": [...allowed...], "authors": {harness: model},
+    "pairs": [...]}``. ``pinned`` (e.g. ``OKSTRATR_MODEL_BY_HARNESS``) wins
+    for authors when the pinned model is allowed. A harness with nothing
+    allowed is dropped. The critic is picked later with
+    :func:`pick_critic`, once the plan knows which harnesses the authors used.
+    """
+    pol = policy or get(workspace_id)
+    pairs = candidate_pairs(harnesses, workspace_id, cfg=cfg, policy=pol)
+    pinned = {k.strip().lower(): v for k, v in (pinned or {}).items() if k and v}
+    for h, m in pinned.items():
+        if h in harnesses and (h, m) not in pairs and is_allowed(h, m, policy=pol):
+            pairs.append((h, m))
+    allowed_h = [h for h in harnesses if any(p[0] == h for p in pairs)]
+    best = pick_critic(pairs)
+    authors: dict[str, Any] = {}
+    for h in allowed_h:
+        pm = pinned.get(h)
+        if pm and is_allowed(h, pm, policy=pol):
+            authors[h] = pm
+        else:
+            authors[h] = author_model(h, effort, pairs, critic=best)
+    return {"harnesses": allowed_h, "authors": authors, "pairs": pairs}

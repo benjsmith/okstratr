@@ -664,6 +664,7 @@ def plan_from_decision(
     harnesses: list[str] | None = None,
     models_by_harness: dict[str, str] | None = None,
     run_id: str | None = None,
+    critic_pairs: list[tuple[str, str | None]] | None = None,
 ) -> OrchestrationPlan:
     """Build the DAG for a chosen recipe.
 
@@ -671,6 +672,9 @@ def plan_from_decision(
     → optional verifier → synthesizer. The verifier always runs before the
     synthesizer, so the synthesizer only sees checked findings.
     Diverse recipes spread investigators across the given harnesses.
+    ``models_by_harness`` are the authors' models. With ``critic_pairs``
+    the verifier gets the strongest of them (ties: a harness the
+    investigators did not use); without, it gets a spare harness.
     """
     rid = run_id or new_run_id()
     plain_single = (
@@ -749,8 +753,13 @@ def plan_from_decision(
     if decision.include_verify:
         # Prefer a harness none of the investigators used.
         used = {x.harness for x in investigators if x.harness}
-        spare = [h for h in harns if h not in used]
-        vh = spare[0] if spare else (harns[-1] if harns else None)
+        critic = _critic(critic_pairs, used)
+        if critic is not None:
+            vh, vm = critic
+        else:
+            spare = [h for h in harns if h not in used]
+            vh = spare[0] if spare else (harns[-1] if harns else None)
+            vm = models.get(vh) if vh else None
         nodes.append(
             PlanNode(
                 node_id="verify",
@@ -762,7 +771,7 @@ def plan_from_decision(
                 independence="high",
                 output_contract="verification",
                 harness=vh,
-                model=models.get(vh) if vh else None,
+                model=vm,
             )
         )
         join = ["verify"]
@@ -791,6 +800,34 @@ def plan_from_decision(
         allow_expand=decision.allow_expand,
         bounds=Bounds(max_concurrency=max(1, wave)).clamp(),
     )
+
+
+def _critic(pairs: list[tuple[str, str | None]] | None, used: Any = ()) -> tuple[str, str | None] | None:
+    if not pairs:
+        return None
+    from . import model_policy
+
+    return model_policy.pick_critic(list(pairs), avoid_harnesses=used)
+
+
+def _reverify_seat(
+    pairs: list[tuple[str, str | None]] | None,
+    alloc: list[str | None],
+    models: dict[str, str],
+) -> tuple[str | None, str | None]:
+    """Seat for a re-verify: the strongest allowed model, on the harness the
+    spread picked when that harness has one of the strongest models."""
+    fresh = alloc[-1] if alloc else None
+    if not pairs:
+        return fresh, (models.get(fresh) if fresh else None)
+    from . import model_policy
+
+    top = max(model_policy.model_strength(m) for _, m in pairs)
+    best = [p for p in pairs if model_policy.model_strength(p[1]) == top]
+    on_fresh = [p for p in best if p[0] == fresh]
+    if on_fresh:
+        return on_fresh[0]
+    return model_policy.pick_critic(best, avoid_harnesses=[h for h in alloc[:-1] if h])
 
 
 def add_reducers(nodes: list[PlanNode], investigators: list[PlanNode]) -> list[str]:
@@ -879,6 +916,7 @@ def expansion_nodes(
     harnesses: list[str] | None = None,
     models_by_harness: dict[str, str] | None = None,
     after: str | None = None,
+    critic_pairs: list[tuple[str, str | None]] | None = None,
 ) -> Extension:
     """Targeted investigators plus a re-verify; the synthesizer waits on it.
 
@@ -903,7 +941,7 @@ def expansion_nodes(
     if prev_verify is None:
         prev_verify = next((n for n in reversed(plan.nodes) if n.node_type == "verify"), None)
     vid = _unique_id("verify-x1", existing)
-    vh = alloc[-1]
+    vh, vm = _reverify_seat(critic_pairs, alloc, models)
     new.append(
         PlanNode(
             node_id=vid,
@@ -915,7 +953,7 @@ def expansion_nodes(
             independence="high",
             output_contract="verification",
             harness=vh,
-            model=models.get(vh) if vh else None,
+            model=vm,
         )
     )
     rewire = {
@@ -932,6 +970,7 @@ def continue_wave(
     *,
     harnesses: list[str] | None = None,
     models_by_harness: dict[str, str] | None = None,
+    critic_pairs: list[tuple[str, str | None]] | None = None,
 ) -> Extension:
     """A fresh investigate → verify → synthesize subgraph after 'OBJECTIVE_MET: no'.
 
@@ -952,7 +991,7 @@ def continue_wave(
         h = alloc[i]
         new.append(_investigator(nid, obj, hints[i % len(hints)], "high", h, models.get(h) if h else None))
     vid = _unique_id(f"verify-c{wave}", existing)
-    vh = alloc[-1]
+    vh, vm = _reverify_seat(critic_pairs, alloc, models)
     new.append(
         PlanNode(
             node_id=vid,
@@ -964,7 +1003,7 @@ def continue_wave(
             independence="high",
             output_contract="verification",
             harness=vh,
-            model=models.get(vh) if vh else None,
+            model=vm,
         )
     )
     new.append(
@@ -999,12 +1038,14 @@ class AdaptiveRun:
         store: Any | None = None,
         harnesses: list[str] | None = None,
         models_by_harness: dict[str, str] | None = None,
+        critic_pairs: list[tuple[str, str | None]] | None = None,
     ) -> None:
         from . import evidence as ev
 
         self.store = store if store is not None else ev.RunEvidence(plan.run_id)
         self.harnesses = list(harnesses or [])
         self.models_by_harness = dict(models_by_harness or {})
+        self.critic_pairs = list(critic_pairs or [])
         self.expansions = 0
         self.continuations = 0
         self.findings_at_last_synth = 0
@@ -1078,6 +1119,7 @@ class AdaptiveRun:
             self.claims_at_last_expansion = self.unique_claims()
             return expansion_nodes(
                 plan, exp, harnesses=self.harnesses, models_by_harness=self.models_by_harness,
+                critic_pairs=self.critic_pairs,
                 after=node.node_id,
             )
         if t == "synthesize":
@@ -1116,7 +1158,10 @@ class AdaptiveRun:
             self.continuations += 1
             self.findings_at_last_synth = n_findings
             self.claims_at_last_synth = claims
-            return continue_wave(plan, cont, harnesses=self.harnesses, models_by_harness=self.models_by_harness)
+            return continue_wave(
+                plan, cont, harnesses=self.harnesses, models_by_harness=self.models_by_harness,
+                critic_pairs=self.critic_pairs,
+            )
         return []
 
 

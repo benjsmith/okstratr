@@ -290,6 +290,45 @@ def _escape(text: str) -> str:
     return str(text).replace("{", "{{").replace("}", "}}")
 
 
+def _models_for_run(
+    harnesses: list[str] | None,
+    models_by_harness: dict[str, str] | None,
+    *,
+    effort: float,
+    desk_id: str | None = None,
+) -> tuple[list[str], dict[str, str], list[tuple[str, str | None]]]:
+    """Allowed harnesses, authors' models by effort, and the critic's candidates.
+
+    Pinned models (``OKSTRATR_MODEL_BY_HARNESS`` or ``models_by_harness``)
+    win for authors when allowed. If the workspace's lists leave nothing
+    allowed, the run falls back to the unfiltered harnesses.
+    """
+    from . import model_policy
+
+    harns = [
+        h.strip().lower()
+        for h in (harnesses if harnesses is not None else _fanout_harness_ids())
+        if h and h.strip()
+    ]
+    pinned = dict(models_by_harness or _parse_models_by_harness())
+    try:
+        out = model_policy.assign_models(
+            harns, effort, workspace_id=model_policy.current_workspace_id(desk_id), pinned=pinned
+        )
+    except Exception:  # noqa: BLE001 — a bad policy file must not block planning
+        out = {"harnesses": [], "authors": {}, "pairs": []}
+    if not out["harnesses"]:
+        models_by = dict(pinned)
+        for h in harns:
+            if h not in models_by:
+                m = _default_model_for(h, models_by)
+                if m:
+                    models_by[h] = m
+        return harns, models_by, []
+    models_by = {h: m for h, m in out["authors"].items() if m}
+    return list(out["harnesses"]), models_by, list(out["pairs"])
+
+
 def plan_for(
     objective: str,
     *,
@@ -307,17 +346,9 @@ def plan_for(
     """
     from . import bandit, orchestration, orchestration_utility as ou
 
-    harns = [
-        h.strip().lower()
-        for h in (harnesses if harnesses is not None else _fanout_harness_ids())
-        if h and h.strip()
-    ]
-    models_by = dict(models_by_harness or _parse_models_by_harness())
-    for h in harns:
-        if h not in models_by:
-            m = _default_model_for(h, models_by)
-            if m:
-                models_by[h] = m
+    harns, models_by, pairs = _models_for_run(
+        harnesses, models_by_harness, effort=bandit.clamp_effort(effort), desk_id=desk_id
+    )
     e = bandit.clamp_effort(effort)
     feat = ou.extract_features(
         objective, preference=e, provider_diversity=len(harns) or 1, task_type=task_type
@@ -327,7 +358,8 @@ def plan_for(
     except Exception:  # noqa: BLE001 — a bad bandit file must not block planning
         decision = ou.choose_initial_policy(feat, effort=e)
     plan = orchestration.plan_from_decision(
-        objective, decision, harnesses=harns, models_by_harness=models_by, run_id=run_id
+        objective, decision, harnesses=harns, models_by_harness=models_by, run_id=run_id,
+        critic_pairs=pairs,
     )
     plan = orchestration.ensure_valid(plan)
     return decision, plan

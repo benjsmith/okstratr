@@ -194,14 +194,32 @@ class Row:
         return asdict(self)
 
 
+def _bench_models(sc: Scenario) -> dict[str, Any]:
+    """Model picks from the built-in pools, ignoring the user's config and lists."""
+    from . import model_policy
+    from .harness import config as harness_config
+
+    return model_policy.assign_models(
+        list(sc.harnesses), sc.effort, cfg=harness_config.default_config(),
+        policy={"allowed": [], "denied": []},
+    )
+
+
 def run_utility(sc: Scenario) -> Row:
     world = FakeWorld(sc, "utility")
     feat = ou.extract_features(
         sc.objective, preference=sc.effort, provider_diversity=len(sc.harnesses), task_type=sc.task_type
     )
     decision = ou.choose_initial_policy(feat, effort=sc.effort)
-    plan = orch.plan_from_decision(sc.objective, decision, harnesses=list(sc.harnesses), run_id=f"bench-{sc.name}")
-    hook = orch.AdaptiveRun(plan, harnesses=list(sc.harnesses))
+    models = _bench_models(sc)
+    plan = orch.plan_from_decision(
+        sc.objective, decision, harnesses=list(sc.harnesses), run_id=f"bench-{sc.name}",
+        models_by_harness=models["authors"], critic_pairs=models["pairs"],
+    )
+    hook = orch.AdaptiveRun(
+        plan, harnesses=list(sc.harnesses), models_by_harness=models["authors"],
+        critic_pairs=models["pairs"],
+    )
     state = orch.run_plan(plan, world.run, after_node=hook)
     has_verify = any(n.node_type == "verify" for n in state.plan.nodes)
     q, false_n = world.quality(verified_only=has_verify)
