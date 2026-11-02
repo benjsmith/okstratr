@@ -2,17 +2,29 @@
 
 ## Unreleased
 
-- **Effort now picks the orchestration shape.** `/auto` and `/work` choose
+- **Effort now picks the orchestration shape for `/auto`.** It chooses
   between a single worker and several investigators from the effort slider
   and the task, within the hire cap. Trivial tasks no longer fan out just
   because several harnesses are installed.
-- **Findings are verified before the answer.** Each run keeps its own
-  findings; only verified ones are used. Runs add targeted follow-up work
-  while it is worth the cost and stop when nothing new turns up.
+- **`/work` hires specialists in sequence:** gather context → write (plan,
+  update or deliverable, from the brief) → review. The old template is the
+  fallback.
+- **The verifier / review gets the strongest allowed model;** authors stay
+  cheap and the effort slider picks their band.
+- **Per-workspace model allow/deny list:** `okstratr model allow|deny|unlist
+  KEY [--ws ID]`, `okstratr model policy|reset`, `/api/models/policy`.
+- **Run folders** (`state/runs/<id>/`) follow the blackboard duration
+  (default 3 days; duration 0 keeps them at most 60 minutes) and `bb clear`
+  removes them.
+- **Retired node ids are never reused** until the DAG is reset (stored as
+  `archived_ids` in `dag.json`, written only when non-empty).
+- **Findings are verified before the answer** in offline runs. Plan growth
+  after a verifier and the `OBJECTIVE_MET` stop run in the benchmark with
+  fake harnesses; live Herdr desks use the plan shape only.
 - **Learned shapes per desk and task type** are stored in a new `recipes`
   section of `bandit.json`. Existing `bandit.json` and `dag.json` files load
   unchanged; older okstratr versions ignore the new section.
-- **Offline benchmark:** `python -m okstratr.orchestration_bench` compares
+- **Offline benchmark:** `python3 -m okstratr.orchestration_bench` compares
   the new shapes with the old fixed template on fake harnesses.
 
 ## v0.2.1 — 2026-10-13

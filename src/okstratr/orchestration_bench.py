@@ -7,8 +7,8 @@ hidden set. An investigator told about a specific missing fact (as
 expansion investigators are) has a better chance of finding it. Everything
 is deterministic.
 
-    python -m okstratr.orchestration_bench          # table
-    python -m okstratr.orchestration_bench --json   # machine-readable
+    python3 -m okstratr.orchestration_bench          # table
+    python3 -m okstratr.orchestration_bench --json   # machine-readable
 
 The old template is one investigator per configured harness, then a
 synthesizer, then a verifier that checks the answer after it is written.
