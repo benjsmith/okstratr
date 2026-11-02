@@ -81,6 +81,7 @@ okstratr agents
 okstratr agents --desk <desk_id>
 okstratr harness list
 okstratr model list
+okstratr model deny codex/* --ws <workspace>   # per-workspace allow/deny
 ```
 
 `drive_herdr: true` from a client means **drive seats** — with `backend=direct`
@@ -130,7 +131,11 @@ Schedule / desk progress uses **path-native** I/O via `okstratr.host_notify` v1 
 - **Schedule parse**: named cadences + intervals
 - **Persistent DAG** + **blackboard**
 - **Planner** kind-aware templates; **Herdr** `herdr run-ready` finite jobs
-- **Orchestration shape follows effort**: `/auto` and `/work` pick how many investigators to run (or a single strong worker) from the effort slider and the task, never above the hire cap; findings are checked before they reach the answer, and the plan grows only while more work is worth it. The kernel learns which shape works best per desk and task type. Offline comparison with the old fixed template: `python -m okstratr.orchestration_bench`
+- **Orchestration shape follows effort** (`/auto`): picks how many investigators to run (or a single strong worker) from the effort slider and the task, never above the hire cap, with a verifier before the synthesizer. The kernel learns which shape works best per desk and task type.
+- **`/work` hires specialists in sequence**: gather context → write (plan, update or deliverable, from the brief) → review.
+- **Models**: the verifier / review gets the strongest allowed model; authors stay cheap and the effort slider picks their band. Per-workspace allow/deny list: `okstratr model allow|deny|unlist KEY [--ws ID]`, `okstratr model policy`.
+- **Run folders** (`state/runs/<id>/plan.json`, `evidence.json`) follow the blackboard duration and are removed by `bb clear`.
+- **Offline only**: plan growth after a verifier, the `OBJECTIVE_MET` stop and reducer evidence run in the benchmark with fake harnesses, not on live Herdr desks (Herdr returns a status, not the answer). Compare with the old fixed template: `python3 -m okstratr.orchestration_bench`
 - CLI: `status | start|restart|shutdown | desk … | web | seat (deprecated) | cos | herdr | dag | bb | serve | observer`
 - HTTP: `/health`, `/api/status`, `/api/desk/*`, `/observer/`, `/api/seat` (deprecated alias), …
 - **Observer panel** is the primary visual: standing rail, AGENT SPACE canvas, blackboard — **no query bar**

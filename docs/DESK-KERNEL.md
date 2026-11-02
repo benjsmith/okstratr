@@ -71,21 +71,97 @@ Desks store `okbay_workspace_id` + `thread_id` and label Herdr with both.
 No real LLMs. `hire_plan` / `spin_up_desk_spec` / `hire` / `retire_worker` / `route_herdr_input`
 are structural but **effort-bandit gated** (persist under `OKSTRATR_STATE_DIR/bandit.json`).
 
-### Planner breakdown → Switchbay roles
+### Planner breakdown
 
-When desk kind is **`work` or `auto`**, planner breakdown maps to Switchbay
-roles — **investigator → synthesizer → verifier** — not only the historical
-`cos-clarify` chain.
+**`/auto`** — the orchestration utility picks the shape from the task and the
+effort slider: one strong worker, or several investigators (one per harness,
+each with its own method) → verifier → synthesizer, with pairwise reducers for
+a wide fan-out. Never above the hire cap.
 
-Kind-specific templates (kept):
+**`/work`** — specialists in sequence, as in Switchbay project work:
+**gather context → write → review**. The brief decides which writers are
+hired:
+
+| Brief mentions | Nodes |
+|----------------|-------|
+| project plan, targets, metrics, milestones, scope, charter | `context` → `plan` → `review` |
+| tell the team, team / status update, exec brief, standup, slides for | `context` → `comms` → `review` |
+| catch me up, where are we, status of | `context` |
+| drift, review the plan, challenge the | `review` |
+| anything else | `context` → `write` → `review` |
+
+A brief can match several rows; the nodes are merged in that order.
+
+Context and review are added around any writer. Review checks the result
+against the context and sources and does not rewrite it.
+
+If planning fails, both fall back to the fixed template below.
+
+Kind-specific templates:
 
 | Kind | Template nodes |
 |------|----------------|
-| `work` / `auto` | `investigator` → `synthesizer` → `verifier` |
+| `work` / `auto` (fallback) | `investigator` → `synthesizer` → `verifier` |
 | `curate` | `curate-propose` → `curate-review` → `curate-commit` |
 | `code` | `code-investigate` → `code-implement` → `code-verify` |
 | `deck` | `deck-outline` → `deck-synthesize` → `deck-verify` |
 | no kind / no desk | historical `cos-clarify` → `cos-gather` → `cos-execute` → `cos-verify` |
+
+### Models: who writes and who checks
+
+- The **verifier / review** node gets the strongest allowed model
+  (Switchbay strength scores: grok-4 / opus / gpt-5 / o3 high, sonnet middle,
+  haiku and small local models low), on a different harness from the authors
+  when one is available.
+- **Authors** (investigators, writers, synthesizer) stay cheap. The effort
+  slider picks their band: ≤ 0.25 cheapest, ≥ 0.8 strongest, otherwise the
+  middle tier. A model pinned with `OKSTRATR_MODEL_BY_HARNESS` wins for
+  authors if the list allows it.
+
+**Allow / deny list per workspace** (`state/model_policy.json`):
+
+```bash
+okstratr model allow claude/claude-opus-4 --ws <workspace>
+okstratr model deny  codex/* --ws _global   # every workspace without its own list
+okstratr model unlist codex/*
+okstratr model policy --ws <workspace>
+okstratr model reset  --ws <workspace>
+```
+
+Keys are `harness/model`, `harness/*` or a bare model name. Deny wins; an
+empty allow list allows everything not denied; a workspace without its own
+entry uses the global one. Without `--ws`, the workspace is the active desk's
+okbay workspace, else `OKSTRATR_WORKSPACE`, else global. HTTP: `GET /api/models/policy?workspace=` and
+`POST /api/models/policy` with `{workspace, allowed?, denied?, reset?}`.
+
+The list is applied when a plan is made. If it denies every model, the plan
+uses the configured defaults rather than failing.
+
+### Live desks vs offline runs
+
+Live desks use the plan **shape** only: `cos.break_down` writes the nodes into
+the desk DAG and Herdr (or the direct adapter) runs each one as a finite seat.
+Expansion after a verifier, the `OBJECTIVE_MET` stop and the evidence-scoped
+inputs for reducers live in `orchestration.run_plan` / `AdaptiveRun`, which
+only the benchmark and tests drive, with fake runners. They are not wired
+into desks because they need each node's answer as structured findings, and
+Herdr's `agent wait` returns a status, not the answer. Reading pane text back
+would break "Herdr owns text I/O".
+
+Offline comparison with the old template (fake harnesses, no model calls):
+
+```bash
+python3 -m okstratr.orchestration_bench          # table
+python3 -m okstratr.orchestration_bench --json
+```
+
+### Run folders
+
+Each plan gets `state/runs/<run_id>/` with `plan.json` and `evidence.json`.
+They follow the blackboard duration: default 3 days; `duration 0` keeps them at
+most 60 minutes and clears them when a desk goes quiet and when the server
+starts; `bb clear` removes them all. Removals are recorded in the audit log.
+File names are always visible (no dotfiles, including temp files).
 
 ## Desk kinds (defaults)
 
@@ -198,7 +274,9 @@ attention-window UI for next fire is the follow-up.
 1. **Short-lived workers must retire from the DAG** — `kernel.retire_worker(node_id)`
    removes the node from the active graph and archives a **succinct** summary on
    the blackboard. Standing `root` is refused. Do not let finished ephemeral
-   nodes accumulate forever.
+   nodes accumulate forever. The retired id is kept in `dag.json`
+   (`archived_ids`) and never handed out again until the DAG is reset, so a
+   new node cannot inherit an old node's posts or Herdr labels.
 2. **Curate path must have a commit path** — propose→review must be able to land
    pages. `kernel.hire` / `hire_plan` **refuse** to spawn `curator_worker` unless
    a commit/review path is configured (hook stub: `okstratr.okbay.reviews_commit_path`,
@@ -339,7 +417,12 @@ src/okstratr/web_egress.py   web gate: off|once|session
 src/okstratr/roles.py        role catalog + persisted Config ⚙ (`config/roles.json`)
 src/okstratr/desks.py        registry: start/stop/dismiss/status/schedule/hire/effort/retire/focus
 src/okstratr/okbay.py        workspace list/select client + reviews/split stubs (no ingest)
-src/okstratr/cos.py          kind-aware planner templates
+src/okstratr/cos.py          planner: /auto utility shape, /work specialists, kind templates
+src/okstratr/orchestration.py  typed plans, /work specialists, offline run_plan / AdaptiveRun
+src/okstratr/orchestration_utility.py  shape choice from task + effort
+src/okstratr/orchestration_bench.py    offline 10-scenario benchmark (fake harnesses)
+src/okstratr/model_policy.py model allow/deny per workspace, critic and author picks
+src/okstratr/evidence.py     per-run evidence store and run-folder retention
 src/okstratr/herdr.py        finite seats (pane split→start --pane) + o{desk8}… labels
 src/okstratr/schedule_parse.py  interval / named schedule parser
 CLI: desk … ; web … ; seat → deprecated alias

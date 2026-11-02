@@ -45,3 +45,7 @@ def test_offline_pieces_are_labelled() -> None:
     assert "offline" in (orch.__doc__ or "").lower()
     assert "offline" in (orch.run_plan.__doc__ or "").lower()
     assert "offline" in (orch.AdaptiveRun.__doc__ or "").lower()
+    readme = Path(__file__).resolve().parents[1] / "README.md"
+    kernel = Path(__file__).resolve().parents[1] / "docs" / "DESK-KERNEL.md"
+    assert "Offline only" in readme.read_text(encoding="utf-8")
+    assert "Live desks vs offline runs" in kernel.read_text(encoding="utf-8")
