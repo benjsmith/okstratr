@@ -419,7 +419,10 @@ def launch(objective: str = "", *, focus: bool = True) -> dict[str, Any]:
     terminal wrapper was spawned).
     """
     obj = (objective or "").strip()
-    env = merge_user_session_env()
+    # Herdr's agents inherit this env: no provider API keys (seat_env).
+    from .seat_env import strip_provider_keys
+
+    env = strip_provider_keys(merge_user_session_env())
     if obj:
         env["OKSTRATR_OBJECTIVE"] = obj
         env["HERDR_OBJECTIVE"] = obj
@@ -689,7 +692,9 @@ def open_workspace_agent(
             out["launch"] = launch("", focus=True)
         return out
 
-    env = merge_user_session_env()
+    from .seat_env import strip_provider_keys
+
+    env = strip_provider_keys(merge_user_session_env())
     create_cmd = [
         bin_path,
         "workspace",
@@ -1340,7 +1345,9 @@ def _live_run_node(
             "harness": seat,
         }
     kind = (seat.get("herdr_kind") or DEFAULT_KIND).strip() or DEFAULT_KIND
-    env = merge_user_session_env()
+    from .seat_env import strip_provider_keys
+
+    env = strip_provider_keys(merge_user_session_env())
     env["OKSTRATR_NODE_ID"] = node.id
     env["OKSTRATR_OBJECTIVE"] = prompt
 
