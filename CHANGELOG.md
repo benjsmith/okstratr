@@ -9,8 +9,12 @@
 - **`/work` hires specialists in sequence:** gather context → write (plan,
   update or deliverable, from the brief) → review. The old template is the
   fallback.
-- **The verifier / review gets the strongest allowed model;** authors stay
-  cheap and the effort slider picks their band.
+- **The verifier / review gets the strongest allowed model.** Authors get
+  the strongest model too until okstratr has seen how a cheaper model does on
+  that task class. It then picks the model with the best expected utility,
+  counting P(fail | model, class), the rework a failure costs and the extra
+  tokens a failing model spins. Outcomes are kept in
+  `state/model_routing.json`.
 - **Per-workspace model allow/deny list:** `okstratr model allow|deny|unlist
   KEY [--ws ID]`, `okstratr model policy|reset`, `/api/models/policy`.
 - **Run folders** (`state/runs/<id>/`) follow the blackboard duration
@@ -35,12 +39,33 @@
 - **A finished Herdr job no longer reports `desk.done`** unless the desk has
   no seats left. Otherwise it sends `desk.progress`. `schedule.failed` is only
   sent for scheduled desks.
-- **Seat timeout raised to 30 minutes** so a seat can be a full agent session.
+- **Seat timeout raised from 15 to 30 minutes** (`WORKER_TIMEOUT_SEC` 900 → 1800)
+  so a seat can be a full agent session.
 - **Learned shapes per desk and task type** are stored in a new `recipes`
   section of `bandit.json`. Existing `bandit.json` and `dag.json` files load
   unchanged; older okstratr versions ignore the new section.
+- **Seats no longer inherit provider API keys.** `XAI_API_KEY`,
+  `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` and similar keys are removed from
+  direct and Herdr seat environments, so seats use subscription logins.
+  **Behaviour change:** a seat (for example pi) that relied on
+  `OPENAI_API_KEY` now fails unless `OKSTRATR_SEAT_API_KEYS=allow` is set.
+- **A failed seat is re-seated once on a healthy harness** (`<id>-retry`),
+  and its dependents wait for the retry. A retry is never retried.
+- **The old template shape (`parallel_diverse_k`) is always a candidate**
+  when two or more harnesses are installed, and the decision says why it lost
+  or tied. Code tasks are never treated as simple and get a `tools_verify`
+  candidate.
+- **A second expansion wave is only hired if it is likely to help:** the
+  expected gain is discounted by P(close gap), learned from earlier waves,
+  and expansion stops after a wave that found nothing new.
+- **The learner leaves the prior shape only on clear evidence:** an arm must
+  beat the prior by more than its standard error.
 - **Offline benchmark:** `python3 -m okstratr.orchestration_bench` compares
-  the new shapes with the old fixed template on fake harnesses.
+  the chosen shape with a single worker and the old fixed template on fake
+  harnesses. `--seeds N` reports mean ± SE and paired win/tie/loss,
+  `--calibrate` learns on training seeds and reports prior vs realized on
+  held-out seeds, and `--routing` compares cheap and strong author models.
+  The fake verifier is not an oracle: it misses some false claims.
 
 ## v0.2.1 — 2026-10-13
 

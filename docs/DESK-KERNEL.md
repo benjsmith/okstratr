@@ -224,9 +224,68 @@ okstratr queue done R inv-0 [--tokens N] [--failed]
 Fake harnesses, no model calls:
 
 ```bash
-python3 -m okstratr.orchestration_bench          # table
+python3 -m okstratr.orchestration_bench               # one seed, table
+python3 -m okstratr.orchestration_bench --seeds 90    # mean ± SE, paired Δ, win/tie/loss
+python3 -m okstratr.orchestration_bench --calibrate   # learn on 30 seeds, test on held-out seeds
+python3 -m okstratr.orchestration_bench --routing     # cheap vs strong author models
 python3 -m okstratr.orchestration_bench --json
 ```
+
+Each scenario is run three ways: **utility** (okstratr picks the shape),
+**single** (one worker, `--recipe single`) and **template** (the old fixed
+shape, `parallel_diverse_k`). All three use the same random draws for the
+same seat (common random numbers), so a difference comes from the shape and
+not from luck. The fake verifier is not an oracle: it misses some false
+claims and sometimes rejects true ones. A failed seat is re-seated once on a
+healthy harness.
+
+U = Q − λc·C − λl·L. Results over 90 seeds (0–89), mean ± standard error;
+W/T/L counts seeds won, tied (|ΔU| ≤ 0.005) and lost:
+
+| Scenario | Chosen shape | Δ vs single | W/T/L | Δ vs template | W/T/L |
+|---|---|---|---|---|---|
+| trivial-note | single | 0.000 | 0/90/0 | +0.045 ± 0.007 | 84/0/6 |
+| trivial-many-harnesses | single_strong | 0.000 | 0/90/0 | −0.005 ± 0.023 | 85/0/5 |
+| research-balanced | ivs_diverse_2 | +0.235 ± 0.028 | 71/0/19 | +0.079 ± 0.022 | 54/14/22 |
+| research-economy | single_strong | 0.000 | 0/90/0 | +0.022 ± 0.023 | 57/0/33 |
+| research-maximum-hard | parallel_diverse_k | +0.533 ± 0.021 | 90/0/0 | +0.284 ± 0.026 | 70/5/15 |
+| finance-high-stakes | ivs_diverse_2 | +0.293 ± 0.028 | 71/0/19 | +0.132 ± 0.029 | 50/16/24 |
+| multi-question | ivs_diverse_3 | +0.187 ± 0.025 | 71/1/18 | +0.059 ± 0.020 | 50/0/40 |
+| code-fix | tools_verify | +0.163 ± 0.038 | 59/0/31 | +0.044 ± 0.031 | 44/0/46 |
+| research-one-harness | single_verify | +0.001 ± 0.019 | 51/0/39 | +0.063 ± 0.020 | 54/6/30 |
+| research-flaky-harness | ivs_diverse_2 | +0.112 ± 0.022 | 64/0/26 | +0.174 ± 0.022 | 69/0/21 |
+| **all** | | **+0.152 ± 0.009** | 477/271/152 | **+0.090 ± 0.008** | 617/41/242 |
+
+Mean U: utility 0.748, single 0.596, template 0.658.
+
+Where the chosen shape does not beat a baseline, the reason is known:
+
+- *Trivial tasks and research-economy vs single*: the chosen shape is a
+  single worker, so these are exact ties.
+- *trivial-many-harnesses vs template* (−0.005 ± 0.023, a tie within noise):
+  the template's extra workers catch the one fact a single worker misses in
+  about 5 % of seeds. Paying for several workers on a trivial task is not
+  worth it on average, so okstratr keeps one worker.
+- *research-one-harness vs single* (+0.001, a tie): with only one harness the
+  extra seats repeat the same model, so a verifier is the only addition that
+  pays.
+- Per-seed losses elsewhere (for example code-fix 31 of 90 vs single) are
+  seeds where the single worker got lucky. The paired means are positive.
+
+**Calibration** (`--calibrate`) learns on 30 training seeds, then scores
+held-out seeds 30–39 with and without that learning. The report lists each
+recipe's prior quality next to what it achieved. Priors are not retuned to
+the fake world; the learner only leaves the prior shape when an arm beats
+it by more than its standard error. With 10 training seeds the learner
+overfit (code-fix got worse), which is why the default is 30.
+
+**Model routing** (`--routing`) learns author-model outcomes on 20 seeds and
+scores 20 more:
+
+| Scenario | Unknown → | Learned → | Haiku U | Sonnet U | Routed − strong |
+|---|---|---|---|---|---|
+| cheap-wins-small-fix | sonnet | haiku | 0.614 ± 0.021 | 0.462 ± 0.031 | +0.151 ± 0.040 (17/0/3) |
+| cheap-loses-hard-research | sonnet | sonnet | 0.054 ± 0.128 | 0.359 ± 0.081 | 0 (stays strong) |
 
 ### Run folders
 
@@ -494,6 +553,7 @@ src/okstratr/cos.py          planner: /auto utility shape, /work specialists, ki
 src/okstratr/orchestration.py  typed plans, /work specialists, offline run_plan / AdaptiveRun
 src/okstratr/orchestration_utility.py  shape choice from task + effort
 src/okstratr/orchestration_bench.py    offline 10-scenario benchmark (fake harnesses)
+src/okstratr/model_routing.py         cheap vs strong author model, learned per task class
 src/okstratr/model_policy.py model allow/deny per workspace, critic and author picks
 src/okstratr/evidence.py     per-run evidence store and run-folder retention
 src/okstratr/herdr.py        finite seats (pane split→start --pane) + o{desk8}… labels
