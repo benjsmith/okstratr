@@ -72,7 +72,7 @@ def test_break_down_persists_prefer(env: Path, monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setenv("OKSTRATR_HARNESS_PREFER", "grok,claude")
     monkeypatch.setenv("OKSTRATR_MODEL_BY_HARNESS", "grok:grok-4.6,claude:haiku")
 
-    out = cos.break_down("Compare the evidence on remote work across sources; which claims disagree and why?", kind="work", effort=0.6)
+    out = cos.break_down("Compare the evidence on remote work across sources; which claims disagree and why?", kind="auto", effort=0.6)
     assert out["ok"]
     g = dag.default_dag(force_reload=True)
     assert "investigator-grok" in g.nodes

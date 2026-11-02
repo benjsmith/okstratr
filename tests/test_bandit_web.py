@@ -71,7 +71,7 @@ def test_bandit_hire_caps_by_effort(state_dir: Path) -> None:
 def test_bandit_reward_updates_arms(state_dir: Path) -> None:
     from okstratr import bandit, dag, desks, kernel
 
-    start = desks.start("Compare the evidence on remote work across sources; which claims disagree and why?", kind="work", effort=0.6)
+    start = desks.start("Compare the evidence on remote work across sources; which claims disagree and why?", kind="auto", effort=0.6)
     desk_id = start["desk"]["id"]
     arm = (start["hire"].get("bandit_decision") or {}).get("arm_id")
     assert arm

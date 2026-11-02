@@ -365,6 +365,54 @@ def plan_for(
     return decision, plan
 
 
+def work_plan_for(
+    objective: str,
+    *,
+    effort: float | None = None,
+    harnesses: list[str] | None = None,
+    models_by_harness: dict[str, str] | None = None,
+    desk_id: str | None = None,
+    run_id: str | None = None,
+) -> Any:
+    """/work plan: specialists in sequence (gather context → write → review).
+
+    Authors get a model by effort; review gets the strongest allowed model.
+    """
+    from . import bandit, orchestration
+
+    e = bandit.clamp_effort(effort)
+    harns, models_by, pairs = _models_for_run(harnesses, models_by_harness, effort=e, desk_id=desk_id)
+    plan = orchestration.plan_projects(
+        objective, harnesses=harns, models_by_harness=models_by, critic_pairs=pairs,
+        run_id=run_id, preference=e,
+    )
+    return orchestration.ensure_valid(plan)
+
+
+def steps_from_projects(plan: Any) -> list[_Step]:
+    """Desk steps for a /work plan; specialist ids are the step ids."""
+    from .orchestration import PROJECT_SPECIALISTS
+
+    if plan.strategy != "projects":
+        return steps_from_plan(plan)
+    steps: list[_Step] = []
+    for n in plan.nodes:
+        title = PROJECT_SPECIALISTS.get(n.node_id, ("", _TITLE_FOR_TYPE.get(n.node_type, "Work"), ""))[1]
+        instr = PROJECT_SPECIALISTS.get(n.node_id, ("", "", ""))[2]
+        extra = {
+            "node_type": n.node_type,
+            "run_id": plan.run_id,
+            "method_hint": n.method_hint,
+            "retrieval_query": n.retrieval_query,
+            "independence": n.independence,
+        }
+        steps.append((
+            n.node_id, title, _escape(instr) + "{obj}", list(n.dependencies) or ["root"],
+            n.role or _ROLE_FOR_TYPE.get(n.node_type, "worker"), n.harness, n.model, extra,
+        ))
+    return steps
+
+
 def steps_from_plan(plan: Any) -> list[_Step]:
     """Map plan nodes onto desk DAG steps (stable, readable ids)."""
     investigators = [n for n in plan.nodes if n.node_type == "investigate"]
@@ -455,7 +503,8 @@ def resolve_kind(kind: str | None = None) -> str | None:
 
 
 def template_for(kind: str | None) -> list[_Step]:
-    """Kind-specific planner template. work/auto → Switchbay (+ multi-harness fan-out)."""
+    """Fixed planner template per kind. work/auto → investigators → synthesizer →
+    verifier (the fallback when planning fails)."""
     k = resolve_kind(kind) if kind is None else (kind or "").strip().lower()
     if k in ("work", "auto"):
         return switchbay_steps()
@@ -477,11 +526,13 @@ def advise(
     notes = list(blackboard_head or [])
     if steps is None:
         k = resolve_kind(kind) if kind is None else (kind or "").strip().lower()
-        if k in ("work", "auto"):
-            try:
+        try:
+            if k == "auto":
                 steps = steps_from_plan(plan_for(obj, effort=effort)[1])
-            except Exception:  # noqa: BLE001
-                steps = None
+            elif k == "work":
+                steps = steps_from_projects(work_plan_for(obj, effort=effort))
+        except Exception:  # noqa: BLE001
+            steps = None
         if steps is None:
             steps = template_for(kind)
     breakdown = []
@@ -531,9 +582,10 @@ def break_down(
     """
     Heuristic (no LLM) expansion of the seated objective into child DAG nodes.
 
-    work/auto → shape chosen by the orchestration utility (investigators →
-    verifier → synthesizer, sized by the task); the fixed template is the
-    fallback if planning fails.
+    auto → shape chosen by the orchestration utility (investigators →
+    verifier → synthesizer, sized by the task).
+    work → specialists in sequence: gather context → write → review.
+    For both, the fixed template is the fallback if planning fails.
     Other kinds keep their templates. No kind and no active desk → cos-* chain.
     Idempotent: existing template nodes are left in place (title/objective refreshed).
     """
@@ -558,10 +610,14 @@ def break_down(
             (n.run_id for n in g.nodes.values() if n.run_id and n.role in _AUTO_ROLES), None
         )
         try:
-            decision, plan = plan_for(
-                obj, effort=effort, desk_id=desk_id, run_id=prior_run, task_type=resolved or ""
-            )
-            steps = steps_from_plan(plan)
+            if resolved == "work":
+                plan = work_plan_for(obj, effort=effort, desk_id=desk_id, run_id=prior_run)
+                steps = steps_from_projects(plan)
+            else:
+                decision, plan = plan_for(
+                    obj, effort=effort, desk_id=desk_id, run_id=prior_run, task_type=resolved or ""
+                )
+                steps = steps_from_plan(plan)
         except Exception:  # noqa: BLE001 — never block a desk on planning
             decision, plan = None, None
             steps = template_for(resolved)
@@ -642,6 +698,9 @@ def break_down(
     recipe_line = ""
     if decision is not None:
         recipe_line = f"recipe: {decision.arm_id} — {decision.reason}\n"
+    elif plan is not None and plan.strategy == "projects":
+        recipe_line = "specialists: " + " → ".join(n.node_id for n in plan.nodes) + "\n"
+    if plan is not None:
         _save_run_plan(plan, decision)
     summary_text = (
         f"CoS plan for: {obj} (kind={resolved or 'default'})\n"
@@ -751,7 +810,8 @@ def _save_run_plan(plan: Any, decision: Any) -> None:
         d = evidence.run_dir(rid)
         d.mkdir(parents=True, exist_ok=True)
         payload = plan.to_dict()
-        payload["decision"] = decision.to_dict()
+        if decision is not None:
+            payload["decision"] = decision.to_dict()
         (d / "plan.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         if not evidence.run_evidence_path(rid).exists():
             evidence.save_run(evidence.open_run(rid))

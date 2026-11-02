@@ -12,6 +12,7 @@ ready node and never talks to a model itself.
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
@@ -651,6 +652,117 @@ def _apply_extension(plan: OrchestrationPlan, ext: Extension, bounds: Bounds, st
             ids[nid].dependencies = deps
         return False
     return True
+
+
+# ── /work: specialists in sequence ─────────────────────────────────
+
+# (id, writes, title, instruction). writes: "none" | "deliverable" | "review".
+PROJECT_SPECIALISTS: dict[str, tuple[str, str, str]] = {
+    "context": ("none", "Gather context",
+                "Report what is true right now, with sources. Read only; gaps are gaps. "
+                "No plan, no messages. For: "),
+    "plan": ("deliverable", "Write the plan",
+             "Write the plan of record (scope, targets, gates) from the gathered context. "
+             "Do not invent metrics. For: "),
+    "comms": ("deliverable", "Write the update",
+              "Draft the smallest message or briefing that gets the next actions done, "
+              "citing the context. For: "),
+    "write": ("deliverable", "Do the work",
+              "Produce the deliverable from the gathered context. For: "),
+    "review": ("review", "Review",
+               "Check the deliverable against the context and sources: drift, missing "
+               "sources, over-promise. Do not rewrite it. For: "),
+}
+
+_PROJECT_HINTS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("review", re.compile(r"\b(scope drift|drift|review the plan|challenge the|"
+                          r"does (the|this) (plan|update|status) match)\b", re.I)),
+    ("comms", re.compile(r"\b(tell the team|team (update|message)|exec(utive)? (deck|update|brief)|"
+                         r"community update|slides? for|standup|status update|minimal messages?)\b", re.I)),
+    ("plan", re.compile(r"\b(project plan|work-plan|targets?|metrics?|milestones?|"
+                        r"set (a )?gate|scope|charter)\b", re.I)),
+    ("context", re.compile(r"\b(what is going on|where are we|situation|status of|catch me up)\b", re.I)),
+)
+
+
+def project_specialists(objective: str) -> list[str]:
+    """Which specialists a /work brief needs, in run order.
+
+    Hinted specialists if the brief names any, else context → write.
+    Context is added in front of any writer, and review after it.
+    """
+    hinted = [sid for sid, pat in _PROJECT_HINTS if pat.search(objective or "")]
+    want = hinted or ["context", "write"]
+    writers = [w for w in want if PROJECT_SPECIALISTS[w][0] == "deliverable"]
+    if writers and "context" not in want:
+        want.insert(0, "context")
+    if writers and "review" not in want:
+        want.append("review")
+    order = ["context", "plan", "comms", "write", "review"]
+    return sorted(dict.fromkeys(want), key=order.index)
+
+
+def plan_projects(
+    objective: str,
+    *,
+    specialists: list[str] | None = None,
+    harnesses: list[str] | None = None,
+    models_by_harness: dict[str, str] | None = None,
+    critic_pairs: list[tuple[str, str | None]] | None = None,
+    run_id: str | None = None,
+    preference: float = ou.PREF_BALANCED,
+) -> OrchestrationPlan:
+    """/work shape: gather context → write → review, one specialist each.
+
+    Context has no dependencies, writers wait on context, review waits on
+    the writers (or on context when nothing is written) and runs on the
+    strongest allowed model. Authors use ``models_by_harness``.
+    """
+    rid = run_id or new_run_id()
+    picks = [s for s in (specialists or project_specialists(objective)) if s in PROJECT_SPECIALISTS]
+    harns = [h for h in (harnesses or []) if h]
+    author_h = harns[0] if harns else None
+    author_m = (models_by_harness or {}).get(author_h) if author_h else None
+    nodes: list[PlanNode] = []
+    recon: list[str] = []
+    writers: list[str] = []
+    for sid in picks:
+        writes, _title, instr = PROJECT_SPECIALISTS[sid]
+        if writes == "none":
+            nodes.append(PlanNode(
+                node_id=sid, node_type="investigate", objective=instr + objective,
+                role="investigator", difficulty="normal", independence="medium",
+                output_contract="findings", harness=author_h, model=author_m,
+            ))
+            recon.append(sid)
+        elif writes == "deliverable":
+            nodes.append(PlanNode(
+                node_id=sid, node_type="synthesize", objective=instr + objective,
+                dependencies=list(recon), role="synthesizer", difficulty="hard",
+                independence="medium", output_contract="synthesis",
+                harness=author_h, model=author_m,
+            ))
+            writers.append(sid)
+        else:
+            critic = _critic(critic_pairs, {author_h} if author_h else ())
+            vh, vm = critic if critic else ((harns[-1], (models_by_harness or {}).get(harns[-1])) if harns else (None, None))
+            nodes.append(PlanNode(
+                node_id=sid, node_type="verify", objective=instr + objective,
+                dependencies=list(writers or recon), role="verifier", difficulty="hard",
+                independence="high", output_contract="verification", harness=vh, model=vm,
+            ))
+    if not nodes:
+        return plan_single(objective, run_id=rid, preference=preference)
+    return OrchestrationPlan(
+        run_id=rid,
+        strategy="projects",
+        nodes=nodes,
+        objective=objective,
+        preference=preference,
+        decision={"arm_id": "projects", "specialists": picks},
+        allow_expand=False,
+        bounds=Bounds(max_concurrency=max(1, len(recon))).clamp(),
+    )
 
 
 # ── plan from a utility decision ───────────────────────────────────

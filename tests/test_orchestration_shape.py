@@ -124,15 +124,17 @@ def test_break_down_reshapes_cleanly(state_dir: Path) -> None:
     assert not g.nodes["investigator"].depends_on or g.nodes["investigator"].depends_on == ["root"]
 
 
-def test_break_down_falls_back_to_template(state_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("kind", ["auto", "work"])
+def test_break_down_falls_back_to_template(state_dir: Path, monkeypatch: pytest.MonkeyPatch, kind: str) -> None:
     from okstratr import cos, dag
 
     def boom(*a, **k):
         raise RuntimeError("planner broke")
 
     monkeypatch.setattr(cos, "plan_for", boom)
+    monkeypatch.setattr(cos, "work_plan_for", boom)
     dag.seat_root("Anything")
-    out = cos.break_down("Anything", kind="work")
+    out = cos.break_down("Anything", kind=kind)
     assert out["ok"] is True
     assert out["decision"] is None
     g = dag.default_dag(force_reload=True)

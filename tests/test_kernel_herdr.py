@@ -74,11 +74,24 @@ def test_desk_org_persists_model_hints_and_effort(state_dir: Path) -> None:
     assert snap["desk"]["state"] == "quiet"
 
 
-def test_work_auto_breakdown_uses_switchbay_roles(state_dir: Path) -> None:
+def test_work_breakdown_is_context_write_review(state_dir: Path) -> None:
+    from okstratr import dag, desks
+
+    desks.start("Compare the evidence on remote work across sources; which claims disagree and why?", kind="work")
+    g = dag.default_dag(force_reload=True)
+    assert [n for n in g.nodes if n != "root"] == ["context", "write", "review"]
+    assert g.nodes["context"].role == "investigator"
+    assert g.nodes["write"].depends_on == ["context"]
+    assert g.nodes["review"].depends_on == ["write"]
+    assert g.nodes["review"].role == "verifier"
+    assert g.nodes["review"].independence == "high"
+
+
+def test_auto_breakdown_uses_switchbay_roles(state_dir: Path) -> None:
     from okstratr import dag, desks
 
     # A research brief gets investigators → verifier → synthesizer.
-    desks.start("Compare the evidence on remote work across sources; which claims disagree and why?", kind="work")
+    desks.start("Compare the evidence on remote work across sources; which claims disagree and why?", kind="auto")
     g = dag.default_dag(force_reload=True)
     inv = sorted(n for n in g.nodes if n.startswith("investigator"))
     assert len(inv) >= 2
@@ -89,10 +102,10 @@ def test_work_auto_breakdown_uses_switchbay_roles(state_dir: Path) -> None:
     assert g.nodes["synthesizer"].depends_on == ["verifier"]
 
 
-def test_work_trivial_breakdown_is_one_investigator(state_dir: Path) -> None:
+def test_auto_trivial_breakdown_is_one_investigator(state_dir: Path) -> None:
     from okstratr import dag, desks
 
-    desks.start("Do the thing", kind="work")
+    desks.start("Do the thing", kind="auto")
     g = dag.default_dag(force_reload=True)
     workers = [n for n in g.nodes if n != "root"]
     assert workers == ["investigator"]
@@ -156,15 +169,15 @@ def test_retire_worker_archives_and_shrinks_dag(state_dir: Path) -> None:
     desks.start("Retire me", kind="work")
     g = dag.default_dag(force_reload=True)
     before = len(g.nodes)
-    assert "investigator" in g.nodes
+    assert "context" in g.nodes
 
-    r = kernel.retire_worker("investigator")
+    r = kernel.retire_worker("context")
     assert r["ok"] is True
-    assert r["retired"] == "investigator"
+    assert r["retired"] == "context"
     g2 = dag.default_dag(force_reload=True)
-    assert "investigator" not in g2.nodes
+    assert "context" not in g2.nodes
     assert len(g2.nodes) == before - 1
-    hits = blackboard.search("retired investigator")
+    hits = blackboard.search("retired context")
     assert hits
     assert hits[-1]["author"] == "kernel"
 
@@ -178,7 +191,7 @@ def test_herdr_agent_id_format(state_dir: Path) -> None:
     start = desks.start("Label me", kind="work")
     desk_id = start["desk"]["id"]
     g = dag.default_dag(force_reload=True)
-    node = g.nodes["investigator"]
+    node = g.nodes["context"]
     aid = herdr.make_agent_id(desk_id, "investigator", node.id)
     assert aid.startswith("o")
     assert len(aid) <= herdr.AGENT_ID_MAX <= 32
@@ -195,7 +208,7 @@ def test_herdr_agent_id_format(state_dir: Path) -> None:
 
     out = herdr.run_ready(limit=1, dry_run=True)
     assert out["dry_run"] is True
-    assert out["ran"] == ["investigator"]
+    assert out["ran"] == ["context"]
     assert out["results"][0]["herdr_labels"]["desk_id"] == desk_id
     agent = out["results"][0]["agent_id"]
     assert agent.startswith("o")

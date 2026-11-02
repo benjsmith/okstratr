@@ -51,7 +51,7 @@ def test_desk_start_hires_cos(state_dir: Path) -> None:
     assert "cos" in desk["roles"]
     g = dag.default_dag(force_reload=True)
     assert "root" in g.nodes
-    assert _has_investigator(g.nodes)  # Switchbay work template
+    assert any(n.role == "investigator" for n in g.nodes.values())  # /work gathers context first
 
 
 def test_desk_stop_keeps_dag(state_dir: Path) -> None:
