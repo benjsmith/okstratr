@@ -87,10 +87,19 @@ def test_work_breakdown_is_context_write_review(state_dir: Path) -> None:
     assert g.nodes["review"].independence == "high"
 
 
+def _two_harnesses() -> None:
+    from okstratr.harness import config as hcfg
+
+    cfg = hcfg.default_config()
+    cfg.enabled = ["grok", "claude"]
+    hcfg.save(cfg)
+
+
 def test_auto_breakdown_uses_switchbay_roles(state_dir: Path) -> None:
     from okstratr import dag, desks
 
-    # A research brief gets investigators → verifier → synthesizer.
+    # A research brief with two harnesses gets investigators → verifier → synthesizer.
+    _two_harnesses()
     desks.start("Compare the evidence on remote work across sources; which claims disagree and why?", kind="auto")
     g = dag.default_dag(force_reload=True)
     inv = sorted(n for n in g.nodes if n.startswith("investigator"))

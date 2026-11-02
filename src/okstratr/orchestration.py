@@ -1268,6 +1268,7 @@ class AdaptiveRun:
                 nodes_so_far=len(plan.nodes),
                 remaining_nodes=remaining,
                 consequence=self._consequence(plan),
+                unique_sources=self.store.unique_source_count(),
                 max_expansions=bounds.max_expansions,
                 max_nodes=bounds.max_nodes,
             )

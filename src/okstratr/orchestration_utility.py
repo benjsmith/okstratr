@@ -194,7 +194,9 @@ def estimate_policy_quality(recipe: dict[str, Any], feat: Any) -> float:
     """Coarse prior Q ∈ [0, 1]. Ordering matters more than calibration."""
     n = int(recipe.get("n") or 1)
     verify = bool(recipe.get("verify"))
-    diverse = bool(recipe.get("diverse"))
+    # With one harness the planner puts every investigator on it
+    # (plan_from_decision), so a "diverse" recipe is really homogeneous.
+    diverse = bool(recipe.get("diverse")) and int(getattr(feat, "provider_diversity", 2) or 1) >= 2
     ladder = str(recipe.get("ladder") or "balanced")
     execute = bool(recipe.get("execute"))
     research = bool(getattr(feat, "research", False))

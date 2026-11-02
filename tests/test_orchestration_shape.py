@@ -96,6 +96,11 @@ def test_decompose_lists_into_slices() -> None:
 def test_break_down_uses_utility_and_records_decision(state_dir: Path) -> None:
     from okstratr import cos, dag, evidence
 
+    from okstratr.harness import config as hcfg
+
+    cfg = hcfg.default_config()
+    cfg.enabled = ["grok", "claude"]
+    hcfg.save(cfg)
     dag.seat_root(RESEARCH)
     out = cos.break_down(RESEARCH, kind="auto", effort=0.6)
     assert out["decision"]["recipe"].startswith("ivs_")
@@ -149,3 +154,15 @@ def test_node_prompt_carries_method_and_query() -> None:
     p = herdr._node_prompt(n)
     assert "Method: corroboration: x" in p and "remote work" in p
     assert herdr._node_prompt(dag.Node(id="a", title="A", objective="B")) == "A — B"
+
+
+def test_one_harness_does_not_price_a_diverse_recipe_as_diverse() -> None:
+    # The planner puts every investigator on the one harness, so the
+    # estimate must not credit them as independent evidence paths.
+    one = ou.extract_features(RESEARCH, preference=0.5, provider_diversity=1)
+    two = ou.extract_features(RESEARCH, preference=0.5, provider_diversity=2)
+    r = ou.RECIPES["ivs_diverse_2"]
+    assert ou.estimate_policy_quality(r, one) < ou.estimate_policy_quality(r, two)
+    assert ou.estimate_policy_quality(r, one) == ou.estimate_policy_quality(ou.RECIPES["ivs_homog_4"] | {"n": 2}, one)
+    assert ou.choose_initial_policy(one, effort=0.5).arm_id == "single_verify"
+    assert ou.choose_initial_policy(two, effort=0.5).arm_id == "ivs_diverse_2"
