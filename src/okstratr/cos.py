@@ -318,6 +318,7 @@ def _models_for_run(
     *,
     effort: float,
     desk_id: str | None = None,
+    task_class: str = "general",
 ) -> tuple[list[str], dict[str, str], list[tuple[str, str | None]]]:
     """Allowed harnesses, authors' models by effort, and the critic's candidates.
 
@@ -335,7 +336,8 @@ def _models_for_run(
     pinned = dict(models_by_harness or _parse_models_by_harness())
     try:
         out = model_policy.assign_models(
-            harns, effort, workspace_id=model_policy.current_workspace_id(desk_id), pinned=pinned
+            harns, effort, workspace_id=model_policy.current_workspace_id(desk_id), pinned=pinned,
+            task_class=task_class,
         )
     except Exception:  # noqa: BLE001 — a bad policy file must not block planning
         out = {"harnesses": [], "authors": {}, "pairs": []}
@@ -368,10 +370,11 @@ def plan_for(
     """
     from . import bandit, orchestration, orchestration_utility as ou
 
-    harns, models_by, pairs = _models_for_run(
-        harnesses, models_by_harness, effort=bandit.clamp_effort(effort), desk_id=desk_id
-    )
     e = bandit.clamp_effort(effort)
+    harns, models_by, pairs = _models_for_run(
+        harnesses, models_by_harness, effort=e, desk_id=desk_id,
+        task_class=ou.extract_features(objective).kind(),
+    )
     feat = ou.extract_features(
         objective, preference=e, provider_diversity=len(harns) or 1, task_type=task_type
     )

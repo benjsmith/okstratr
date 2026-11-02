@@ -281,23 +281,26 @@ def author_model(
     pairs: list[Pair],
     *,
     critic: Pair | None = None,
+    task_class: str = "general",
+    stats: Any = None,
 ) -> str | None:
-    """Model for an author seat on ``harness``, by effort band."""
+    """Model for an author seat on ``harness``.
+
+    The strongest model in the harness's pool (the critic's pair is kept for
+    the critic when there are others), unless a cheaper one has a record on
+    this task class that makes it the better expected utility at this effort
+    once rework and spinning are priced in (:mod:`okstratr.model_routing`).
+    """
+    from . import model_routing
+
     pool = [p for p in pairs if p[0] == harness]
     if not pool:
         return None
     if critic is not None and len(pool) > 1:
         pool = [p for p in pool if p != critic] or pool
-    asc = sorted(pool, key=lambda p: model_strength(p[1]))  # stable: config order on ties
     e = 0.5 if effort is None else max(0.0, min(1.0, float(effort)))
-    if e <= 0.25:
-        return asc[0][1]
-    if e >= 0.8:
-        return asc[-1][1]
-    # Middle strength tier, so aliases of one model (haiku, claude-haiku) count once.
-    tiers = sorted({model_strength(p[1]) for p in asc})
-    mid = tiers[len(tiers) // 2]
-    return next(p[1] for p in asc if model_strength(p[1]) == mid)
+    model, _ = model_routing.choose([m for _, m in pool], task_class or "general", e, stats=stats)
+    return model
 
 
 def assign_models(
@@ -308,6 +311,8 @@ def assign_models(
     pinned: dict[str, str] | None = None,
     cfg: Any = None,
     policy: dict[str, Any] | None = None,
+    task_class: str = "general",
+    stats: Any = None,
 ) -> dict[str, Any]:
     """Pick models for one run.
 
@@ -331,5 +336,5 @@ def assign_models(
         if pm and is_allowed(h, pm, policy=pol):
             authors[h] = pm
         else:
-            authors[h] = author_model(h, effort, pairs, critic=best)
+            authors[h] = author_model(h, effort, pairs, critic=best, task_class=task_class, stats=stats)
     return {"harnesses": allowed_h, "authors": authors, "pairs": pairs}

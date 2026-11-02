@@ -60,7 +60,7 @@ def test_plan_runs_specialists_in_sequence() -> None:
     assert orch.ensure_valid(plan) is plan
 
 
-def test_review_gets_strongest_model_and_authors_follow_effort() -> None:
+def test_review_gets_strongest_model_and_authors_default_strong() -> None:
     from okstratr import cos
     from okstratr.harness import config as hcfg
 
@@ -77,7 +77,8 @@ def test_review_gets_strongest_model_and_authors_follow_effort() -> None:
     top = max(mp.model_strength(m) for _h, m in pairs)
     assert mp.model_strength(lo["review"].model) == top
     assert mp.model_strength(hi["review"].model) == top
-    assert mp.model_strength(lo["write"].model) < mp.model_strength(hi["write"].model)
+    # No routing data yet: authors get the strongest model at any effort (cheap only once learned).
+    assert lo["write"].model == hi["write"].model
     # review on a different harness from the authors when one is available
     assert lo["review"].harness != lo["write"].harness
 

@@ -513,7 +513,7 @@ def snapshot(effort: float | None = None, *, desk_id: str | None = None) -> dict
 GLOBAL_SCOPE = "_global"
 _STAT_KEYS = (
     "sum_reward", "sum_quality", "sum_cost", "sum_latency", "sum_nodes",
-    "sum_quality_per_node",
+    "sum_quality_per_node", "sum_reward_sq",
 )
 
 
@@ -607,6 +607,7 @@ def record_recipe_outcome(
     stats = rec.setdefault("arms", {}).setdefault(str(arm_id), _empty_recipe_stats())
     stats["n"] = int(stats.get("n") or 0) + 1
     stats["sum_reward"] = float(stats.get("sum_reward") or 0.0) + reward
+    stats["sum_reward_sq"] = float(stats.get("sum_reward_sq") or 0.0) + reward * reward
     stats["sum_quality"] = float(stats.get("sum_quality") or 0.0) + quality
     stats["sum_cost"] = float(stats.get("sum_cost") or 0.0) + tokens
     stats["sum_latency"] = float(stats.get("sum_latency") or 0.0) + latency

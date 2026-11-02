@@ -99,7 +99,33 @@ RECIPES: dict[str, dict[str, Any]] = {
         "ladder": "balanced", "execute": True,
         "why": "specialists plus deterministic execute and verify",
     },
+    # The old template's shape (one investigator per harness, then verify),
+    # always priced so a loss against it is explained. n is set per task.
+    "parallel_diverse_k": {
+        "n": 0, "verify": True, "diverse": True,
+        "ladder": "balanced", "execute": False,
+        "why": "one investigator per harness then verify (template shape)",
+    },
 }
+
+# parallel_diverse_k uses min(#harnesses, this) investigators.
+DIVERSE_K_CAP = 4
+MAX_CANDIDATES = 7
+
+
+def diverse_k(feat: Any) -> int:
+    return max(2, min(int(getattr(feat, "provider_diversity", 1) or 1), DIVERSE_K_CAP))
+
+
+def recipe_for(policy_id: str, feat: Any | None = None) -> dict[str, Any] | None:
+    """Recipe with n resolved for this task (parallel_diverse_k depends on harnesses)."""
+    r = RECIPES.get(policy_id)
+    if r is None:
+        return None
+    r = dict(r)
+    if policy_id == "parallel_diverse_k":
+        r["n"] = diverse_k(feat) if feat is not None else DIVERSE_K_CAP
+    return r
 
 # Nearby policies for conservative exploration. Never a swarm jump.
 NEIGHBORS: dict[str, tuple[str, ...]] = {
@@ -112,7 +138,8 @@ NEIGHBORS: dict[str, tuple[str, ...]] = {
     "ivs_diverse_3": ("ivs_diverse_2", "ivs_homog_4"),
     "homog_4": ("ivs_diverse_2", "parallel_diverse_2"),
     "ivs_homog_4": ("ivs_diverse_2", "ivs_diverse_3"),
-    "tools_verify": ("single_verify", "ivs_diverse_2"),
+    "tools_verify": ("single", "single_verify", "ivs_diverse_2"),
+    "parallel_diverse_k": ("ivs_diverse_2", "ivs_diverse_3"),
 }
 
 
@@ -206,7 +233,8 @@ def estimate_policy_quality(recipe: dict[str, Any], feat: Any) -> float:
     finance = bool(getattr(feat, "finance", False))
     science = bool(getattr(feat, "science", False))
     experiment = bool(getattr(feat, "experiment", False))
-    simple = difficulty < 0.3 and not research and n_sub <= 1
+    code = bool(getattr(feat, "code", False))
+    simple = difficulty < 0.3 and not research and n_sub <= 1 and not code
     prompt_len = int(getattr(feat, "prompt_len", 0) or 0)
 
     q = 0.70
@@ -249,6 +277,12 @@ def estimate_policy_quality(recipe: dict[str, Any], feat: Any) -> float:
         q += add
     if execute and experiment:
         q += 0.16
+    elif execute and code:
+        # Running the tests catches what reading the diff misses.
+        q += 0.14
+    if code and n > 1 and not execute:
+        # Parallel authors on one change mostly collide; the tests decide.
+        q -= 0.02 * (n - 1)
     if simple and n > 1:
         q = min(q, 0.76 + 0.006 * (n - 1))
     return _clip01(q)
@@ -303,7 +337,7 @@ def _independence(recipe: dict[str, Any], feat: Any) -> str:
 
 
 def make_candidate(policy_id: str, feat: Any) -> CandidatePolicy | None:
-    recipe = RECIPES.get(policy_id)
+    recipe = recipe_for(policy_id, feat)
     if not recipe:
         return None
     n = int(recipe["n"])
@@ -345,6 +379,7 @@ def make_candidate(policy_id: str, feat: Any) -> CandidatePolicy | None:
         include_execute=execute and (
             bool(getattr(feat, "experiment", False))
             or bool(getattr(feat, "finance", False))
+            or bool(getattr(feat, "code", False))
         ),
         independence=ind,
         allow_expand=bool(verify),
@@ -356,23 +391,38 @@ def make_candidate(policy_id: str, feat: Any) -> CandidatePolicy | None:
     )
 
 
+def is_simple(feat: Any) -> bool:
+    """Easy, single-step work. Code and test tasks never count: they need running."""
+    return (
+        float(getattr(feat, "difficulty", 0.2) or 0.0) < 0.3
+        and not bool(getattr(feat, "research", False))
+        and int(getattr(feat, "n_subquestions", 1) or 1) <= 1
+        and not bool(getattr(feat, "finance", False))
+        and not bool(getattr(feat, "science", False))
+        and not bool(getattr(feat, "code", False))
+    )
+
+
 def generate_candidates(feat: Any) -> list[CandidatePolicy]:
-    """3–6 sensible policies. Simple tasks stay near single-agent."""
-    research = bool(getattr(feat, "research", False))
+    """Up to seven sensible policies. Simple tasks stay near single-agent.
+
+    With two or more harnesses on non-simple work, the template shape
+    (``parallel_diverse_k``) is always priced, so a choice against it has a
+    recorded reason.
+    """
     difficulty = float(getattr(feat, "difficulty", 0.2) or 0.0)
     n_sub = int(getattr(feat, "n_subquestions", 1) or 1)
     finance = bool(getattr(feat, "finance", False))
     science = bool(getattr(feat, "science", False))
     experiment = bool(getattr(feat, "experiment", False))
-    simple = (
-        difficulty < 0.3 and not research and n_sub <= 1
-        and not finance and not science
-    )
+    code = bool(getattr(feat, "code", False))
+    simple = is_simple(feat)
+    multi = int(getattr(feat, "provider_diversity", 1) or 1) >= 2
     ids: list[str] = ["single", "single_strong"]
     if simple:
         ids.append("parallel_homog_2")
     else:
-        if experiment:
+        if experiment or code:
             ids.append("tools_verify")
         ids.extend(["single_verify", "parallel_diverse_2", "ivs_diverse_2"])
         hard = difficulty >= 0.55 or finance or science or n_sub >= 3
@@ -381,19 +431,33 @@ def generate_candidates(feat: Any) -> list[CandidatePolicy]:
             ids.append("homog_4")
         else:
             ids.append("parallel_homog_2")
-    # Bounded set; swarm_8 is test-only via make_candidate.
-    seen: set[str] = set()
-    out: list[CandidatePolicy] = []
-    for pid in ids:
-        if pid in seen:
-            continue
-        seen.add(pid)
-        c = make_candidate(pid, feat)
-        if c is not None:
-            out.append(c)
-        if len(out) >= 6:
-            break
+    # Bounded set; swarm_8 is test-only via make_candidate. The template
+    # shape goes last so a tie goes to the named recipe, but always has a slot.
+    fixed = list(dict.fromkeys(ids))
+    keep_k = multi and not simple
+    fixed = fixed[: MAX_CANDIDATES - (1 if keep_k else 0)]
+    if keep_k:
+        fixed.append("parallel_diverse_k")
+    out = [c for c in (make_candidate(pid, feat) for pid in fixed) if c is not None]
     return out
+
+
+def explain_loss(chosen: CandidatePolicy, other: CandidatePolicy | None, preference: float) -> str:
+    """Why ``other`` (usually the template shape) lost to ``chosen``."""
+    if other is None or other.policy_id == chosen.policy_id:
+        return ""
+    s = clamp_preference(preference)
+    du = chosen.u(s) - other.u(s)
+    dq = other.q - chosen.q
+    dcost = cost_weight(s) * (other.cnorm - chosen.cnorm)
+    dlat = latency_weight(s) * (other.lnorm - chosen.lnorm)
+    if abs(du) < 1e-6:
+        return (f"{other.policy_id} ties {chosen.policy_id} (same shape here); "
+                f"the tie goes to {chosen.policy_id}")
+    return (
+        f"{other.policy_id} lost to {chosen.policy_id} by {du:.3f} U "
+        f"(its ΔQ {dq:+.3f}, extra cost {dcost:+.3f}, extra latency {dlat:+.3f})"
+    )
 
 
 def choose_initial_candidate(
@@ -498,12 +562,12 @@ def estimate_marginal_cost_latency(action: str) -> tuple[float, float]:
 _RESEARCH_RE = re.compile(
     r"\b(research|investigat\w*|evidence|compar(e|ison)|analy[sz]|"
     r"why\b|conflict|forecast|uncertain|debate|verif\w*|source|"
-    r"contradict|ambiguous|adversarial)\b",
+    r"contradict|ambiguous|adversarial|cite|citations?|corpus|disagree\w*)\b",
     re.I,
 )
 _CODE_RE = re.compile(
-    r"\b(code|bug|test|implement|refactor|function|compile|traceback|"
-    r"stack\s*trace|lint|type.?error)\b",
+    r"\b(code|bugs?|tests?|pytest|implement\w*|refactor\w*|functions?|compiles?|"
+    r"traceback|stack\s*trace|lint|type.?error|repo(sitory)?)\b",
     re.I,
 )
 _GRAPH_RE = re.compile(
@@ -694,14 +758,15 @@ class PolicyDecision:
 
     @property
     def workers(self) -> int:
-        return recipe_workers(self.arm_id) if self.arm_id in RECIPES else (
+        return recipe_workers(self.arm_id, TaskFeatures.from_dict(self.features) if self.features else None) \
+            if self.arm_id in RECIPES else (
             self.n_investigators + int(self.include_verify) + int(self.include_execute)
         )
 
 
-def recipe_workers(policy_id: str) -> int:
+def recipe_workers(policy_id: str, feat: Any | None = None) -> int:
     """Seats a recipe needs besides the final synthesizer."""
-    r = RECIPES.get(policy_id) or {}
+    r = recipe_for(policy_id, feat) or {}
     n = int(r.get("n") or 1)
     if n <= 1 and not r.get("verify") and not r.get("execute"):
         return 1
@@ -735,7 +800,7 @@ def candidate_table(cands: Iterable[CandidatePolicy], preference: float) -> list
 
 def candidates_within_ceiling(feat: TaskFeatures, effort: float | None = None) -> list[CandidatePolicy]:
     cap = worker_ceiling(feat.preference if effort is None else effort)
-    out = [c for c in generate_candidates(feat) if recipe_workers(c.policy_id) <= cap]
+    out = [c for c in generate_candidates(feat) if recipe_workers(c.policy_id, feat) <= cap]
     if not out:
         single = make_candidate("single", feat)
         assert single is not None
@@ -783,7 +848,12 @@ def choose_initial_policy(features: TaskFeatures, *, effort: float | None = None
     s = features.preference
     cands = candidates_within_ceiling(features, effort)
     best = max(cands, key=lambda c: c.u(s))
-    return _candidate_to_decision(best, features, table=candidate_table(cands, s))
+    d = _candidate_to_decision(best, features, table=candidate_table(cands, s))
+    tmpl = next((c for c in cands if c.policy_id == "parallel_diverse_k"), None)
+    why = explain_loss(best, tmpl, s)
+    if why:
+        d.reason = f"{d.reason}; {why}"
+    return d
 
 
 def critical_path_latency(
@@ -933,8 +1003,13 @@ def choose_expansion(
     unique_sources: int | None = None,
     max_expansions: int | None = None,
     max_nodes: int | None = None,
+    gap_close_rate: float | None = None,
 ) -> ExpansionDecision:
-    """Buy another computation only while ΔU > threshold. Hard caps first."""
+    """Buy another computation only while ΔU > threshold. Hard caps first.
+
+    ΔQ is what closing the gaps would be worth, times the chance a new wave
+    closes them: a prior on the first wave, then what the last wave did.
+    """
     from . import limits
 
     if not allow_expand:
@@ -959,13 +1034,16 @@ def choose_expansion(
         nodes_so_far=nodes_so_far,
     )
     action = "diverse_investigator" if independence != "low" else "investigator"
-    dq = estimate_marginal_quality(action=action, **kw)
+    p_close = p_close_gap(independence, gap_close_rate)
+    dq = estimate_marginal_quality(action=action, **kw) * p_close
     dc, dl = estimate_marginal_cost_latency(action)
     du = marginal_utility(dq, dc, dl, s)
     # The same remaining gaps are worth less on each later wave.
     du -= 0.045 * max(0, expansions_so_far)
     if du <= EXPANSION_THRESHOLD:
-        return ExpansionDecision(False, 0, f"ΔU={du:.3f} ≤ threshold (ΔQ={dq:.3f}); stop")
+        return ExpansionDecision(
+            False, 0, f"ΔU={du:.3f} ≤ threshold (ΔQ={dq:.3f}, P(close)={p_close:.2f}); stop"
+        )
 
     objectives: list[str] = []
     reasons: list[str] = []
@@ -1005,7 +1083,7 @@ def choose_expansion(
     if extra < room:
         dq2 = estimate_marginal_quality(
             action="redundant_copy" if independence == "low" else "investigator", **kw
-        )
+        ) * p_close
         dc2, dl2 = estimate_marginal_cost_latency("investigator")
         if marginal_utility(dq2, dc2, dl2, s) > EXPANSION_THRESHOLD:
             extra = 2
@@ -1013,6 +1091,23 @@ def choose_expansion(
     if extra < 1:
         return ExpansionDecision(False, 0, "no room for extra nodes")
     return ExpansionDecision(True, extra, "; ".join(reasons) or f"ΔU={du:.3f}", objectives[:extra])
+
+
+P_CLOSE_PRIOR = {"high": 0.7, "medium": 0.6, "low": 0.45}
+
+
+def p_close_gap(independence: str, observed_rate: float | None = None) -> float:
+    """Chance one more wave closes the open gaps.
+
+    Before any wave, a prior by independence. After one, the share of gaps
+    the last wave closed, pulled a little toward the prior (one wave is one
+    observation).
+    """
+    prior = P_CLOSE_PRIOR.get(independence, 0.6)
+    if observed_rate is None:
+        return prior
+    r = max(0.0, min(1.0, float(observed_rate)))
+    return (2.0 * r + prior) / 3.0
 
 
 def should_continue(
@@ -1031,6 +1126,7 @@ def should_continue(
     last_wave_new_findings: int = 1,
     concat: bool = False,
     max_continuations: int | None = None,
+    gap_close_rate: float | None = None,
 ) -> ExpansionDecision:
     """After a synthesizer: keep going only on an explicit 'no' *and* ΔU.
 
@@ -1077,6 +1173,7 @@ def should_continue(
         consequence=consequence,
         unique_sources=unique_sources,
         max_expansions=cap,
+        gap_close_rate=gap_close_rate,
     )
 
 
@@ -1186,6 +1283,18 @@ def exploration_rate(features: TaskFeatures, arms: dict[str, Any] | None = None)
     return max(0.01, min(0.12, base))
 
 
+def arm_score(stats: dict[str, Any]) -> tuple[float, float]:
+    """(mean reward + 0.1·quality per node, standard error of the mean reward)."""
+    n = max(1, int(stats.get("n") or 0))
+    mean = float(stats.get("sum_reward") or 0.0) / n
+    qpn = float(stats.get("sum_quality_per_node") or 0.0) / n
+    se = 0.0
+    if "sum_reward_sq" in stats and n >= 2:
+        var = max(0.0, (float(stats.get("sum_reward_sq") or 0.0) - n * mean * mean) / (n - 1))
+        se = (var / n) ** 0.5
+    return mean + 0.1 * qpn, se
+
+
 def decide(
     features: TaskFeatures,
     *,
@@ -1207,18 +1316,20 @@ def decide(
     rng = rng or _random.Random()
     valid = {c.policy_id for c in candidates_within_ceiling(features, effort)}
     valid.add(prior.arm_id)
-    best_arm, best_score = prior.arm_id, None
-    for arm, stats in arms.items():
-        if not isinstance(stats, dict) or arm not in valid:
-            continue
-        n = int(stats.get("n") or 0)
-        if n < 2:
-            continue
-        mean = float(stats.get("sum_reward") or 0.0) / n
-        qpn = float(stats.get("sum_quality_per_node") or 0.0) / n
-        score = mean + 0.1 * qpn
-        if best_score is None or score > best_score:
-            best_arm, best_score = arm, score
+    scored = {
+        arm: arm_score(stats) for arm, stats in arms.items()
+        if isinstance(stats, dict) and arm in valid and int(stats.get("n") or 0) >= 2
+    }
+    best_arm = prior.arm_id
+    if scored:
+        top = max(scored, key=lambda a: scored[a][0])
+        if top != prior.arm_id:
+            score, se = scored[top]
+            base = scored.get(prior.arm_id)
+            # Leave the prior only when the learned arm is better by more than
+            # its own noise; ten lucky runs must not beat the model.
+            if base is None or score - se > base[0]:
+                best_arm = top
     chosen = prior
     if best_arm != prior.arm_id:
         chosen = decision_for_arm(best_arm, features, reason=f"learned {best_arm} for similar tasks; {prior.reason}") or prior

@@ -39,7 +39,10 @@ def make_plan(
     from . import cos
 
     if recipe:
-        harns, models_by, pairs = cos._models_for_run(harnesses, None, effort=effort, desk_id=None)
+        harns, models_by, pairs = cos._models_for_run(
+            harnesses, None, effort=effort, desk_id=None,
+            task_class=ou.extract_features(objective).kind(),
+        )
         feat = ou.extract_features(
             objective, preference=effort, provider_diversity=len(harns) or 1, task_type=task_type,
         )

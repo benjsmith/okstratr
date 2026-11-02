@@ -1,4 +1,4 @@
-"""Verifier on the strongest allowed model; authors by effort band."""
+"""Verifier on the strongest allowed model; authors by learned routing, strong when unknown."""
 
 from __future__ import annotations
 
@@ -55,16 +55,27 @@ def test_critic_tie_prefers_harness_authors_did_not_use() -> None:
     assert mp.pick_critic(pairs, avoid_harnesses={"grok"}) == ("claude", "claude-opus-4")
 
 
-def test_author_band_follows_effort() -> None:
+def test_unknown_task_class_defaults_authors_to_strong_model() -> None:
     cfg = hcfg.default_config()
-    low = mp.assign_models(["claude"], 0.1, cfg=cfg, policy=OPEN)["authors"]["claude"]
-    mid = mp.assign_models(["claude"], 0.5, cfg=cfg, policy=OPEN)["authors"]["claude"]
-    high = mp.assign_models(["claude"], 0.9, cfg=cfg, policy=OPEN)["authors"]["claude"]
-    assert mp.model_strength(low) < mp.model_strength(mid) <= mp.model_strength(high)
-    assert low in ("claude-haiku", "haiku")
-    assert mid == "claude-sonnet-4"
-    # The strongest pair is kept for the critic when the harness has others.
-    assert high != "claude-opus-4"
+    for e in (0.1, 0.5, 0.9):
+        a = mp.assign_models(["claude"], e, cfg=cfg, policy=OPEN)["authors"]["claude"]
+        # Strongest author pair; the very strongest stays with the critic.
+        assert a == "claude-sonnet-4"
+
+
+def test_learned_cheap_model_wins_author_seat_at_low_effort() -> None:
+    from okstratr import model_routing as mr
+
+    stats: dict[str, mr.ModelStats] = {}
+    for _ in range(12):
+        mr.record_outcome("claude-haiku", "code", failed=False, tokens=2000, stats=stats)
+        mr.record_outcome("claude-sonnet-4", "code", failed=False, tokens=2000, stats=stats)
+    cfg = hcfg.default_config()
+    low = mp.assign_models(["claude"], 0.1, cfg=cfg, policy=OPEN, task_class="code", stats=stats)
+    assert low["authors"]["claude"] == "claude-haiku"
+    # Unknown class still goes strong even with code data.
+    other = mp.assign_models(["claude"], 0.1, cfg=cfg, policy=OPEN, task_class="research", stats=stats)
+    assert other["authors"]["claude"] == "claude-sonnet-4"
 
 
 def test_pinned_model_wins_for_authors_when_allowed() -> None:
@@ -97,7 +108,7 @@ def test_plan_verifier_on_critic_and_investigators_on_band() -> None:
     verify = next(n for n in plan.nodes if n.node_type == "verify")
     invs = [n for n in plan.nodes if n.node_type == "investigate"]
     assert (verify.harness, verify.model) == ("claude", "claude-opus-4")
-    assert all(n.model in ("claude-haiku", "haiku") for n in invs)
+    assert all(n.model == "claude-sonnet-4" for n in invs)
 
 
 def test_reverify_and_continue_waves_use_critic() -> None:
