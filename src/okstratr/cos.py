@@ -424,6 +424,7 @@ def steps_from_projects(plan: Any) -> list[_Step]:
         extra = {
             "node_type": n.node_type,
             "run_id": plan.run_id,
+            "plan_node_id": n.node_id,
             "method_hint": n.method_hint,
             "retrieval_query": n.retrieval_query,
             "independence": n.independence,
@@ -488,6 +489,7 @@ def steps_from_plan(plan: Any) -> list[_Step]:
         extra = {
             "node_type": t,
             "run_id": plan.run_id,
+            "plan_node_id": n.node_id,
             "method_hint": n.method_hint,
             "retrieval_query": n.retrieval_query,
             "independence": n.independence,

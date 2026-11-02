@@ -11,8 +11,9 @@ Append-oriented: existing records are never mutated in place.
 
 Run folders follow the blackboard duration (default 3 days; duration 0 keeps
 them at most 60 minutes) and ``bb clear`` removes them; see ``prune_runs``.
-Live desks write ``plan.json`` and an empty store; findings are filled in by
-offline runs (``orchestration.run_plan``), not by Herdr seats.
+Seats file their findings with ``okstratr findings add`` (``handback``); the
+kernel copies them into this store when the host says the seat is done, on
+live desks and in ``run_plan`` alike.
 """
 
 from __future__ import annotations

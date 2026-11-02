@@ -147,6 +147,29 @@ def _detect_herdr_failure(herdr_run: dict[str, Any] | None, herdr_err: str | Non
     return None
 
 
+def finish_notice(
+    job_id: str,
+    *,
+    desk_id: str | None,
+    desk_kind: str | None,
+    fail: str | None,
+    quieted: bool,
+    schedule_id: str | None,
+    ran: int = 0,
+) -> tuple[str, str, str, dict[str, Any]]:
+    """(kind, title, body, progress) for the host notice when a Herdr job ends."""
+    who = desk_kind or desk_id or "?"
+    if fail:
+        kind = "schedule.failed" if schedule_id else "desk.progress"
+        return kind, f"Herdr job failed · {who}", str(fail)[:500], {
+            "pct": None, "phase": "failed", "detail": str(job_id)}
+    if quieted:
+        return "desk.done", f"Desk done · {who}", f"job {job_id} finished; no seats left", {
+            "pct": 100, "phase": "done", "detail": str(job_id)}
+    return "desk.progress", f"Seats finished · {who}", f"job {job_id} ran {ran} seat(s); more remain", {
+        "pct": None, "phase": "running", "detail": str(job_id)}
+
+
 def _finish_job(
     job_id: str,
     *,
@@ -196,17 +219,12 @@ def _finish_job(
     except Exception:  # noqa: BLE001
         _log.warning("herdr_jobs: write_status after finish failed", exc_info=True)
 
-    # Cheap path-native notify on job finish
+    # A job is one batch of ready seats, not the desk's work: say "done" only
+    # when the desk actually quieted (no seats left), else report progress.
     try:
         from . import host_notify
 
-        kind = "schedule.failed" if fail else "desk.done"
-        title = (
-            f"Herdr job failed · {desk_id or '?'}"
-            if fail
-            else f"Herdr job done · {desk_id or '?'}"
-        )
-        body = str(fail or "")[:500] if fail else f"job {job_id} finished"
+        quieted = bool((herdr_run or {}).get("desk_quieted"))
         desk_kind = None
         schedule_id = None
         if desk_id:
@@ -220,16 +238,15 @@ def _finish_job(
                         schedule_id = d.schedule.get("schedule_id") or d.schedule.get("id")
             except Exception:  # noqa: BLE001
                 pass
-        progress = {"pct": None if fail else 100, "phase": "failed" if fail else "done", "detail": str(job_id)}
-        host_notify.emit(
-            kind if (fail and schedule_id) else ("desk.done" if not fail else "schedule.failed"),
-            title=title,
-            body=body,
-            desk=desk_kind,
-            schedule_id=str(schedule_id) if schedule_id else None,
-            progress=progress,
+        kind, title, body, progress = finish_notice(
+            job_id, desk_id=desk_id, desk_kind=desk_kind, fail=fail, quieted=quieted,
+            schedule_id=schedule_id, ran=len(ran),
         )
-        if (not fail) and schedule_id:
+        host_notify.emit(
+            kind, title=title, body=body, desk=desk_kind,
+            schedule_id=str(schedule_id) if schedule_id else None, progress=progress,
+        )
+        if (not fail) and quieted and schedule_id:
             host_notify.emit(
                 "schedule.done",
                 title=f"Schedule done · {desk_kind or desk_id}",

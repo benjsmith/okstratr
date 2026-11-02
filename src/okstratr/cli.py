@@ -428,7 +428,14 @@ def main(argv=None) -> int:
     agents_p.add_argument("--desk", dest="desk_id", default=None, help="Filter by desk_id")
     agents_p.add_argument("--thread", dest="thread_id", default=None, help="Filter by thread_id")
 
+    from . import cli_kernel
+
+    cli_kernel.register(sub)
+
     args = p.parse_args(argv)
+
+    if args.cmd in cli_kernel.COMMANDS:
+        return cli_kernel.dispatch(args)
 
     if getattr(args, "json_notify", False):
         from . import host_notify
@@ -654,14 +661,17 @@ def main(argv=None) -> int:
         if args.dag_cmd == "ready":
             g.refresh_ready()
             return _print([n.to_dict() for n in g.ready()])
-        if args.dag_cmd == "done":
-            node = g.mark_done(args.id, notes=args.notes)
+        if args.dag_cmd in ("done", "fail"):
+            from . import live
+
+            ok = args.dag_cmd == "done"
+            node = g.mark_done(args.id, notes=args.notes) if ok else g.mark_failed(args.id, notes=args.notes)
+            kernel = live.node_finished(g, args.id, ok=ok, host="cli")
             status.write_status()
-            return _print(node.to_dict())
-        if args.dag_cmd == "fail":
-            node = g.mark_failed(args.id, notes=args.notes)
-            status.write_status()
-            return _print(node.to_dict())
+            out = node.to_dict()
+            if kernel is not None:
+                out["kernel"] = kernel
+            return _print(out)
         if args.dag_cmd == "reset":
             g.reset()
             status.write_status()

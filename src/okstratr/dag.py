@@ -39,6 +39,8 @@ class Node:
     retrieval_query: str = ""
     """Narrow query for this seat's own lookups."""
     independence: str | None = None
+    plan_node_id: str | None = None
+    """Id of this node in its orchestration plan (findings are filed under it)."""
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -75,10 +77,11 @@ class Node:
             method_hint=str(data.get("method_hint") or ""),
             retrieval_query=str(data.get("retrieval_query") or ""),
             independence=str(data["independence"]) if data.get("independence") else None,
+            plan_node_id=str(data["plan_node_id"]) if data.get("plan_node_id") else None,
         )
 
 
-_OPTIONAL_FIELDS = ("node_type", "run_id", "method_hint", "retrieval_query", "independence")
+_OPTIONAL_FIELDS = ("node_type", "run_id", "method_hint", "retrieval_query", "independence", "plan_node_id")
 
 
 class CycleError(ValueError):
@@ -159,6 +162,7 @@ class Dag:
         method_hint: str = "",
         retrieval_query: str = "",
         independence: str | None = None,
+        plan_node_id: str | None = None,
         save: bool = True,
     ) -> Node:
         now = time()
@@ -182,6 +186,7 @@ class Dag:
             method_hint=method_hint or "",
             retrieval_query=retrieval_query or "",
             independence=independence or None,
+            plan_node_id=plan_node_id or None,
         )
         self.nodes[node_id] = n
         self.refresh_ready(save=False)

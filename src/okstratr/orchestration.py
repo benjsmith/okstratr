@@ -8,17 +8,17 @@ single-node plan so a run always has something valid to execute.
 The scheduler is runner-agnostic: it calls ``runner(node, inputs)`` for each
 ready node and never talks to a model itself.
 
-Live desks vs offline runs:
+Where the kernel runs:
 
-- Live desks use the plan *shape* only. ``cos.break_down`` turns a plan into
-  desk DAG nodes and Herdr (or the direct adapter) runs them as finite seats.
-- ``run_plan``, ``AdaptiveRun`` (expansion, ``OBJECTIVE_MET``) and the
-  evidence-scoped inputs for reducers are offline only: the benchmark and
-  tests drive them with fake runners. (On a live desk a reducer is an
-  ordinary seat that reads the blackboard.) They are not wired into Herdr desks, because they need each
-  node's answer as structured findings, and Herdr's ``agent wait`` returns a
-  status, not the answer. Reading pane text back would break "Herdr owns
-  text I/O".
+- ``run_plan`` drives a whole plan in one process: the benchmark (fake
+  runners), ``okstratr run`` (direct seats or the file queue) and the
+  time-boxed loop (``okstratr.loop``).
+- Live desks (Herdr, the direct adapter, Switchbay) run one seat at a time;
+  ``okstratr.live`` calls the same ``AdaptiveRun`` hook after each seat and
+  adds any new nodes to the desk DAG.
+- Either way a node's answer comes from what the seat filed with
+  ``okstratr findings add`` (``okstratr.handback``), never from pane text.
+  The host only says when a seat is done.
 """
 
 from __future__ import annotations
@@ -563,8 +563,11 @@ def run_plan(
     resume: RunState | None = None,
     clock: Callable[[], float] = time.monotonic,
 ) -> RunState:
-    """Run a validated plan to completion within its bounds (offline/bench only;
-    live desks run nodes as Herdr seats instead).
+    """Run a validated plan to completion within its bounds, in one process.
+
+    Used by the benchmark, ``okstratr run`` (direct seats or the file queue)
+    and the time-boxed loop. Live desks run one seat at a time instead and
+    call the same ``after_node`` hook through ``okstratr.live``.
 
     Failed nodes count as finished, so dependants still run with whatever
     inputs succeeded. ``after_node`` may append nodes (expansion), but the
@@ -1177,17 +1180,65 @@ def continue_wave(
     return Extension(nodes=new, reason=decision.reason)
 
 
+def verify_round(
+    plan: OrchestrationPlan,
+    after: str,
+    *,
+    critic_pairs: list[tuple[str, str | None]] | None = None,
+    reason: str = "",
+) -> Extension:
+    """Check an unverified answer: one verifier on the critic, then a fresh synthesizer.
+
+    Used when the host stops on its first answer and nothing in the run was
+    verified. The newest synthesizer is the run's answer.
+    """
+    existing = plan.reserved_ids()
+    wave = 1 + sum(1 for n in plan.nodes if n.node_type == "verify")
+    vh, vm = _reverify_seat(critic_pairs, [], {})
+    vid = _unique_id(f"verify-v{wave}", existing)
+    new = [
+        PlanNode(
+            node_id=vid,
+            node_type="verify",
+            objective="Independently check the answer and the findings behind it",
+            dependencies=[after],
+            role="verifier",
+            difficulty="hard",
+            independence="high",
+            output_contract="verification",
+            harness=vh,
+            model=vm,
+        ),
+        PlanNode(
+            node_id=_unique_id(f"synth-v{wave}", existing),
+            node_type="synthesize",
+            objective=plan.objective,
+            dependencies=[vid],
+            role="synthesizer",
+            difficulty="hard",
+            independence="low",
+            output_contract="synthesis",
+        ),
+    ]
+    return Extension(nodes=new, reason=reason or "verify round")
+
+
 class AdaptiveRun:
     """``after_node`` hook: collect evidence, expand on ΔU, stop on OBJECTIVE_MET.
 
-    Offline/bench only: used with ``run_plan`` and fake runners, not by live
-    Herdr desks (see the module docstring).
+    Used by ``run_plan`` (bench, ``okstratr run``, the file queue) and by live
+    desks through ``okstratr.live`` (Herdr, direct, Switchbay). It only sees
+    ``NodeResult`` objects; live seats fill those from ``okstratr findings add``.
 
     - After each investigator: its findings go into this run's evidence store.
     - After a verifier: buy targeted investigators + a re-verify while
       ΔU > threshold (and within the expansion cap and node limit).
-    - After a synthesizer: continue only on an explicit ``OBJECTIVE_MET: no``
-      that still clears ΔU; a missing line stops the run.
+    - After a synthesizer: with no ``host`` profile, continue only on an
+      explicit ``OBJECTIVE_MET: no`` that still clears ΔU. With a host
+      profile, ``host_profile.decide_done`` first decides whether to respect
+      the host's done, continue past it (open gaps, time-boxed runs), add a
+      verify round, or stop on budget/deadline. Every such decision is in
+      ``events`` and goes to ``on_decision``.
     """
 
     def __init__(
@@ -1198,10 +1249,23 @@ class AdaptiveRun:
         harnesses: list[str] | None = None,
         models_by_harness: dict[str, str] | None = None,
         critic_pairs: list[tuple[str, str | None]] | None = None,
+        host: Any | None = None,
+        budget: Any | None = None,
+        owner_loop: bool = False,
+        on_decision: Callable[[dict[str, Any]], None] | None = None,
+        base_tokens: float = 0.0,
     ) -> None:
         from . import evidence as ev
 
         self.store = store if store is not None else ev.RunEvidence(plan.run_id)
+        self.host = host
+        self.budget = budget
+        self.owner_loop = bool(owner_loop)
+        self.on_decision = on_decision
+        self.base_tokens = float(base_tokens or 0.0)
+        self.failing_checks = 0
+        self.verify_rounds = 0
+        self.host_decisions: list[dict[str, Any]] = []
         self.harnesses = list(harnesses or [])
         self.models_by_harness = dict(models_by_harness or {})
         self.critic_pairs = list(critic_pairs or [])
@@ -1229,6 +1293,97 @@ class AdaptiveRun:
         except (TypeError, ValueError):
             return 0.1
 
+    _PERSISTED = (
+        "expansions", "continuations", "findings_at_last_synth", "claims_at_last_expansion",
+        "claims_at_last_synth", "stalled", "stop_reason", "objective_met", "events",
+        "failing_checks", "verify_rounds", "host_decisions", "owner_loop", "base_tokens",
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Counters and decisions (the evidence store is saved on its own)."""
+        d = {k: getattr(self, k) for k in self._PERSISTED}
+        d["harnesses"] = list(self.harnesses)
+        d["models_by_harness"] = dict(self.models_by_harness)
+        d["critic_pairs"] = [list(p) for p in self.critic_pairs]
+        d["host"] = self.host.to_dict() if self.host is not None else None
+        d["budget"] = self.budget.to_dict() if self.budget is not None else None
+        return d
+
+    @classmethod
+    def from_dict(
+        cls, plan: OrchestrationPlan, raw: dict[str, Any], *, store: Any | None = None,
+        on_decision: Callable[[dict[str, Any]], None] | None = None,
+    ) -> AdaptiveRun:
+        from . import host_profile as hp
+
+        raw = raw if isinstance(raw, dict) else {}
+        run = cls(
+            plan,
+            store=store,
+            harnesses=list(raw.get("harnesses") or []),
+            models_by_harness=dict(raw.get("models_by_harness") or {}),
+            critic_pairs=[tuple(p) for p in raw.get("critic_pairs") or [] if isinstance(p, list) and len(p) == 2],
+            host=hp.HostProfile.from_dict(raw["host"]) if raw.get("host") else None,
+            budget=hp.Budget.from_dict(raw["budget"]) if raw.get("budget") else None,
+            owner_loop=bool(raw.get("owner_loop")),
+            on_decision=on_decision,
+            base_tokens=float(raw.get("base_tokens") or 0.0),
+        )
+        for k in cls._PERSISTED:
+            if k in raw and k not in ("owner_loop", "base_tokens"):
+                setattr(run, k, raw[k])
+        return run
+
+    def okstratr_strength(self, plan: OrchestrationPlan) -> int:
+        """Strength of okstratr's own stop rule for this plan (host_profile.STRENGTHS)."""
+        from . import host_profile as hp
+
+        types = {n.node_type for n in plan.nodes}
+        if "verify" in types:
+            return hp.strength_rank("verified")
+        if "execute" in types:
+            return hp.strength_rank("tests")
+        return hp.strength_rank("self_check")
+
+    def _host_decision(
+        self, plan: OrchestrationPlan, state: RunState, node: PlanNode,
+        met: bool | None, gap: str, v: Any,
+    ) -> Any:
+        from . import host_profile as hp
+
+        profile = self.host if self.host is not None else hp.HostProfile()
+        budget = self.budget if self.budget is not None else hp.Budget()
+        budget.spent_tokens = self.base_tokens + state.tokens()
+        verified = any(
+            n.node_type == "verify" and n.node_id in state.completed for n in plan.nodes
+        )
+        d = hp.decide_done(
+            profile,
+            okstratr_strength=self.okstratr_strength(plan),
+            objective_met=met,
+            gap=gap,
+            failing_checks=self.failing_checks,
+            verification=v.to_dict() if v else None,
+            verified=verified,
+            budget=budget,
+            owner_loop=self.owner_loop,
+            preference=plan.preference,
+            consequence=self._consequence(plan),
+        )
+        event = {
+            "after": node.node_id, "kind": "host_done", "action": d.action,
+            "override": d.override, "reason": d.reason, "host": profile.to_dict(),
+            "gaps": list(d.gaps), "tokens_spent": budget.spent_tokens,
+        }
+        self.events.append(event)
+        self.host_decisions.append(event)
+        if self.on_decision is not None:
+            try:
+                self.on_decision(event)
+            except Exception:  # noqa: BLE001
+                pass
+        return d
+
     def __call__(self, plan: OrchestrationPlan, state: RunState, res: NodeResult) -> list[PlanNode] | Extension:
         from . import evidence as ev
 
@@ -1240,6 +1395,11 @@ class AdaptiveRun:
             if t == "reduce":
                 self.store.mark_replaced(node.dependencies)
             self.store.append_findings(ev.parse_findings(res.text, node_id=node.node_id))
+            checks = (ev.parse_json_object(res.text) or {}).get("checks")
+            if isinstance(checks, list):
+                self.failing_checks += sum(
+                    1 for c in checks if isinstance(c, dict) and not c.get("passed")
+                )
             return []
         bounds = plan.bounds.clamp()
         remaining = bounds.max_nodes - len(plan.nodes)
@@ -1285,13 +1445,27 @@ class AdaptiveRun:
         if t == "synthesize":
             met, gap = ou.parse_objective_met(res.text)
             self.objective_met = met
+            v = self.store.latest_verification()
+            if self.host is not None or self.owner_loop:
+                d = self._host_decision(plan, state, node, met, gap, v)
+                if d.action in ("respect", "stop"):
+                    self.stop_reason = d.reason
+                    return []
+                if d.action == "verify":
+                    if remaining < 2:
+                        self.stop_reason = "verify round wanted but node limit reached"
+                        return []
+                    self.verify_rounds += 1
+                    return verify_round(plan, node.node_id, critic_pairs=self.critic_pairs, reason=d.reason)
+                # continue: okstratr's own evidence says not done; ΔU below still bounds it.
+                if met is not False:
+                    met, gap = False, "; ".join(d.gaps) or gap or "objective not confirmed"
             if met is False and self.stalled:
                 # More of the same already came back empty; another wave would too.
                 self.stop_reason = "last expansion found nothing new"
                 self.events.append({"after": node.node_id, "kind": "continue", "expand": False,
                                     "reason": self.stop_reason})
                 return []
-            v = self.store.latest_verification()
             n_findings = len(self.store.findings)
             claims = self.unique_claims()
             wave_new = claims if self.claims_at_last_synth is None else claims - self.claims_at_last_synth

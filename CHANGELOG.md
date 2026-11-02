@@ -18,9 +18,24 @@
   removes them.
 - **Retired node ids are never reused** until the DAG is reset (stored as
   `archived_ids` in `dag.json`, written only when non-empty).
-- **Findings are verified before the answer** in offline runs. Plan growth
-  after a verifier and the `OBJECTIVE_MET` stop run in the benchmark with
-  fake harnesses; live Herdr desks use the plan shape only.
+- **Findings are verified before the answer.** Seats file results with
+  `okstratr findings add` (a per-node file plus a blackboard post), so plan
+  growth after a verifier, the `OBJECTIVE_MET` stop and reducer evidence work
+  on Herdr desks, Switchbay without Herdr and the plain CLI. okstratr never
+  reads pane text.
+- **Host done:** okstratr reads each harness's stop rule (`okstratr
+  host-profile`; `done = "…"` in harnesses.toml or `OKSTRATR_HOST_DONE`). It
+  respects a rule at least as strong as its own and otherwise adds seats or a
+  verify round within budget. Each override is logged in
+  `runs/<id>/decisions.jsonl` and on the blackboard.
+- **`okstratr run` and `okstratr loop`** run an objective outside a desk,
+  through the direct adapter or a file queue (`okstratr queue
+  list|show|claim|done`). `loop --for 2h --budget-tokens N` checkpoints each
+  round and records why it stopped.
+- **A finished Herdr job no longer reports `desk.done`** unless the desk has
+  no seats left. Otherwise it sends `desk.progress`. `schedule.failed` is only
+  sent for scheduled desks.
+- **Seat timeout raised to 30 minutes** so a seat can be a full agent session.
 - **Learned shapes per desk and task type** are stored in a new `recipes`
   section of `bandit.json`. Existing `bandit.json` and `dag.json` files load
   unchanged; older okstratr versions ignore the new section.

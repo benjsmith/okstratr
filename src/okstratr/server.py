@@ -589,10 +589,14 @@ class Handler(BaseHTTPRequestHandler):
             notes = payload.get("notes")
             g = dag.default_dag()
             try:
-                if new_state == "done":
-                    node = g.mark_done(node_id, notes=notes if notes is not None else None)
-                elif new_state == "failed":
-                    node = g.mark_failed(node_id, notes=notes if notes is not None else None)
+                if new_state in ("done", "failed"):
+                    from . import live
+
+                    if new_state == "done":
+                        node = g.mark_done(node_id, notes=notes if notes is not None else None)
+                    else:
+                        node = g.mark_failed(node_id, notes=notes if notes is not None else None)
+                    live.node_finished(g, node_id, ok=new_state == "done", host=None)
                 else:
                     node = g.set_state(node_id, new_state)
                     if notes is not None:

@@ -137,18 +137,91 @@ okbay workspace, else `OKSTRATR_WORKSPACE`, else global. HTTP: `GET /api/models/
 The list is applied when a plan is made. If it denies every model, the plan
 uses the configured defaults rather than failing.
 
-### Live desks vs offline runs
+### Where the kernel runs
 
-Live desks use the plan **shape** only: `cos.break_down` writes the nodes into
-the desk DAG and Herdr (or the direct adapter) runs each one as a finite seat.
-Expansion after a verifier, the `OBJECTIVE_MET` stop and the evidence-scoped
-inputs for reducers live in `orchestration.run_plan` / `AdaptiveRun`, which
-only the benchmark and tests drive, with fake runners. They are not wired
-into desks because they need each node's answer as structured findings, and
-Herdr's `agent wait` returns a status, not the answer. Reading pane text back
-would break "Herdr owns text I/O".
+The same kernel (`AdaptiveRun`: expansion after a verifier, the
+`OBJECTIVE_MET` stop, evidence-scoped reducer inputs) runs in three places:
 
-Offline comparison with the old template (fake harnesses, no model calls):
+- **Desks** (Herdr, the direct adapter, Switchbay without Herdr): seats run
+  one at a time. When a seat finishes, `okstratr.live` reads what the seat
+  filed and runs the kernel step. New nodes become new desk nodes.
+- **`okstratr run`**: one objective in one process (`run_plan`), with seats
+  through the direct adapter or the file queue.
+- **`okstratr loop`**: the time-boxed case (see below).
+
+Seats hand results back with `okstratr findings add`. The seat prompt names
+the run and node; the direct adapter and Herdr also set `OKSTRATR_RUN_ID` and
+`OKSTRATR_PLAN_NODE_ID`.
+
+```bash
+okstratr findings add --run R --node inv-0 --json '{"findings": [{"claim": "…", "evidence": [{"source": "…"}], "confidence": 0.7}]}'
+okstratr findings add --run R --node verify --file verdicts.json
+okstratr findings add --run R --node synth --json '{"answer": "…", "objective_met": false, "gap": "…"}'
+okstratr findings show --run R [--supported]
+```
+
+Each call is merged into `runs/<id>/handback/<node>.json` and posted to the
+blackboard (kind `evidence`, tag `run:<id>`). okstratr never reads pane text.
+A seat that files nothing counts as an empty result, and the desk gets a
+note saying so.
+
+### Host done
+
+The resident harness (Claude Code, Codex, pi, a parent agent) has its own
+idea of done. okstratr reads it from a host profile (`okstratr host-profile`):
+the stop rule, one of `first_answer < self_check < tests < verified`, and how
+done is signalled (Herdr status, process exit, `queue done`, …). Known
+harnesses default to `first_answer`. Override this with `done = "tests"` under
+`[harness.<id>.settings]` in harnesses.toml, or with
+`OKSTRATR_HOST_DONE="codex=tests,claude=self_check"`.
+
+When the last seat of a round reports done:
+
+- If the host's rule is at least as strong as okstratr's (`verified` with a
+  verifier in the plan, `tests` with an execute step, else `self_check`) and
+  nothing is open, okstratr respects it.
+- If the host is weaker and gaps remain (the synthesizer says the objective
+  isn't met, failing checks, conflicts, unresolved questions), okstratr
+  continues with new seats, bounded by the run's ΔU rule, node limits and
+  token budget.
+- If the host is weaker and nothing was verified, okstratr adds one verify
+  round when that is worth its cost.
+
+Every decision is written to `runs/<id>/decisions.jsonl` and posted to the
+blackboard (kind `decision`, tag `host-done`, plus `override` when it is one).
+okstratr never changes the host's own completion state; continuing always
+means new seats or rounds.
+
+### Time-boxed runs
+
+```bash
+okstratr loop "…" --for 2h --budget-tokens 400000 [--adapter queue|direct] [--recipe …]
+okstratr loop --run-id R --resume
+```
+
+Here okstratr owns the loop. It runs rounds until the objective is met with no
+open gaps, the time box ends, the budget runs out, or a round adds no new
+finding or answer. It checkpoints `runs/<id>/loop.json` after every round and
+always records the stop reason.
+
+### File queue
+
+`--adapter queue` writes each ready seat to
+`state/queue/<run>/<node>.prompt.md`. Whoever runs the seats (a person, or a
+parent agent that hands each prompt to a fresh subagent) does this:
+
+```bash
+okstratr queue list --state queued
+okstratr queue claim R inv-0      # starts the seat's clock
+# … the seat works and runs `okstratr findings add` …
+okstratr queue done R inv-0 [--tokens N] [--failed]
+```
+
+`queue done` is the only completion signal okstratr accepts for a queued seat.
+
+### Benchmark
+
+Fake harnesses, no model calls:
 
 ```bash
 python3 -m okstratr.orchestration_bench          # table
