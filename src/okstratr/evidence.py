@@ -8,6 +8,11 @@ blackboard (as ``claim`` entries), so unverified claims never leak into
 it.
 
 Append-oriented: existing records are never mutated in place.
+
+Run folders follow the blackboard duration (default 3 days; duration 0 keeps
+them at most 60 minutes) and ``bb clear`` removes them; see ``prune_runs``.
+Live desks write ``plan.json`` and an empty store; findings are filled in by
+offline runs (``orchestration.run_plan``), not by Herdr seats.
 """
 
 from __future__ import annotations

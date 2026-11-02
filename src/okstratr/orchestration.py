@@ -7,6 +7,18 @@ single-node plan so a run always has something valid to execute.
 
 The scheduler is runner-agnostic: it calls ``runner(node, inputs)`` for each
 ready node and never talks to a model itself.
+
+Live desks vs offline runs:
+
+- Live desks use the plan *shape* only. ``cos.break_down`` turns a plan into
+  desk DAG nodes and Herdr (or the direct adapter) runs them as finite seats.
+- ``run_plan``, ``AdaptiveRun`` (expansion, ``OBJECTIVE_MET``) and the
+  evidence-scoped inputs for reducers are offline only: the benchmark and
+  tests drive them with fake runners. (On a live desk a reducer is an
+  ordinary seat that reads the blackboard.) They are not wired into Herdr desks, because they need each
+  node's answer as structured findings, and Herdr's ``agent wait`` returns a
+  status, not the answer. Reading pane text back would break "Herdr owns
+  text I/O".
 """
 
 from __future__ import annotations
@@ -551,7 +563,8 @@ def run_plan(
     resume: RunState | None = None,
     clock: Callable[[], float] = time.monotonic,
 ) -> RunState:
-    """Run a validated plan to completion within its bounds.
+    """Run a validated plan to completion within its bounds (offline/bench only;
+    live desks run nodes as Herdr seats instead).
 
     Failed nodes count as finished, so dependants still run with whatever
     inputs succeeded. ``after_node`` may append nodes (expansion), but the
@@ -970,7 +983,11 @@ def _reverify_seat(
 
 
 def add_reducers(nodes: list[PlanNode], investigators: list[PlanNode]) -> list[str]:
-    """Pairwise reducers between a wide fan-out and the verifier."""
+    """Pairwise reducers between a wide fan-out and the verifier.
+
+    Offline runs feed each reducer only its siblings' findings; on a live
+    desk it is an ordinary seat.
+    """
     reducers: list[PlanNode] = []
     for r, start in enumerate(range(0, len(investigators), 2)):
         group = investigators[start : start + 2]
@@ -1162,6 +1179,9 @@ def continue_wave(
 
 class AdaptiveRun:
     """``after_node`` hook: collect evidence, expand on ΔU, stop on OBJECTIVE_MET.
+
+    Offline/bench only: used with ``run_plan`` and fake runners, not by live
+    Herdr desks (see the module docstring).
 
     - After each investigator: its findings go into this run's evidence store.
     - After a verifier: buy targeted investigators + a re-verify while
