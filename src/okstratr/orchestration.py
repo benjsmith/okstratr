@@ -492,7 +492,7 @@ class RunState:
 
 def save_checkpoint(path: Path, state: RunState) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex[:8]}.tmp")
+    tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex[:8]}.tmp")
     tmp.write_text(json.dumps(state.to_dict(), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     tmp.replace(path)
 

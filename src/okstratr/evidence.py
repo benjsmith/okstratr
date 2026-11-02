@@ -563,15 +563,29 @@ PROMOTE_PROVENANCE_PREFIX = "okstratr.run:"
 
 def _write_json_atomic(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex[:8]}.tmp")
+    # Visible temp name (no dotfiles), renamed into place.
+    tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex[:8]}.tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     tmp.replace(path)
 
 
+def write_json(path: Path, data: Any) -> None:
+    """Write a JSON file under a run folder (atomic, visible names only)."""
+    _write_json_atomic(path, data)
+
+
 def safe_run_id(run_id: str) -> str:
-    """Filesystem-safe run id (no path separators, never empty)."""
+    """Filesystem-safe, visible run id (no path separators, never empty)."""
     rid = _RUN_ID_RE.sub("-", str(run_id or "").strip()).strip("-.")
-    return rid[:96] or "run"
+    rid = rid[:96].strip("-.") or "run"
+    try:
+        from .workspace import assert_visible_name
+
+        if not assert_visible_name(rid).get("ok"):
+            return "run"
+    except Exception:  # noqa: BLE001
+        pass
+    return rid
 
 
 def new_run_id(prefix: str = "run") -> str:
@@ -600,6 +614,79 @@ def save_run(ev: RunEvidence) -> Path:
     path = run_evidence_path(ev.orchestration_id)
     ev.persist(path)
     return path
+
+
+def _run_age_seconds(d: Path, now: float) -> float:
+    """Age of a run folder: time since its newest file was written."""
+    newest = 0.0
+    try:
+        newest = d.stat().st_mtime
+        for p in d.rglob("*"):
+            try:
+                newest = max(newest, p.stat().st_mtime)
+            except OSError:
+                continue
+    except OSError:
+        return 0.0
+    return max(0.0, now - newest)
+
+
+def _remove_runs(names: list[str], *, op: str, kept: int) -> int:
+    import shutil
+
+    root = runs_dir()
+    removed = 0
+    for name in names:
+        try:
+            shutil.rmtree(root / name)
+            removed += 1
+        except OSError:
+            continue
+    if removed:
+        try:
+            from . import ops_audit
+
+            ops_audit.append(op, kind="file", path=str(root), note=f"removed={removed} kept={kept}")
+        except Exception:  # noqa: BLE001
+            pass
+    return removed
+
+
+def prune_runs(*, max_age_seconds: float | None = None, now: float | None = None) -> dict[str, Any]:
+    """Drop run folders (plan.json, evidence.json, …) older than the blackboard
+    duration. Same knob as the board: default 3 days; duration 0 keeps runs
+    at most 60 minutes."""
+    root = runs_dir()
+    if max_age_seconds is None:
+        from .blackboard import _max_age_seconds
+
+        max_age_seconds = _max_age_seconds()
+    if not root.is_dir() or max_age_seconds is None:
+        return {"removed": 0, "kept": len(list_run_dirs())}
+    t = time.time() if now is None else now
+    old: list[str] = []
+    keep = 0
+    for d in sorted(p for p in root.iterdir() if p.is_dir()):
+        if _run_age_seconds(d, t) > max_age_seconds:
+            old.append(d.name)
+        else:
+            keep += 1
+    removed = _remove_runs(old, op="runs.prune", kept=keep)
+    return {"removed": removed, "kept": keep + (len(old) - removed)}
+
+
+def clear_runs() -> dict[str, Any]:
+    """Remove every run folder now (bb clear, ephemeral ASAP)."""
+    names = list_run_dirs()
+    removed = _remove_runs(names, op="runs.clear", kept=0)
+    return {"removed": removed, "kept": len(names) - removed}
+
+
+def list_run_dirs() -> list[str]:
+    root = runs_dir()
+    if not root.is_dir():
+        return []
+    return sorted(p.name for p in root.iterdir() if p.is_dir())
 
 
 def list_runs() -> list[str]:

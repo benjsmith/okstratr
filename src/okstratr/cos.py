@@ -812,7 +812,7 @@ def _save_run_plan(plan: Any, decision: Any) -> None:
         payload = plan.to_dict()
         if decision is not None:
             payload["decision"] = decision.to_dict()
-        (d / "plan.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        evidence.write_json(d / "plan.json", payload)
         if not evidence.run_evidence_path(rid).exists():
             evidence.save_run(evidence.open_run(rid))
     except Exception:  # noqa: BLE001
