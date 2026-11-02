@@ -262,6 +262,28 @@ def _unpack_step(step: _Step) -> tuple[str, str, str, list[str], str, str | None
     return nid, title, obj_fmt, deps, role, prefer_harness, prefer_model
 
 
+def _avoid_retired_ids(steps: list[_Step], g: dag.Dag) -> list[_Step]:
+    """Rename steps whose id belongs to a retired node (ids are never reused)."""
+    retired = set(getattr(g, "archived_ids", []) or [])
+    if not retired:
+        return steps
+    planned = {_unpack_step(st)[0] for st in steps}
+    rename: dict[str, str] = {}
+    for st in steps:
+        nid = _unpack_step(st)[0]
+        if nid in retired and nid not in g.nodes:
+            rename[nid] = g.alloc_node_id(nid, taken=planned | set(rename.values()))
+    if not rename:
+        return steps
+    out: list[_Step] = []
+    for st in steps:
+        row = list(st)
+        row[0] = rename.get(row[0], row[0])
+        row[3] = [rename.get(d, d) for d in row[3]]
+        out.append(tuple(row))  # type: ignore[arg-type]
+    return out
+
+
 def _step_extra(step: _Step) -> dict[str, Any]:
     """Optional plan fields carried at index 7 (node_type, run_id, …)."""
     extra = step[7] if len(step) > 7 else None
@@ -634,6 +656,7 @@ def break_down(
         if not (root.title or "").strip() or root.title == "(untitled)":
             root.title = obj
 
+    steps = _avoid_retired_ids(steps, g)
     created: list[str] = []
     updated: list[str] = []
     plan_lines: list[str] = []

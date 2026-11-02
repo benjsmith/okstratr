@@ -105,9 +105,11 @@ class OrchestrationPlan:
     features: dict[str, Any] = field(default_factory=dict)
     decision: dict[str, Any] = field(default_factory=dict)
     allow_expand: bool = False
+    # Ids of nodes dropped from this run; never reused for new nodes.
+    archived_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out = {
             "version": self.version,
             "run_id": self.run_id,
             "strategy": self.strategy,
@@ -119,6 +121,9 @@ class OrchestrationPlan:
             "decision": self.decision,
             "allow_expand": self.allow_expand,
         }
+        if self.archived_ids:
+            out["archived_ids"] = list(self.archived_ids)
+        return out
 
     @classmethod
     def from_dict(cls, raw: Any) -> OrchestrationPlan:
@@ -138,10 +143,30 @@ class OrchestrationPlan:
             features=raw.get("features") if isinstance(raw.get("features"), dict) else {},
             decision=raw.get("decision") if isinstance(raw.get("decision"), dict) else {},
             allow_expand=bool(raw.get("allow_expand")),
+            archived_ids=[str(x) for x in (raw.get("archived_ids") or []) if isinstance(x, str) and x],
         )
 
     def node_map(self) -> dict[str, PlanNode]:
         return {n.node_id: n for n in self.nodes}
+
+    def reserved_ids(self) -> set[str]:
+        return set(self.node_map()) | set(self.archived_ids)
+
+    def retire(self, node_id: str) -> bool:
+        """Drop a node that nothing depends on; its id stays reserved."""
+        if node_id not in self.node_map():
+            return False
+        if any(node_id in n.dependencies for n in self.nodes):
+            return False
+        self.nodes = [n for n in self.nodes if n.node_id != node_id]
+        if node_id not in self.archived_ids:
+            self.archived_ids.append(node_id)
+        return True
+
+    def alloc_node_id(self, base: str, taken: set[str] | None = None) -> str:
+        """First free id from ``base``, ``base-2``, … (live and retired ids are taken)."""
+        used = self.reserved_ids() | set(taken or ())
+        return _unique_id(base, used)
 
     def depth(self) -> int:
         return dag_depth(self.nodes)
@@ -204,6 +229,8 @@ def validate_plan(plan: OrchestrationPlan) -> list[str]:
         errors.append("duplicate node_id")
     if any(not i for i in ids):
         errors.append("empty node_id")
+    if set(ids) & set(plan.archived_ids):
+        errors.append("node_id reuses a retired id")
     known = set(ids)
     for n in plan.nodes:
         if n.node_type not in NODE_TYPES:
@@ -639,7 +666,7 @@ def _apply_extension(plan: OrchestrationPlan, ext: Extension, bounds: Bounds, st
     if any(nid in started for nid in ext.rewire):
         return False
     ids = plan.node_map()
-    if any(n.node_id in ids for n in ext.nodes):
+    if any(n.node_id in ids or n.node_id in plan.archived_ids for n in ext.nodes):
         return False
     saved = {nid: list(ids[nid].dependencies) for nid in ext.rewire if nid in ids}
     plan.nodes.extend(ext.nodes)
@@ -1035,7 +1062,7 @@ def expansion_nodes(
     ``after`` is the verifier that asked for more; only synthesizers waiting
     on it are rewired (finished ones from earlier waves are left alone).
     """
-    existing = set(plan.node_map())
+    existing = plan.reserved_ids()  # live + retired ids
     feat = ou.TaskFeatures.from_dict(plan.features) if plan.features else None
     n_extra = max(1, decision.n_extra)
     hints = ou.method_hints_for(max(2, n_extra), "high", feat)
@@ -1089,7 +1116,7 @@ def continue_wave(
     It does not hang off the previous synthesizer, so depth stays flat.
     The newest synthesizer is the run's answer.
     """
-    existing = set(plan.node_map())
+    existing = plan.reserved_ids()  # live + retired ids
     wave = 1 + sum(1 for n in plan.nodes if n.node_type == "synthesize")
     feat = ou.TaskFeatures.from_dict(plan.features) if plan.features else None
     n_extra = max(1, decision.n_extra)

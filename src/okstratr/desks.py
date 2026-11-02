@@ -399,6 +399,7 @@ class DeskRegistry:
         # Save via temporary Dag pointing at desk path
         desk_dag = dag_mod.Dag(path=dest)
         desk_dag.nodes = dict(g.nodes)
+        desk_dag.archived_ids = list(g.archived_ids)
         desk_dag.save()
         desk.dag_relpath = str(dest.relative_to(state_dir()))
 

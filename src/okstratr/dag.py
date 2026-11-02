@@ -89,17 +89,25 @@ class Dag:
     def __init__(self, path: Path | None = None) -> None:
         self.path = Path(path) if path else state_dir() / "dag.json"
         self.nodes: dict[str, Node] = {}
+        # Ids of retired nodes; never handed out again until the DAG is reset,
+        # so a new node cannot pick up an old node's blackboard posts or labels.
+        self.archived_ids: list[str] = []
 
     # --- persistence ---
 
     def load(self) -> Dag:
         self.nodes = {}
+        self.archived_ids = []
         if not self.path.is_file():
             return self
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return self
+        if isinstance(raw, dict):
+            self.archived_ids = [
+                str(x) for x in (raw.get("archived_ids") or []) if isinstance(x, str) and x
+            ]
         if isinstance(raw, dict) and "nodes" in raw:
             items = raw.get("nodes") or []
         elif isinstance(raw, list):
@@ -121,6 +129,8 @@ class Dag:
             "updated_at": time(),
             "nodes": [n.to_dict() for n in self.nodes.values()],
         }
+        if self.archived_ids:  # only written when used (older readers ignore it)
+            payload["archived_ids"] = list(self.archived_ids)
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
         tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         tmp.replace(self.path)
@@ -193,6 +203,28 @@ class Dag:
             self.save()
         return True
 
+    def archive(self, node_id: str, *, save: bool = True) -> bool:
+        """Remove a node and reserve its id so it is never reused."""
+        if node_id not in self.nodes:
+            return False
+        if node_id not in self.archived_ids:
+            self.archived_ids.append(node_id)
+        return self.remove(node_id, save=save)
+
+    def is_reserved(self, node_id: str) -> bool:
+        return node_id in self.nodes or node_id in self.archived_ids
+
+    def alloc_node_id(self, base: str, *, taken: set[str] | None = None) -> str:
+        """First free id from ``base``, ``base-2``, … skipping live, retired
+        and ``taken`` ids."""
+        b = (base or "node").strip() or "node"
+        extra = taken or set()
+        nid, k = b, 2
+        while self.is_reserved(nid) or nid in extra:
+            nid = f"{b}-{k}"
+            k += 1
+        return nid
+
     def set_state(self, node_id: str, state: str, *, save: bool = True) -> Node:
         if state not in VALID_STATES:
             raise ValueError(f"invalid state: {state!r}; expected one of {sorted(VALID_STATES)}")
@@ -240,8 +272,9 @@ class Dag:
             pass
 
     def reset(self, *, save: bool = True) -> None:
-        """Clear all nodes."""
+        """Clear all nodes and reserved ids."""
         self.nodes.clear()
+        self.archived_ids = []
         if save:
             self.save()
 
@@ -553,6 +586,7 @@ class Dag:
         obj = (objective or "").strip()
         if reset:
             self.nodes.clear()
+            self.archived_ids = []
         root_id = "root"
         now = time()
         if root_id not in self.nodes:

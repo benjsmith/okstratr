@@ -621,7 +621,7 @@ def retire_worker(
         "summary": text,
     }
     prior_state = node.state
-    g.remove(nid, save=True)
+    g.archive(nid, save=True)  # id stays reserved: never reused for a new node
 
     d, reg = _resolve_desk(desk)
     if d is not None and hasattr(reg, "_persist_desk_dag"):
