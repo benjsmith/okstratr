@@ -404,6 +404,20 @@ def main(argv=None) -> int:
     model_p = sub.add_parser("model", help="List harness models / rungs (Switchbay-inspired)")
     model_sub = model_p.add_subparsers(dest="model_cmd", required=True)
     model_sub.add_parser("list", help="List models per enabled harness + effort rungs")
+    for name, hlp in (
+        ("allow", "Allow a model for this workspace (harness/model, harness/* or model)"),
+        ("deny", "Deny a model for this workspace (deny wins over allow)"),
+        ("unlist", "Take a key off both lists"),
+    ):
+        mp = model_sub.add_parser(name, help=hlp)
+        mp.add_argument("key")
+        mp.add_argument("--ws", dest="policy_ws", default=None, help="Workspace id (default: active desk's)")
+    for name, hlp in (
+        ("policy", "Show the allow/deny lists in effect"),
+        ("reset", "Drop this workspace's lists (use the global ones again)"),
+    ):
+        mp = model_sub.add_parser(name, help=hlp)
+        mp.add_argument("--ws", dest="policy_ws", default=None, help="Workspace id (default: active desk's)")
 
 
     # --- agents (Herdr grouping stub) ---
@@ -781,6 +795,19 @@ def main(argv=None) -> int:
     if args.cmd == "model":
         from . import harness as harness_mod
 
+        if args.model_cmd in ("allow", "deny", "unlist", "policy", "reset"):
+            from . import model_policy
+
+            ws = getattr(args, "policy_ws", None) or model_policy.current_workspace_id()
+            if args.model_cmd == "allow":
+                return _print(model_policy.add(ws, args.key, deny=False))
+            if args.model_cmd == "deny":
+                return _print(model_policy.add(ws, args.key, deny=True))
+            if args.model_cmd == "unlist":
+                return _print(model_policy.remove(ws, args.key))
+            if args.model_cmd == "reset":
+                return _print(model_policy.reset(ws))
+            return _print(model_policy.get(ws))
         if args.model_cmd == "list":
             cfg = harness_mod.load()
             return _print(

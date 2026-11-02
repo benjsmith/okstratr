@@ -213,6 +213,13 @@ class Handler(BaseHTTPRequestHandler):
             code, body, ct = _json_bytes(harness_config.list_for_api())
             return self._send(code, body, ct)
 
+        if path == "/api/models/policy":
+            from . import model_policy
+
+            ws = (qs.get("workspace") or [""])[0] or model_policy.current_workspace_id()
+            code, body, ct = _json_bytes({"ok": True, **model_policy.get(ws)})
+            return self._send(code, body, ct)
+
 
         if path in ("/api/audit",):
             from . import ops_audit
@@ -689,6 +696,25 @@ class Handler(BaseHTTPRequestHandler):
             code, body, ct = _json_bytes({"ok": True, "roles_config": saved})
             return self._send(code, body, ct)
 
+
+        if path == "/api/models/policy":
+            from . import model_policy
+
+            ws = str(payload.get("workspace") or "").strip() or model_policy.current_workspace_id()
+            if payload.get("reset"):
+                out = model_policy.reset(ws)
+            else:
+                lists = {}
+                for k in ("allowed", "denied"):
+                    v = payload.get(k)
+                    if v is not None and not isinstance(v, list):
+                        code, body, ct = _json_bytes({"ok": False, "error": f"{k} must be a list"}, 400)
+                        return self._send(code, body, ct)
+                    if v is not None:
+                        lists[k] = [str(x) for x in v]
+                out = model_policy.set_lists(ws, **lists)
+            code, body, ct = _json_bytes({"ok": True, **out})
+            return self._send(code, body, ct)
 
         if path in ("/api/harness/enable", "/api/config/harness/enable"):
             from .harness import config as harness_config
