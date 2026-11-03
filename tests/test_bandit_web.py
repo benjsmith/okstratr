@@ -71,7 +71,7 @@ def test_bandit_hire_caps_by_effort(state_dir: Path) -> None:
 def test_bandit_reward_updates_arms(state_dir: Path) -> None:
     from okstratr import bandit, dag, desks, kernel
 
-    start = desks.start("Reward me", kind="work", effort=0.6)
+    start = desks.start("Compare the evidence on remote work across sources; which claims disagree and why?", kind="auto", effort=0.6)
     desk_id = start["desk"]["id"]
     arm = (start["hire"].get("bandit_decision") or {}).get("arm_id")
     assert arm
@@ -82,7 +82,8 @@ def test_bandit_reward_updates_arms(state_dir: Path) -> None:
     mean_before = arm_before["mean"]
 
     g = dag.default_dag(force_reload=True)
-    g.mark_done("investigator", notes="ok")
+    inv = sorted(n for n in g.nodes if n.startswith("investigator"))[0]
+    g.mark_done(inv, notes="ok")
     after = bandit.snapshot(0.6, desk_id=desk_id)
     arm_after = next(a for a in after["arms"] if a["id"] == arm)
     assert arm_after["reward_sum"] >= arm_before["reward_sum"] + 0.9

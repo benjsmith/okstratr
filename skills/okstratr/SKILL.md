@@ -71,6 +71,23 @@ okstratr panel          # alias of observer
 
 Wired via `harness.slash_actions.apply_slash_side_effects`. Same consent rules as CLI (no silent start).
 
+## When you are an okstratr seat
+
+If your prompt names an okstratr run and node (or `OKSTRATR_RUN_ID` and
+`OKSTRATR_PLAN_NODE_ID` are set), file your result before you finish:
+
+```
+okstratr findings add --run R --node N --json '{"findings": [{"claim": "...", "evidence": [{"source": "..."}], "confidence": 0.7}]}'
+okstratr findings add --run R --node N --file result.json     # for long or quoted text
+```
+
+Verifiers read the findings with `okstratr findings show --run R` and file
+`{"classifications": [{"finding_id": "...", "verdict": "supported"}]}`.
+Synthesizers read `okstratr findings show --run R --supported` and file
+`{"answer": "...", "objective_met": true, "gap": ""}`. Add
+`"checks": [{"name": "pytest", "passed": true}]` for tests you ran. okstratr
+reads only what you file, never your pane or transcript.
+
 ## Observer panel URL
 
 When serve is up: **http://127.0.0.1:8767/observer/**

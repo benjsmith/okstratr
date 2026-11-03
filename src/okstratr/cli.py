@@ -404,6 +404,20 @@ def main(argv=None) -> int:
     model_p = sub.add_parser("model", help="List harness models / rungs (Switchbay-inspired)")
     model_sub = model_p.add_subparsers(dest="model_cmd", required=True)
     model_sub.add_parser("list", help="List models per enabled harness + effort rungs")
+    for name, hlp in (
+        ("allow", "Allow a model for this workspace (harness/model, harness/* or model)"),
+        ("deny", "Deny a model for this workspace (deny wins over allow)"),
+        ("unlist", "Take a key off both lists"),
+    ):
+        mp = model_sub.add_parser(name, help=hlp)
+        mp.add_argument("key")
+        mp.add_argument("--ws", dest="policy_ws", default=None, help="Workspace id (default: active desk's)")
+    for name, hlp in (
+        ("policy", "Show the allow/deny lists in effect"),
+        ("reset", "Drop this workspace's lists (use the global ones again)"),
+    ):
+        mp = model_sub.add_parser(name, help=hlp)
+        mp.add_argument("--ws", dest="policy_ws", default=None, help="Workspace id (default: active desk's)")
 
 
     # --- agents (Herdr grouping stub) ---
@@ -414,7 +428,14 @@ def main(argv=None) -> int:
     agents_p.add_argument("--desk", dest="desk_id", default=None, help="Filter by desk_id")
     agents_p.add_argument("--thread", dest="thread_id", default=None, help="Filter by thread_id")
 
+    from . import cli_kernel
+
+    cli_kernel.register(sub)
+
     args = p.parse_args(argv)
+
+    if args.cmd in cli_kernel.COMMANDS:
+        return cli_kernel.dispatch(args)
 
     if getattr(args, "json_notify", False):
         from . import host_notify
@@ -640,14 +661,17 @@ def main(argv=None) -> int:
         if args.dag_cmd == "ready":
             g.refresh_ready()
             return _print([n.to_dict() for n in g.ready()])
-        if args.dag_cmd == "done":
-            node = g.mark_done(args.id, notes=args.notes)
+        if args.dag_cmd in ("done", "fail"):
+            from . import live
+
+            ok = args.dag_cmd == "done"
+            node = g.mark_done(args.id, notes=args.notes) if ok else g.mark_failed(args.id, notes=args.notes)
+            kernel = live.node_finished(g, args.id, ok=ok, host="cli")
             status.write_status()
-            return _print(node.to_dict())
-        if args.dag_cmd == "fail":
-            node = g.mark_failed(args.id, notes=args.notes)
-            status.write_status()
-            return _print(node.to_dict())
+            out = node.to_dict()
+            if kernel is not None:
+                out["kernel"] = kernel
+            return _print(out)
         if args.dag_cmd == "reset":
             g.reset()
             status.write_status()
@@ -781,6 +805,19 @@ def main(argv=None) -> int:
     if args.cmd == "model":
         from . import harness as harness_mod
 
+        if args.model_cmd in ("allow", "deny", "unlist", "policy", "reset"):
+            from . import model_policy
+
+            ws = getattr(args, "policy_ws", None) or model_policy.current_workspace_id()
+            if args.model_cmd == "allow":
+                return _print(model_policy.add(ws, args.key, deny=False))
+            if args.model_cmd == "deny":
+                return _print(model_policy.add(ws, args.key, deny=True))
+            if args.model_cmd == "unlist":
+                return _print(model_policy.remove(ws, args.key))
+            if args.model_cmd == "reset":
+                return _print(model_policy.reset(ws))
+            return _print(model_policy.get(ws))
         if args.model_cmd == "list":
             cfg = harness_mod.load()
             return _print(

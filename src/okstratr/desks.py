@@ -399,6 +399,7 @@ class DeskRegistry:
         # Save via temporary Dag pointing at desk path
         desk_dag = dag_mod.Dag(path=dest)
         desk_dag.nodes = dict(g.nodes)
+        desk_dag.archived_ids = list(g.archived_ids)
         desk_dag.save()
         desk.dag_relpath = str(dest.relative_to(state_dir()))
 
@@ -520,7 +521,7 @@ class DeskRegistry:
             if run_cos and obj:
                 from . import cos
 
-                cos.break_down(obj, kind=chosen_kind, desk_id=desk.id)
+                cos.break_down(obj, kind=chosen_kind, desk_id=desk.id, effort=desk.effort)
             self._persist_desk_dag(desk)
 
         # Keep existing desk/status objective when resuming quiet with empty query.

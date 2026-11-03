@@ -6,6 +6,8 @@ Privacy policy (ADR-002):
 - ``duration = 0``: ephemeral — agent/CoS posts clear ASAP; hard max age
   60 minutes for all entries.
 - ``bb clear`` hard-wipes live board (no archives by default).
+- Run folders (``state/runs/<id>/`` with plan.json and evidence.json) follow
+  the same duration, are cleared ASAP in ephemeral mode, and by ``bb clear``.
 """
 
 from __future__ import annotations
@@ -273,6 +275,8 @@ class Blackboard:
                 continue
             kept.append(e)
         pruned = pruned_age + pruned_agent
+        if self.path == _bb_path():
+            _prune_runs_throttled(now)
         if pruned > 0:
             if kept:
                 _rewrite_jsonl(self.path, kept)
@@ -438,21 +442,50 @@ def delete_legacy_archives(
     return {"removed": len(removed), "paths": removed}
 
 
+_RUNS_PRUNED_AT = 0.0
+_RUNS_PRUNE_EVERY = 60.0
+
+
+def _prune_runs_throttled(now: float) -> None:
+    """Age out run folders alongside board reads, at most once a minute."""
+    global _RUNS_PRUNED_AT
+    if now - _RUNS_PRUNED_AT < _RUNS_PRUNE_EVERY:
+        return
+    _RUNS_PRUNED_AT = now
+    _runs_retention()
+
+
+def _runs_retention(*, clear_all: bool = False) -> dict[str, Any]:
+    """Apply the board's duration to run folders (never raises)."""
+    try:
+        from . import evidence
+
+        return evidence.clear_runs() if clear_all else evidence.prune_runs()
+    except Exception as e:  # noqa: BLE001
+        return {"error": str(e)}
+
+
 def prune() -> dict[str, Any]:
     bb = default_blackboard()
     ret = bb.prune()
     legacy = delete_legacy_archives()
+    runs = _runs_retention()
     invalidate_default()
-    return {"ok": True, "retention": ret, "legacy_archives": legacy}
+    return {"ok": True, "retention": ret, "legacy_archives": legacy, "runs": runs}
 
 
 def clear_agents_asap() -> dict[str, Any]:
-    """Desk quiet / ephemeral ASAP — drop agent posts when duration=0 (always safe)."""
+    """Desk quiet / ephemeral ASAP — drop agent posts when duration=0 (always safe).
+
+    In ephemeral mode run folders are agent output too, so they go as well.
+    """
     bb = default_blackboard()
     if _is_ephemeral_mode():
         out = bb.prune(clear_agents_asap=True)
+        out["runs"] = _runs_retention(clear_all=True)
     else:
         out = bb.prune(clear_agents_asap=False)
+        out["runs"] = _runs_retention()
     invalidate_default()
     return out
 
@@ -499,12 +532,15 @@ def on_serve_start() -> dict[str, Any]:
     bb = default_blackboard(force_reload=True)
     ret = bb.prune(clear_agents_asap=_is_ephemeral_mode())
     legacy = delete_legacy_archives()
+    runs = _runs_retention(clear_all=_is_ephemeral_mode())
     invalidate_default()
-    return {"retention": ret, "legacy_archives": legacy}
+    return {"retention": ret, "legacy_archives": legacy, "runs": runs}
 
 
 def clear() -> dict[str, Any]:
+    """``bb clear``: wipe the live board and every run folder."""
     result = default_blackboard().clear()
+    result["runs"] = _runs_retention(clear_all=True)
     invalidate_default()
     return result
 

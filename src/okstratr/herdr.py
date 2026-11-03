@@ -419,7 +419,10 @@ def launch(objective: str = "", *, focus: bool = True) -> dict[str, Any]:
     terminal wrapper was spawned).
     """
     obj = (objective or "").strip()
-    env = merge_user_session_env()
+    # Herdr's agents inherit this env: no provider API keys (seat_env).
+    from .seat_env import strip_provider_keys
+
+    env = strip_provider_keys(merge_user_session_env())
     if obj:
         env["OKSTRATR_OBJECTIVE"] = obj
         env["HERDR_OBJECTIVE"] = obj
@@ -689,7 +692,9 @@ def open_workspace_agent(
             out["launch"] = launch("", focus=True)
         return out
 
-    env = merge_user_session_env()
+    from .seat_env import strip_provider_keys
+
+    env = strip_provider_keys(merge_user_session_env())
     create_cmd = [
         bin_path,
         "workspace",
@@ -787,6 +792,19 @@ def _node_prompt(node: dag.Node) -> str:
     parts = [node.title or node.id]
     if node.objective:
         parts.append(node.objective)
+    hint = getattr(node, "method_hint", "") or ""
+    if hint:
+        parts.append(f"Method: {hint}")
+    query = getattr(node, "retrieval_query", "") or ""
+    if query:
+        parts.append(f"Start your lookup with: {query}")
+    run_id = getattr(node, "run_id", None)
+    plan_node_id = getattr(node, "plan_node_id", None)
+    if run_id and plan_node_id:
+        from . import handback
+
+        text = handback.instructions(run_id, plan_node_id, getattr(node, "node_type", "") or "investigate")
+        parts.append(" ".join(text.split()))
     return " — ".join(parts)
 
 
@@ -1334,9 +1352,15 @@ def _live_run_node(
             "harness": seat,
         }
     kind = (seat.get("herdr_kind") or DEFAULT_KIND).strip() or DEFAULT_KIND
-    env = merge_user_session_env()
+    from .seat_env import strip_provider_keys
+
+    env = strip_provider_keys(merge_user_session_env())
     env["OKSTRATR_NODE_ID"] = node.id
     env["OKSTRATR_OBJECTIVE"] = prompt
+    if getattr(node, "run_id", None):
+        env["OKSTRATR_RUN_ID"] = str(node.run_id)
+    if getattr(node, "plan_node_id", None):
+        env["OKSTRATR_PLAN_NODE_ID"] = str(node.plan_node_id)
 
     steps: list[dict[str, Any]] = []
     pane_id: str | None = None
@@ -1556,6 +1580,8 @@ def run_one(
                     objective=_node_prompt(node),
                     effort=effort_f,
                     rung=rung,
+                    run_id=getattr(node, "run_id", None),
+                    plan_node_id=getattr(node, "plan_node_id", None),
                 )
                 seat = harness_mod.choose_harness(req, cfg=cfg, require_installed=True)
                 result = harness_mod.run_direct(
@@ -1618,6 +1644,22 @@ def run_one(
             node_id=node_id,
         )
         result["state"] = "failed"
+
+    # Kernel step (expansion / continue / host-done policy) before the desk can go quiet.
+    from . import live
+
+    kernel = live.node_finished(
+        g,
+        node_id,
+        ok=bool(result.get("ok")),
+        host="cli" if result.get("dry_run") else ("direct" if adapter == "direct" else "herdr"),
+        tokens=int(result.get("tokens") or 0),
+        latency_s=elapsed,
+        error=str(result.get("error") or ""),
+        harness=str(result.get("harness_id") or "") or None,
+    )
+    if kernel is not None:
+        result["kernel"] = kernel
 
     status.write_status()
     try:

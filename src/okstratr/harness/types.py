@@ -58,6 +58,9 @@ class SeatRequest:
     # Phase 2: difficulty / effort for rung selection
     effort: float | None = None
     rung: str | None = None  # trivial|normal|hard
+    # Orchestration run + plan node this seat files findings for.
+    run_id: str | None = None
+    plan_node_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

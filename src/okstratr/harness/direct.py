@@ -264,8 +264,14 @@ def run_direct(
         pass
     log_path = log_dir / log_name
 
-    run_env = dict(env if env is not None else os.environ)
+    from okstratr.seat_env import strip_provider_keys
+
+    run_env = strip_provider_keys(env if env is not None else os.environ)
     run_env["OKSTRATR_NODE_ID"] = req.node_id
+    if getattr(req, "run_id", None):
+        run_env["OKSTRATR_RUN_ID"] = str(req.run_id)
+    if getattr(req, "plan_node_id", None):
+        run_env["OKSTRATR_PLAN_NODE_ID"] = str(req.plan_node_id)
     run_env["OKSTRATR_HARNESS"] = seat.harness_id or ""
     if seat.model:
         run_env["OKSTRATR_MODEL"] = seat.model

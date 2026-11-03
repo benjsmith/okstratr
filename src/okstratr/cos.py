@@ -262,6 +262,247 @@ def _unpack_step(step: _Step) -> tuple[str, str, str, list[str], str, str | None
     return nid, title, obj_fmt, deps, role, prefer_harness, prefer_model
 
 
+def _avoid_retired_ids(steps: list[_Step], g: dag.Dag) -> list[_Step]:
+    """Rename steps whose id belongs to a retired node (ids are never reused)."""
+    retired = set(getattr(g, "archived_ids", []) or [])
+    if not retired:
+        return steps
+    planned = {_unpack_step(st)[0] for st in steps}
+    rename: dict[str, str] = {}
+    for st in steps:
+        nid = _unpack_step(st)[0]
+        if nid in retired and nid not in g.nodes:
+            rename[nid] = g.alloc_node_id(nid, taken=planned | set(rename.values()))
+    if not rename:
+        return steps
+    out: list[_Step] = []
+    for st in steps:
+        row = list(st)
+        row[0] = rename.get(row[0], row[0])
+        row[3] = [rename.get(d, d) for d in row[3]]
+        out.append(tuple(row))  # type: ignore[arg-type]
+    return out
+
+
+def _step_extra(step: _Step) -> dict[str, Any]:
+    """Optional plan fields carried at index 7 (node_type, run_id, …)."""
+    extra = step[7] if len(step) > 7 else None
+    return dict(extra) if isinstance(extra, dict) else {}
+
+
+# ── utility-chosen shape for work / auto ───────────────────────────
+
+_TITLE_FOR_TYPE = {
+    "investigate": "Investigate",
+    "verify": "Verify",
+    "synthesize": "Synthesize",
+    "reduce": "Reduce",
+    "execute": "Execute",
+}
+_ROLE_FOR_TYPE = {
+    "investigate": roles.ROLE_INVESTIGATOR,
+    "verify": roles.ROLE_VERIFIER,
+    "synthesize": roles.ROLE_SYNTHESIZER,
+    "reduce": "reducer",
+    "execute": "executor",
+}
+
+
+def _escape(text: str) -> str:
+    return str(text).replace("{", "{{").replace("}", "}}")
+
+
+def _models_for_run(
+    harnesses: list[str] | None,
+    models_by_harness: dict[str, str] | None,
+    *,
+    effort: float,
+    desk_id: str | None = None,
+    task_class: str = "general",
+) -> tuple[list[str], dict[str, str], list[tuple[str, str | None]]]:
+    """Allowed harnesses, authors' models by effort, and the critic's candidates.
+
+    Pinned models (``OKSTRATR_MODEL_BY_HARNESS`` or ``models_by_harness``)
+    win for authors when allowed. If the workspace's lists leave nothing
+    allowed, the run falls back to the unfiltered harnesses.
+    """
+    from . import model_policy
+
+    harns = [
+        h.strip().lower()
+        for h in (harnesses if harnesses is not None else _fanout_harness_ids())
+        if h and h.strip()
+    ]
+    pinned = dict(models_by_harness or _parse_models_by_harness())
+    try:
+        out = model_policy.assign_models(
+            harns, effort, workspace_id=model_policy.current_workspace_id(desk_id), pinned=pinned,
+            task_class=task_class,
+        )
+    except Exception:  # noqa: BLE001 — a bad policy file must not block planning
+        out = {"harnesses": [], "authors": {}, "pairs": []}
+    if not out["harnesses"]:
+        models_by = dict(pinned)
+        for h in harns:
+            if h not in models_by:
+                m = _default_model_for(h, models_by)
+                if m:
+                    models_by[h] = m
+        return harns, models_by, []
+    models_by = {h: m for h, m in out["authors"].items() if m}
+    return list(out["harnesses"]), models_by, list(out["pairs"])
+
+
+def plan_for(
+    objective: str,
+    *,
+    effort: float | None = None,
+    harnesses: list[str] | None = None,
+    models_by_harness: dict[str, str] | None = None,
+    desk_id: str | None = None,
+    run_id: str | None = None,
+    task_type: str = "",
+) -> tuple[Any, Any]:
+    """Pick a recipe by utility and build its plan → (decision, plan).
+
+    Desk runs use what this desk has learned but do not explore: desk panes
+    do not report the structured outcomes exploration would learn from.
+    """
+    from . import bandit, orchestration, orchestration_utility as ou
+
+    e = bandit.clamp_effort(effort)
+    harns, models_by, pairs = _models_for_run(
+        harnesses, models_by_harness, effort=e, desk_id=desk_id,
+        task_class=ou.extract_features(objective).kind(),
+    )
+    feat = ou.extract_features(
+        objective, preference=e, provider_diversity=len(harns) or 1, task_type=task_type
+    )
+    try:
+        decision = bandit.choose_recipe(feat, desk_id=desk_id, effort=e, explore=False)
+    except Exception:  # noqa: BLE001 — a bad bandit file must not block planning
+        decision = ou.choose_initial_policy(feat, effort=e)
+    plan = orchestration.plan_from_decision(
+        objective, decision, harnesses=harns, models_by_harness=models_by, run_id=run_id,
+        critic_pairs=pairs,
+    )
+    plan = orchestration.ensure_valid(plan)
+    return decision, plan
+
+
+def work_plan_for(
+    objective: str,
+    *,
+    effort: float | None = None,
+    harnesses: list[str] | None = None,
+    models_by_harness: dict[str, str] | None = None,
+    desk_id: str | None = None,
+    run_id: str | None = None,
+) -> Any:
+    """/work plan: specialists in sequence (gather context → write → review).
+
+    Authors get a model by effort; review gets the strongest allowed model.
+    """
+    from . import bandit, orchestration
+
+    e = bandit.clamp_effort(effort)
+    harns, models_by, pairs = _models_for_run(harnesses, models_by_harness, effort=e, desk_id=desk_id)
+    plan = orchestration.plan_projects(
+        objective, harnesses=harns, models_by_harness=models_by, critic_pairs=pairs,
+        run_id=run_id, preference=e,
+    )
+    return orchestration.ensure_valid(plan)
+
+
+def steps_from_projects(plan: Any) -> list[_Step]:
+    """Desk steps for a /work plan; specialist ids are the step ids."""
+    from .orchestration import PROJECT_SPECIALISTS
+
+    if plan.strategy != "projects":
+        return steps_from_plan(plan)
+    steps: list[_Step] = []
+    for n in plan.nodes:
+        title = PROJECT_SPECIALISTS.get(n.node_id, ("", _TITLE_FOR_TYPE.get(n.node_type, "Work"), ""))[1]
+        instr = PROJECT_SPECIALISTS.get(n.node_id, ("", "", ""))[2]
+        extra = {
+            "node_type": n.node_type,
+            "run_id": plan.run_id,
+            "plan_node_id": n.node_id,
+            "method_hint": n.method_hint,
+            "retrieval_query": n.retrieval_query,
+            "independence": n.independence,
+        }
+        steps.append((
+            n.node_id, title, _escape(instr) + "{obj}", list(n.dependencies) or ["root"],
+            n.role or _ROLE_FOR_TYPE.get(n.node_type, "worker"), n.harness, n.model, extra,
+        ))
+    return steps
+
+
+def steps_from_plan(plan: Any) -> list[_Step]:
+    """Map plan nodes onto desk DAG steps (stable, readable ids)."""
+    investigators = [n for n in plan.nodes if n.node_type == "investigate"]
+    single = len(plan.nodes) == 1
+    ids: dict[str, str] = {}
+    used: set[str] = set()
+
+    def _claim(base: str) -> str:
+        nid, k = base, 2
+        while nid in used:
+            nid = f"{base}-{k}"
+            k += 1
+        used.add(nid)
+        return nid
+
+    for n in plan.nodes:
+        t = n.node_type
+        if single or (t == "investigate" and len(investigators) == 1):
+            ids[n.node_id] = _claim("investigator")
+        elif t == "investigate":
+            idx = investigators.index(n) + 1
+            ids[n.node_id] = _claim(f"investigator-{n.harness}" if n.harness else f"investigator-{idx}")
+        elif t == "verify":
+            ids[n.node_id] = _claim("verifier")
+        elif t == "synthesize":
+            ids[n.node_id] = _claim("synthesizer")
+        elif t == "reduce":
+            ids[n.node_id] = _claim(f"reducer-{n.node_id.split('-')[-1]}")
+        else:
+            ids[n.node_id] = _claim("executor")
+
+    steps: list[_Step] = []
+    for n in plan.nodes:
+        t = "investigate" if single else n.node_type
+        title = _TITLE_FOR_TYPE.get(t, "Work")
+        if t == "investigate" and n.harness and len(investigators) > 1:
+            title = f"{title} ({n.harness})"
+        if single:
+            obj_fmt = "Do the work and answer directly for: {obj}"
+        elif t == "investigate":
+            obj_fmt = "Gather evidence and context for: " + _escape(n.objective)
+        elif t == "verify":
+            obj_fmt = "Check each finding against its sources (mark supported / unsupported / conflicting) for: {obj}"
+        elif t == "synthesize":
+            obj_fmt = "Merge the verified findings into succinct claims for: {obj}"
+        elif t == "reduce":
+            obj_fmt = _escape(n.objective)
+        else:
+            obj_fmt = _escape(n.objective)
+        deps = [ids[d] for d in n.dependencies if d in ids] or ["root"]
+        extra = {
+            "node_type": t,
+            "run_id": plan.run_id,
+            "plan_node_id": n.node_id,
+            "method_hint": n.method_hint,
+            "retrieval_query": n.retrieval_query,
+            "independence": n.independence,
+        }
+        steps.append(
+            (ids[n.node_id], title, obj_fmt, deps, _ROLE_FOR_TYPE.get(t, "worker"), n.harness, n.model, extra)
+        )
+    return steps
+
+
 KIND_TEMPLATES: dict[str, list[_Step]] = {
     "work": _SWITCHBAY,  # expanded via switchbay_steps() in template_for
     "auto": _SWITCHBAY,
@@ -289,7 +530,8 @@ def resolve_kind(kind: str | None = None) -> str | None:
 
 
 def template_for(kind: str | None) -> list[_Step]:
-    """Kind-specific planner template. work/auto → Switchbay (+ multi-harness fan-out)."""
+    """Fixed planner template per kind. work/auto → investigators → synthesizer →
+    verifier (the fallback when planning fails)."""
     k = resolve_kind(kind) if kind is None else (kind or "").strip().lower()
     if k in ("work", "auto"):
         return switchbay_steps()
@@ -298,11 +540,28 @@ def template_for(kind: str | None) -> list[_Step]:
     return _COS_CHAIN
 
 
-def advise(objective: str, blackboard_head: list[str] | None = None, *, kind: str | None = None) -> dict[str, Any]:
+def advise(
+    objective: str,
+    blackboard_head: list[str] | None = None,
+    *,
+    kind: str | None = None,
+    steps: list[_Step] | None = None,
+    effort: float | None = None,
+) -> dict[str, Any]:
     """Return a CoS plan summary (no DAG mutation)."""
     obj = (objective or "").strip() or "(no objective)"
     notes = list(blackboard_head or [])
-    steps = template_for(kind)
+    if steps is None:
+        k = resolve_kind(kind) if kind is None else (kind or "").strip().lower()
+        try:
+            if k == "auto":
+                steps = steps_from_plan(plan_for(obj, effort=effort)[1])
+            elif k == "work":
+                steps = steps_from_projects(work_plan_for(obj, effort=effort))
+        except Exception:  # noqa: BLE001
+            steps = None
+        if steps is None:
+            steps = template_for(kind)
     breakdown = []
     for step in steps:
         nid, title, obj_fmt, deps, role, ph, pm = _unpack_step(step)
@@ -345,11 +604,15 @@ def break_down(
     desk_id: str | None = None,
     mark_root_done: bool = True,
     save: bool = True,
+    effort: float | None = None,
 ) -> dict[str, Any]:
     """
     Heuristic (no LLM) expansion of the seated objective into child DAG nodes.
 
-    work/auto → Switchbay investigator / synthesizer / verifier.
+    auto → shape chosen by the orchestration utility (investigators →
+    verifier → synthesizer, sized by the task).
+    work → specialists in sequence: gather context → write → review.
+    For both, the fixed template is the fallback if planning fails.
     Other kinds keep their templates. No kind and no active desk → cos-* chain.
     Idempotent: existing template nodes are left in place (title/objective refreshed).
     """
@@ -365,7 +628,28 @@ def break_down(
         obj = "(no objective)"
 
     resolved = resolve_kind(kind)
-    steps = template_for(resolved)
+    decision = None
+    plan = None
+    if resolved in ("work", "auto"):
+        if effort is None:
+            effort = _active_effort(desk_id)
+        prior_run = next(
+            (n.run_id for n in g.nodes.values() if n.run_id and n.role in _AUTO_ROLES), None
+        )
+        try:
+            if resolved == "work":
+                plan = work_plan_for(obj, effort=effort, desk_id=desk_id, run_id=prior_run)
+                steps = steps_from_projects(plan)
+            else:
+                decision, plan = plan_for(
+                    obj, effort=effort, desk_id=desk_id, run_id=prior_run, task_type=resolved or ""
+                )
+                steps = steps_from_plan(plan)
+        except Exception:  # noqa: BLE001 — never block a desk on planning
+            decision, plan = None, None
+            steps = template_for(resolved)
+    else:
+        steps = template_for(resolved)
 
     # Ensure root exists
     if "root" not in g.nodes:
@@ -377,12 +661,23 @@ def break_down(
         if not (root.title or "").strip() or root.title == "(untitled)":
             root.title = obj
 
+    steps = _avoid_retired_ids(steps, g)
     created: list[str] = []
     updated: list[str] = []
     plan_lines: list[str] = []
 
+    if plan is not None:
+        # Drop pending nodes left by an earlier breakdown with another shape.
+        keep = {_unpack_step(st)[0] for st in steps}
+        for nid, n in list(g.nodes.items()):
+            if nid in keep or nid == "root":
+                continue
+            if n.role in _AUTO_ROLES and n.state in ("pending", "ready"):
+                g.remove(nid, save=False)
+
     for step in steps:
         nid, title, obj_fmt, deps, role, prefer_harness, prefer_model = _unpack_step(step)
+        extra = _step_extra(step)
         child_obj = obj_fmt.format(obj=obj)
         tag = f"{nid}: {title} [{role}]"
         if prefer_harness:
@@ -401,6 +696,8 @@ def break_down(
                 n.prefer_harness = prefer_harness
             if prefer_model:
                 n.prefer_model = prefer_model
+            for k, v in extra.items():
+                setattr(n, k, v or ("" if k in ("method_hint", "retrieval_query") else None))
             n.updated_at = time()
             updated.append(nid)
         else:
@@ -415,6 +712,7 @@ def break_down(
                 prefer_harness=prefer_harness,
                 prefer_model=prefer_model,
                 save=False,
+                **extra,
             )
             created.append(nid)
 
@@ -425,8 +723,16 @@ def break_down(
     if save:
         g.save()
 
+    recipe_line = ""
+    if decision is not None:
+        recipe_line = f"recipe: {decision.arm_id} — {decision.reason}\n"
+    elif plan is not None and plan.strategy == "projects":
+        recipe_line = "specialists: " + " → ".join(n.node_id for n in plan.nodes) + "\n"
+    if plan is not None:
+        _save_run_plan(plan, decision)
     summary_text = (
         f"CoS plan for: {obj} (kind={resolved or 'default'})\n"
+        + recipe_line
         + "\n".join(f"- {line}" for line in plan_lines)
         + f"\n(created={len(created)}, updated={len(updated)})"
     )
@@ -476,11 +782,69 @@ def break_down(
         "updated": updated,
         "nodes": node_ids,
         "ready": ready_ids,
-        "plan": advise(obj, kind=resolved),
+        "plan": advise(obj, kind=resolved, steps=steps),
         "blackboard_note_id": note.get("id"),
         "blackboard_deduped": deduped,
         "idempotent": not created and bool(updated),
+        "run_id": plan.run_id if plan is not None else None,
+        "decision": _decision_summary(decision),
     }
+
+
+_AUTO_ROLES = frozenset(
+    {roles.ROLE_INVESTIGATOR, roles.ROLE_VERIFIER, roles.ROLE_SYNTHESIZER, "reducer", "executor"}
+)
+
+
+def _active_effort(desk_id: str | None) -> float | None:
+    try:
+        from . import desks
+
+        reg = desks.default_registry()
+        d = reg.desks.get(desk_id) if desk_id else reg.active()
+        return d.effort if d is not None else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _decision_summary(decision: Any) -> dict[str, Any] | None:
+    if decision is None:
+        return None
+    return {
+        "recipe": decision.arm_id,
+        "reason": decision.reason,
+        "explored": decision.explored,
+        "n_investigators": decision.n_investigators,
+        "include_verify": decision.include_verify,
+        "bucket": (decision.features or {}) and _bucket(decision.features),
+        "candidates": list(decision.candidates),
+    }
+
+
+def _bucket(features: dict[str, Any]) -> str:
+    from . import orchestration_utility as ou
+
+    return ou.TaskFeatures.from_dict(features).bucket()
+
+
+def _save_run_plan(plan: Any, decision: Any) -> None:
+    """Each run gets its own folder: plan.json plus an empty evidence store."""
+    try:
+        import json
+
+        from . import evidence
+
+        rid = evidence.safe_run_id(plan.run_id)
+        d = evidence.run_dir(rid)
+        d.mkdir(parents=True, exist_ok=True)
+        payload = plan.to_dict()
+        if decision is not None:
+            payload["decision"] = decision.to_dict()
+        evidence.write_json(d / "plan.json", payload)
+        if not evidence.run_evidence_path(rid).exists():
+            evidence.save_run(evidence.open_run(rid))
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def should_auto_break(g: dag.Dag | None = None) -> bool:

@@ -30,9 +30,25 @@ class Node:
     """Pin this seat to a harness id (multi-harness fan-out)."""
     prefer_model: str | None = None
     """Pin this seat to a model id for the preferred harness."""
+    node_type: str | None = None
+    """Typed role in an orchestration plan (investigate, verify, …)."""
+    run_id: str | None = None
+    """Orchestration run this node belongs to (its own evidence store)."""
+    method_hint: str = ""
+    """Method this seat should use so sibling seats stay independent."""
+    retrieval_query: str = ""
+    """Narrow query for this seat's own lookups."""
+    independence: str | None = None
+    plan_node_id: str | None = None
+    """Id of this node in its orchestration plan (findings are filed under it)."""
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        # Keep dag.json in its old shape when the plan fields are unused.
+        for k in _OPTIONAL_FIELDS:
+            if not d.get(k):
+                d.pop(k, None)
+        return d
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Node:
@@ -56,7 +72,16 @@ class Node:
             role=str(data["role"]) if data.get("role") else None,
             prefer_harness=str(prefer_harness).strip().lower() if prefer_harness else None,
             prefer_model=str(prefer_model).strip() if prefer_model else None,
+            node_type=str(data["node_type"]) if data.get("node_type") else None,
+            run_id=str(data["run_id"]) if data.get("run_id") else None,
+            method_hint=str(data.get("method_hint") or ""),
+            retrieval_query=str(data.get("retrieval_query") or ""),
+            independence=str(data["independence"]) if data.get("independence") else None,
+            plan_node_id=str(data["plan_node_id"]) if data.get("plan_node_id") else None,
         )
+
+
+_OPTIONAL_FIELDS = ("node_type", "run_id", "method_hint", "retrieval_query", "independence", "plan_node_id")
 
 
 class CycleError(ValueError):
@@ -67,17 +92,25 @@ class Dag:
     def __init__(self, path: Path | None = None) -> None:
         self.path = Path(path) if path else state_dir() / "dag.json"
         self.nodes: dict[str, Node] = {}
+        # Ids of retired nodes; never handed out again until the DAG is reset,
+        # so a new node cannot pick up an old node's blackboard posts or labels.
+        self.archived_ids: list[str] = []
 
     # --- persistence ---
 
     def load(self) -> Dag:
         self.nodes = {}
+        self.archived_ids = []
         if not self.path.is_file():
             return self
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return self
+        if isinstance(raw, dict):
+            self.archived_ids = [
+                str(x) for x in (raw.get("archived_ids") or []) if isinstance(x, str) and x
+            ]
         if isinstance(raw, dict) and "nodes" in raw:
             items = raw.get("nodes") or []
         elif isinstance(raw, list):
@@ -99,6 +132,8 @@ class Dag:
             "updated_at": time(),
             "nodes": [n.to_dict() for n in self.nodes.values()],
         }
+        if self.archived_ids:  # only written when used (older readers ignore it)
+            payload["archived_ids"] = list(self.archived_ids)
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
         tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         tmp.replace(self.path)
@@ -122,6 +157,12 @@ class Dag:
         role: str | None = None,
         prefer_harness: str | None = None,
         prefer_model: str | None = None,
+        node_type: str | None = None,
+        run_id: str | None = None,
+        method_hint: str = "",
+        retrieval_query: str = "",
+        independence: str | None = None,
+        plan_node_id: str | None = None,
         save: bool = True,
     ) -> Node:
         now = time()
@@ -140,6 +181,12 @@ class Dag:
             role=role,
             prefer_harness=(prefer_harness or "").strip().lower() or None,
             prefer_model=(prefer_model or "").strip() or None,
+            node_type=node_type or None,
+            run_id=run_id or None,
+            method_hint=method_hint or "",
+            retrieval_query=retrieval_query or "",
+            independence=independence or None,
+            plan_node_id=plan_node_id or None,
         )
         self.nodes[node_id] = n
         self.refresh_ready(save=False)
@@ -160,6 +207,28 @@ class Dag:
         if save:
             self.save()
         return True
+
+    def archive(self, node_id: str, *, save: bool = True) -> bool:
+        """Remove a node and reserve its id so it is never reused."""
+        if node_id not in self.nodes:
+            return False
+        if node_id not in self.archived_ids:
+            self.archived_ids.append(node_id)
+        return self.remove(node_id, save=save)
+
+    def is_reserved(self, node_id: str) -> bool:
+        return node_id in self.nodes or node_id in self.archived_ids
+
+    def alloc_node_id(self, base: str, *, taken: set[str] | None = None) -> str:
+        """First free id from ``base``, ``base-2``, … skipping live, retired
+        and ``taken`` ids."""
+        b = (base or "node").strip() or "node"
+        extra = taken or set()
+        nid, k = b, 2
+        while self.is_reserved(nid) or nid in extra:
+            nid = f"{b}-{k}"
+            k += 1
+        return nid
 
     def set_state(self, node_id: str, state: str, *, save: bool = True) -> Node:
         if state not in VALID_STATES:
@@ -208,8 +277,9 @@ class Dag:
             pass
 
     def reset(self, *, save: bool = True) -> None:
-        """Clear all nodes."""
+        """Clear all nodes and reserved ids."""
         self.nodes.clear()
+        self.archived_ids = []
         if save:
             self.save()
 
@@ -521,6 +591,7 @@ class Dag:
         obj = (objective or "").strip()
         if reset:
             self.nodes.clear()
+            self.archived_ids = []
         root_id = "root"
         now = time()
         if root_id not in self.nodes:
